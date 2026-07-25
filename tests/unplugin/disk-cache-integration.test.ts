@@ -5,13 +5,12 @@ import type { UnpluginContextMeta, UnpluginOptions } from "unplugin";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetDepValidationMemo } from "#src/unplugin/disk-cache.js";
 import { unplugin } from "#src/unplugin/index.js";
+import { type TransformHandler, transformHandler } from "./hooks.js";
 
 const meta = { framework: "vite" } as UnpluginContextMeta;
 
-type TransformFn = (code: string, id: string) => Promise<{ code: string; map: null } | undefined>;
-
 interface PluginHandle {
-  transform: TransformFn;
+  transform: TransformHandler;
   /** Flushes deferred superset entries (real bundlers call this hook). */
   buildEnd: () => void;
 }
@@ -19,7 +18,7 @@ interface PluginHandle {
 function makePlugin(cacheDir: string, extra?: { schemas?: "explicit" | "auto" }): PluginHandle {
   const plugin = unplugin.raw({ cache: cacheDir, ...extra }, meta) as UnpluginOptions;
   return {
-    transform: plugin.transform as unknown as TransformFn,
+    transform: transformHandler(plugin),
     buildEnd: plugin.buildEnd as unknown as () => void,
   };
 }
@@ -140,7 +139,7 @@ describe("unplugin disk cache integration", () => {
 
   it("cache: false disables persistence", async () => {
     const plugin = unplugin.raw({ cache: false }, meta) as UnpluginOptions;
-    const transform = plugin.transform as unknown as TransformFn;
+    const transform = transformHandler(plugin);
     const result = await transform(CODE, FIXTURE);
     expect(result?.code).toContain("safeParse_validateUser");
     expect(fs.readdirSync(cacheDir)).toEqual([]);

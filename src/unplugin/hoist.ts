@@ -52,11 +52,23 @@ import { applyEdits, type Edit, type Insertion } from "./edits.js";
  * the schema unhoisted, never breaks the code.
  */
 
-/** Imported identifiers matching this pattern are treated as schema roots. */
-const SCHEMA_NAME_PATTERN = /ZodSchema$/;
+/**
+ * Imported identifiers matching this pattern are treated as schema roots.
+ *
+ * The default must keep implying a "Zod" substring: it is one of the three
+ * triggers the transform hook's `code` filter (ZOD_MENTION in transform.ts)
+ * is a superset of. A default that matched, say, `/Schema$/` would make
+ * hoistable files without any "zod" mention invisible to bundlers with native
+ * hook filters. (A *user-supplied* pattern is handled — it drops the filter.)
+ */
+export const SCHEMA_NAME_PATTERN = /ZodSchema$/;
 
-/** Module specifiers whose bindings count as the zod namespace. */
-const ZOD_MODULES = new Set(["zod", "zod/v3", "zod/v4", "zod/mini", "zod/v4/mini"]);
+/**
+ * Module specifiers whose bindings count as the zod namespace. Every entry
+ * must contain "zod" for the same reason as SCHEMA_NAME_PATTERN above; both
+ * are pinned by `describe("code filter soundness")` in the transform tests.
+ */
+export const ZOD_MODULES = new Set(["zod", "zod/v3", "zod/v4", "zod/mini", "zod/v4/mini"]);
 
 /** How an imported local binding maps onto its source module. */
 export interface ImportDetail {

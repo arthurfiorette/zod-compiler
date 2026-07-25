@@ -4,13 +4,17 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import { extractSchema } from "#src/core/extract/index.js";
+import { SCHEMA_NAME_PATTERN, ZOD_MODULES } from "#src/unplugin/hoist.js";
 import {
   findExpressionEnd,
+  HAS_RUNTIME_ZOD_IMPORT,
   removeCompileImport,
   rewriteSource,
   rewriteSourceAutoDiscover,
   shouldTransform,
+  TRANSFORM_ID_FILTER,
   transformCode,
+  transformCodeFilter,
 } from "#src/unplugin/transform.js";
 import type { BuildStats } from "#src/unplugin/types.js";
 
@@ -87,6 +91,144 @@ describe("shouldTransform()", () => {
   it("supports glob patterns in include", () => {
     expect(shouldTransform("/src/schemas.ts", { include: ["**/schemas/**"] })).toBe(false);
     expect(shouldTransform("/src/schemas/user.ts", { include: ["**/schemas/**"] })).toBe(true);
+  });
+});
+
+describe("transform hook filters", () => {
+  /** unplugin's id-filter semantics: exclude wins, then an include must match. */
+  const matchesId = (id: string): boolean =>
+    !TRANSFORM_ID_FILTER.exclude.some((pattern) => pattern.test(id)) &&
+    TRANSFORM_ID_FILTER.include.some((pattern) => pattern.test(id));
+
+  it("id filter agrees with shouldTransform on every option-independent case", () => {
+    // The filter is what bundlers with native hook-filter support evaluate;
+    // shouldTransform() is what the handler applies. They must not drift.
+    const ids = [
+      "/src/schemas.ts",
+      "/src/schemas.mts",
+      "/src/schemas.cts",
+      "/src/schemas.js",
+      "/src/schemas.mjs",
+      "/src/schemas.cjs",
+      "/src/component.tsx",
+      "/src/component.jsx",
+      "/src/types.d.ts",
+      "/src/schemas.compiled.ts",
+      "/src/schemas.compiled.js",
+      "/node_modules/zod/index.ts",
+      "/src/styles.css",
+      "/src/data.json",
+      "/src/schemas.ts?v=1",
+      "\0zod-compiler-runtime",
+    ];
+    for (const id of ids) {
+      expect(matchesId(id), id).toBe(shouldTransform(id));
+    }
+  });
+
+  it("code filter matches every source shape the transform can rewrite", () => {
+    const filter = transformCodeFilter();
+    expect(filter).toBeDefined();
+    const sources = [
+      // autoDiscover: a runtime zod import
+      'import { z } from "zod";\nexport const S = z.object({});',
+      'import { z } from "zod/v4";\nexport const S = z.object({});',
+      // schemas: "explicit": compile() from zod-compiler
+      'import { compile } from "zod-compiler";\nexport const v = compile(S);',
+      // hoisting: an imported identifier matching the default name pattern
+      'import { UserZodSchema } from "./shapes";\nconst f = () => UserZodSchema.partial();',
+    ];
+    for (const source of sources) {
+      expect(filter?.test(source), source).toBe(true);
+    }
+    // A file that never mentions zod cannot produce output — the bundler skips
+    // the hook call, the content hash and the import scan entirely.
+    expect(filter?.test('import { useState } from "react";\nexport const x = useState;')).toBe(
+      false,
+    );
+  });
+
+  it("code filter is dropped when a custom hoist schemaNamePattern is configured", () => {
+    expect(transformCodeFilter({ hoist: { schemaNamePattern: /Model$/ } })).toBeUndefined();
+    // Name-based matching disabled or left at the default: zod imports (or a
+    // "ZodSchema" identifier) are the only way in, so the filter is sound.
+    expect(transformCodeFilter({ hoist: { schemaNamePattern: null } })).toBeDefined();
+    expect(transformCodeFilter({ hoist: {} })).toBeDefined();
+    expect(transformCodeFilter({ hoist: false, schemas: "explicit" })).toBeDefined();
+  });
+});
+
+/**
+ * The `code` filter is the one part of the hook filters whose failure is
+ * silent: a file it wrongly rejects is never handed to the plugin, so schemas
+ * quietly stay uncompiled instead of erroring. These tests pin it to the
+ * triggers it claims to cover — each assertion fails the moment a trigger is
+ * widened past a "zod" mention, which is exactly when the filter must change.
+ */
+describe("code filter soundness", () => {
+  // oxlint-disable-next-line typescript/no-non-null-assertion -- default options always yield a filter
+  const filter = transformCodeFilter()!;
+
+  it("trigger 1: every zod module specifier the plugin recognizes mentions zod", () => {
+    // Widening ZOD_MODULES to a non-"zod" specifier (a re-export package, an
+    // alias) breaks the filter: hoisting would fire on files it rejects.
+    for (const specifier of ZOD_MODULES) {
+      const source = `import { z } from "${specifier}";\nexport const S = z.string();`;
+      expect(filter.test(source), specifier).toBe(true);
+    }
+  });
+
+  it("trigger 1: the discovery gate matches zod imports and nothing else", () => {
+    for (const specifier of ["zod", "zod/v3", "zod/v4"]) {
+      const source = `import { z } from "${specifier}";\nexport const S = z.string();`;
+      expect(HAS_RUNTIME_ZOD_IMPORT.test(source), specifier).toBe(true);
+      expect(filter.test(source), specifier).toBe(true);
+    }
+    // The mirror image: if the gate ever matched another validator's imports,
+    // the filter would have to grow with it.
+    for (const specifier of ["valibot", "yup", "@sinclair/typebox", "./schemas"]) {
+      const source = `import { v } from "${specifier}";\nexport const S = v.string();`;
+      expect(HAS_RUNTIME_ZOD_IMPORT.test(source), specifier).toBe(false);
+      expect(filter.test(source), specifier).toBe(false);
+    }
+  });
+
+  it("documents the zod/mini gap between the hoist roots and the discovery gate", () => {
+    // Pre-existing (unrelated to hook filters): zod/mini and zod/v4/mini are
+    // ZOD_MODULES — hoist roots, and zod bindings for the hoist-compile
+    // determinism gate — but the discovery gate does not match them, so their
+    // module-scope exports are never auto-discovered. Harmless to the code
+    // filter (the specifier still mentions "zod"), pinned here so the gap is
+    // visible; delete this test if discovery grows to cover mini.
+    for (const specifier of ["zod/mini", "zod/v4/mini"]) {
+      const source = `import { object } from "${specifier}";\nexport const S = object({});`;
+      expect(HAS_RUNTIME_ZOD_IMPORT.test(source), specifier).toBe(false);
+      expect(filter.test(source), specifier).toBe(true);
+    }
+  });
+
+  it("trigger 2: explicit mode keys off the package name, which mentions zod", () => {
+    expect(filter.test('import { compile } from "zod-compiler";')).toBe(true);
+  });
+
+  it("trigger 3: the default hoist name pattern implies a Zod mention", () => {
+    // A default of /Schema$/ would match "UserSchema" — a hoistable root in a
+    // file with no "zod" anywhere — and the filter would skip it.
+    expect(SCHEMA_NAME_PATTERN.test("UserZodSchema")).toBe(true);
+    expect(SCHEMA_NAME_PATTERN.test("UserSchema")).toBe(false);
+    expect(filter.test("UserZodSchema")).toBe(true);
+  });
+
+  it("rewritten output stays matchable (re-transform of an already-hoisted file)", () => {
+    // Transformed files are fed back through the hook by some hosts; the
+    // filter must not reject the plugin's own output before its idempotency
+    // guard gets to run.
+    const hoisted = [
+      'import { z } from "zod";',
+      "const _zh_1a2b3c4d = z.object({ name: z.string() });",
+      "export const make = () => _zh_1a2b3c4d;",
+    ].join("\n");
+    expect(filter.test(hoisted)).toBe(true);
   });
 });
 

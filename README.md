@@ -579,6 +579,16 @@ zodCompiler({ include: ["src/schemas"] });
 time (hoist / static-filter / discover / compile) on exit, so you can see
 whether discovery or codegen dominates and which files pay it.
 
+Everything else is automatic: the plugin declares
+[hook filters](https://vite.dev/guide/rolldown.html#hook-filter-feature) on
+its `transform`, `load` and `resolveId` hooks, so bundlers that support them
+(Vite, Rolldown, Rollup ≥ 4.40) never call the plugin for a module that cannot
+contain a schema — a file that never mentions `zod` costs nothing at all, not
+even a hook call. Bundlers without native support get the same filtering in
+JavaScript. The one exception is a custom `hoist.schemaNamePattern`: it
+promotes arbitrary imported identifiers to schema roots, so the content filter
+is dropped for that configuration (path filtering still applies).
+
 ## Framework Examples
 
 ### tRPC

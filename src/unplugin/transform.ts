@@ -81,8 +81,15 @@ class StagedTransform {
   }
 }
 
-/** Matches a runtime (non-type-only) import from "zod". */
-const HAS_RUNTIME_ZOD_IMPORT = /import\s+(?!type\s)[^;]*from\s+["']zod(?:\/v\d+)?["']/;
+/**
+ * Matches a runtime (non-type-only) import from "zod".
+ *
+ * One of the three triggers ZOD_MENTION (the transform hook's `code` filter)
+ * must remain a superset of — widening this to a specifier that does not
+ * contain "zod" silently strips those files from every bundler with native
+ * hook filters. `describe("code filter soundness")` fails if it drifts.
+ */
+export const HAS_RUNTIME_ZOD_IMPORT = /import\s+(?!type\s)[^;]*from\s+["']zod(?:\/v\d+)?["']/;
 
 /**
  * Opt-in phase timing (ZOD_COMPILER_TIMING=1): accumulates per-phase wall time
@@ -144,6 +151,57 @@ export function shouldTransform(id: string, options?: ZodCompilerPluginOptions):
     return false;
 
   return true;
+}
+
+/**
+ * `id` half of the transform hook filter: the option-independent checks of
+ * shouldTransform(), restated as patterns the bundler can evaluate itself.
+ * Rolldown, Vite and Rollup 4.40+ apply hook filters natively, so a rejected
+ * module never crosses into JS; unplugin applies the same patterns in JS for
+ * the rest (webpack/rspack skip installing the transform loader entirely).
+ *
+ * The `include`/`exclude` options stay out of the filter on purpose: they are
+ * matched with picomatch's `contains: true` semantics, which the native glob
+ * support (patterns resolved against cwd, matched whole) would silently
+ * narrow — shouldTransform() keeps applying them inside the handler.
+ */
+export const TRANSFORM_ID_FILTER: { exclude: RegExp[]; include: RegExp[] } = {
+  exclude: [/node_modules/, /\.d\.ts$/, /\.compiled\.[jt]s$/],
+  include: [/\.[cm]?[jt]sx?$/],
+};
+
+/**
+ * Every transform path that can change a file needs the substring "zod" (or
+ * "Zod") somewhere in the source. There are exactly three triggers, and each
+ * one is pinned by `describe("code filter soundness")` in the transform tests:
+ *
+ * 1. auto-discovery — HAS_RUNTIME_ZOD_IMPORT (above), which only matches
+ *    specifiers spelled "zod…";
+ * 2. `schemas: "explicit"` — an import from "zod-compiler" (the package name);
+ * 3. hoisting — a root imported from ZOD_MODULES or an identifier matching
+ *    SCHEMA_NAME_PATTERN (both in hoist.ts; a *custom* pattern drops this
+ *    filter entirely, see transformCodeFilter).
+ *
+ * Adding a fourth trigger that can fire without a "zod" mention MUST widen
+ * this pattern, or those files are silently skipped on every bundler with
+ * native hook filters — no error, schemas just quietly stay uncompiled.
+ *
+ * Spelled as a character class rather than an `i` flag: native filters
+ * recompile these patterns outside JS, where flag support is narrower.
+ */
+const ZOD_MENTION = /[Zz]od/;
+
+/**
+ * `code` half of the transform hook filter, or undefined when no sound filter
+ * exists. A custom `hoist.schemaNamePattern` promotes arbitrary imported
+ * identifiers to schema roots (`UserModel`), so nothing in such a file is
+ * guaranteed to mention zod — those setups keep the unfiltered behavior.
+ */
+export function transformCodeFilter(options?: ZodCompilerPluginOptions): RegExp | undefined {
+  const namePattern = typeof options?.hoist === "object" ? options.hoist.schemaNamePattern : null;
+  // `null` disables name matching and `undefined` keeps the default
+  // /ZodSchema$/ — both leave a "zod" mention as the only way in.
+  return namePattern === null || namePattern === undefined ? ZOD_MENTION : undefined;
 }
 
 export function log(msg: string): void {
@@ -264,7 +322,10 @@ export async function transformCodeWithMap(
     return { code: staged.current, map: staged.map() };
   };
 
-  // Quick bail-out check
+  // Quick bail-out check. Both gates are also encoded in the transform hook's
+  // `code` filter (ZOD_MENTION) so bundlers can skip the hook call entirely —
+  // relaxing either one here without widening that pattern makes the bundler
+  // drop those files before this code ever runs.
   if (autoDiscover) {
     // autoDiscover: any file with a runtime Zod import is a candidate.
     // Skip `import type` — these files have no runtime schemas.

@@ -4,6 +4,15 @@ import process from "node:process";
 import type { UnpluginContextMeta, UnpluginOptions } from "unplugin";
 import { describe, expect, it } from "vitest";
 import { unplugin } from "#src/unplugin/index.js";
+import { TRANSFORM_ID_FILTER } from "#src/unplugin/transform.js";
+import {
+  RESOLVED_RUNTIME_ID,
+  RESOLVED_RUNTIME_ID_FILTER,
+  RUNTIME_SPECIFIER_FILTER,
+  VIRTUAL_RUNTIME_ID,
+  WP_RUNTIME_ID,
+} from "#src/unplugin/virtual.js";
+import { hookFilter, type TransformHandler, transformHandler } from "./hooks.js";
 
 const meta = { framework: "vite" } as UnpluginContextMeta;
 
@@ -56,27 +65,85 @@ describe("unplugin factory", () => {
     expect(plugin.vite?.apply).toBeUndefined();
   });
 
-  it("transformInclude delegates to shouldTransform", () => {
+  it("declares hook filters so bundlers can skip the hook call", () => {
+    // Hook filters (unplugin object hooks) let Rolldown/Vite/Rollup reject a
+    // module natively; the deprecated transformInclude/loadInclude predicates
+    // called into JS for every module in the graph.
     const plugin = unplugin.raw({}, meta) as UnpluginOptions;
-    const transformInclude = plugin.transformInclude as (id: string) => boolean;
 
-    expect(transformInclude("/src/schemas.ts")).toBe(true);
-    expect(transformInclude("/node_modules/zod/index.ts")).toBe(false);
-    expect(transformInclude("/src/types.d.ts")).toBe(false);
-    expect(transformInclude("/src/schemas.compiled.ts")).toBe(false);
+    expect(plugin.transformInclude).toBeUndefined();
+    expect(plugin.loadInclude).toBeUndefined();
+    expect(hookFilter(plugin.transform)).toEqual({
+      code: /[Zz]od/,
+      id: TRANSFORM_ID_FILTER,
+    });
+    expect(hookFilter(plugin.load)).toEqual({ id: RESOLVED_RUNTIME_ID_FILTER });
+    expect(hookFilter(plugin.resolveId)).toEqual({ id: RUNTIME_SPECIFIER_FILTER });
   });
 
-  it("transformInclude respects plugin options", () => {
-    const plugin = unplugin.raw({ exclude: ["generated"] }, meta) as UnpluginOptions;
-    const transformInclude = plugin.transformInclude as (id: string) => boolean;
+  it("drops the code filter when a custom hoist schemaNamePattern is set", () => {
+    // Such a pattern makes any imported identifier a schema root, so no
+    // substring of a hoistable file is guaranteed — filtering on "zod" would
+    // silently skip files the hoister would otherwise rewrite.
+    const plugin = unplugin.raw(
+      { hoist: { schemaNamePattern: /Model$/ } },
+      meta,
+    ) as UnpluginOptions;
 
-    expect(transformInclude("/src/schemas.ts")).toBe(true);
-    expect(transformInclude("/src/generated/schemas.ts")).toBe(false);
+    expect(hookFilter(plugin.transform)).toEqual({ id: TRANSFORM_ID_FILTER });
+  });
+
+  it("resolveId/load filters match the runtime module ids and nothing else", () => {
+    const [virtualPattern, wpPattern] = RUNTIME_SPECIFIER_FILTER as [RegExp, RegExp];
+
+    expect(virtualPattern.test(VIRTUAL_RUNTIME_ID)).toBe(true);
+    expect(wpPattern.test(WP_RUNTIME_ID)).toBe(true);
+    expect(RESOLVED_RUNTIME_ID_FILTER.test(RESOLVED_RUNTIME_ID)).toBe(true);
+
+    // The `virtual:` id must not be matched as a glob/substring: the patterns
+    // are anchored, so neither a suffixed import nor the resolved id leaks in.
+    for (const pattern of [...RUNTIME_SPECIFIER_FILTER, RESOLVED_RUNTIME_ID_FILTER]) {
+      expect(pattern.test("/src/schemas.ts")).toBe(false);
+      expect(pattern.test(`${VIRTUAL_RUNTIME_ID}?v=1`)).toBe(false);
+    }
+    expect(RESOLVED_RUNTIME_ID_FILTER.test(VIRTUAL_RUNTIME_ID)).toBe(false);
+    expect(RUNTIME_SPECIFIER_FILTER.some((p) => p.test(RESOLVED_RUNTIME_ID))).toBe(false);
+  });
+
+  it("esbuild onLoadFilter covers both hooks (esbuild filters before reading files)", () => {
+    const plugin = unplugin.raw({}, meta) as UnpluginOptions;
+    const filter = plugin.esbuild?.onLoadFilter as RegExp;
+
+    expect(filter.test("/src/schemas.ts")).toBe(true);
+    expect(filter.test("/src/component.tsx")).toBe(true);
+    expect(filter.test("/src/schemas.mjs")).toBe(true);
+    expect(filter.test(RESOLVED_RUNTIME_ID)).toBe(true);
+    expect(filter.test("/src/styles.css")).toBe(false);
+    expect(filter.test("/src/data.json")).toBe(false);
+  });
+
+  it("transform skips files the include/exclude options reject", async () => {
+    // Not expressible as a native filter (picomatch `contains` semantics), so
+    // the handler stays the authority for them.
+    const plugin = unplugin.raw({ exclude: ["generated"] }, meta) as UnpluginOptions;
+    const transform = transformHandler(plugin);
+    const code = [
+      'import { z } from "zod";',
+      'import { compile } from "zod-compiler";',
+      "const UserSchema = z.object({ name: z.string() });",
+      "export const validateUser = compile(UserSchema);",
+    ].join("\n");
+
+    expect(await transform(code, "/src/generated/schemas.ts")).toBeUndefined();
+    // ...and files the static half of the filter rejects, for hosts that
+    // ignore hook filters entirely.
+    expect(await transform(code, "/node_modules/pkg/schemas.ts")).toBeUndefined();
+    expect(await transform(code, "/src/schemas.d.ts")).toBeUndefined();
   });
 
   it("transform bails out when code lacks zod-compiler reference", async () => {
     const plugin = unplugin.raw({}, meta) as UnpluginOptions;
-    const transform = plugin.transform as (code: string, id: string) => Promise<unknown>;
+    const transform = transformHandler(plugin);
 
     const result = await transform("export const x = 1;", "/src/test.ts");
     expect(result).toBeUndefined();
@@ -84,7 +151,7 @@ describe("unplugin factory", () => {
 
   it("transform bails out when code lacks compile reference", async () => {
     const plugin = unplugin.raw({}, meta) as UnpluginOptions;
-    const transform = plugin.transform as (code: string, id: string) => Promise<unknown>;
+    const transform = transformHandler(plugin);
 
     const result = await transform('import { z } from "zod-compiler";', "/src/test.ts");
     expect(result).toBeUndefined();
@@ -92,10 +159,7 @@ describe("unplugin factory", () => {
 
   it("transform processes valid compile() file", async () => {
     const plugin = unplugin.raw({}, meta) as UnpluginOptions;
-    const transform = plugin.transform as (
-      code: string,
-      id: string,
-    ) => Promise<{ code: string; map: unknown } | undefined>;
+    const transform = transformHandler(plugin);
 
     const fixturesDir = path.resolve(import.meta.dirname, "../fixtures");
     const fixturePath = path.join(fixturesDir, "simple-schema.ts");
@@ -121,10 +185,7 @@ describe("unplugin factory", () => {
 
   it('output: "compact" delegates the cold path to zod and drops the slow walk', async () => {
     const plugin = unplugin.raw({ output: "compact" }, meta) as UnpluginOptions;
-    const transform = plugin.transform as (
-      code: string,
-      id: string,
-    ) => Promise<{ code: string; map: unknown } | undefined>;
+    const transform = transformHandler(plugin);
 
     const fixturesDir = path.resolve(import.meta.dirname, "../fixtures");
     const fixturePath = path.join(fixturesDir, "simple-schema.ts");
@@ -152,10 +213,7 @@ describe("unplugin factory", () => {
 
   it("transform returns cached result for the same file id", async () => {
     const plugin = unplugin.raw({}, meta) as UnpluginOptions;
-    const transform = plugin.transform as (
-      code: string,
-      id: string,
-    ) => Promise<{ code: string; map: unknown } | undefined>;
+    const transform = transformHandler(plugin);
 
     const fixturesDir = path.resolve(import.meta.dirname, "../fixtures");
     const fixturePath = path.join(fixturesDir, "simple-schema.ts");
@@ -177,10 +235,7 @@ describe("unplugin factory", () => {
 
   it("serves cached results across build cycles for unchanged content", async () => {
     const plugin = unplugin.raw({ verbose: true }, meta) as UnpluginOptions;
-    const transform = plugin.transform as (
-      code: string,
-      id: string,
-    ) => Promise<{ code: string; map: unknown } | undefined>;
+    const transform = transformHandler(plugin);
     const buildEnd = plugin.buildEnd as () => void;
 
     const fixturesDir = path.resolve(import.meta.dirname, "../fixtures");
@@ -205,10 +260,7 @@ describe("unplugin factory", () => {
 
   it("recomputes when content changes for the same file id (no stale cache)", async () => {
     const plugin = unplugin.raw({}, meta) as UnpluginOptions;
-    const transform = plugin.transform as (
-      code: string,
-      id: string,
-    ) => Promise<{ code: string; map: unknown } | undefined>;
+    const transform = transformHandler(plugin);
 
     const fixturesDir = path.resolve(import.meta.dirname, "../fixtures");
     const fixturePath = path.join(fixturesDir, "simple-schema.ts");
@@ -231,10 +283,7 @@ describe("unplugin factory", () => {
 
   it("watchChange invalidates the transform cache", async () => {
     const plugin = unplugin.raw({}, meta) as UnpluginOptions;
-    const transform = plugin.transform as (
-      code: string,
-      id: string,
-    ) => Promise<{ code: string; map: unknown } | undefined>;
+    const transform = transformHandler(plugin);
     const watchChange = plugin.watchChange as (id: string, change: { event: string }) => void;
 
     const fixturesDir = path.resolve(import.meta.dirname, "../fixtures");
@@ -263,10 +312,7 @@ describe("unplugin factory", () => {
 
     try {
       const plugin = unplugin.raw({ verbose: true }, meta) as UnpluginOptions;
-      const transform = plugin.transform as (
-        code: string,
-        id: string,
-      ) => Promise<{ code: string; map: unknown } | undefined>;
+      const transform = transformHandler(plugin);
       const buildEnd = plugin.buildEnd as () => void;
 
       const fixturesDir = path.resolve(import.meta.dirname, "../fixtures");
@@ -296,10 +342,8 @@ describe("unplugin factory", () => {
 describe("schemas / output option resolution", () => {
   const FIXTURE = path.resolve(import.meta.dirname, "../fixtures/auto-discover-simple.ts");
   const CODE = readFileSync(FIXTURE, "utf8");
-  type Tx = (code: string, id: string) => Promise<{ code: string } | undefined>;
-  const tx = (options: Record<string, unknown>): Tx =>
-    (unplugin.raw({ cache: false, ...options }, meta) as UnpluginOptions)
-      .transform as unknown as Tx;
+  const tx = (options: Record<string, unknown>): TransformHandler =>
+    transformHandler(unplugin.raw({ cache: false, ...options }, meta) as UnpluginOptions);
 
   it('defaults to schemas: "auto" — plain exports compile with no config', async () => {
     const result = await tx({})(CODE, FIXTURE);

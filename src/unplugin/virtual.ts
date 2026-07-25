@@ -67,6 +67,27 @@ function buildRuntimeSource(): string {
 
 const RUNTIME_SOURCE = buildRuntimeSource();
 
+/**
+ * Anchored, literal-safe pattern for an exact id match. Hook filters take
+ * globs or regexes, and a bare string is treated as a glob resolved against
+ * cwd — which never matches a `virtual:` specifier — so the ids are escaped
+ * into patterns instead. NUL is written as `\x00` because the pattern is
+ * recompiled outside JS by bundlers with native filters (Rolldown).
+ */
+function exactIdPattern(id: string): RegExp {
+  const escaped = id.replace(/[$()*+.?[\\\]^{|}]/g, "\\$&").replaceAll("\0", "\\x00");
+  return new RegExp(`^${escaped}$`);
+}
+
+/** `id` filter for the resolveId hook: the runtime module's public specifiers. */
+export const RUNTIME_SPECIFIER_FILTER: RegExp[] = [
+  exactIdPattern(VIRTUAL_RUNTIME_ID),
+  exactIdPattern(WP_RUNTIME_ID),
+];
+
+/** `id` filter for the load hook: the resolved (`\0`-prefixed) runtime id. */
+export const RESOLVED_RUNTIME_ID_FILTER: RegExp = exactIdPattern(RESOLVED_RUNTIME_ID);
+
 export function resolveVirtualId(id: string): string | null {
   if (id === VIRTUAL_RUNTIME_ID || id === WP_RUNTIME_ID) return RESOLVED_RUNTIME_ID;
   return null;

@@ -7,6 +7,8 @@ import { DiskCache, resetDepValidationMemo } from "./disk-cache.js";
 import {
   log,
   shouldTransform,
+  TRANSFORM_ID_FILTER,
+  transformCodeFilter,
   type TransformSourceMap,
   transformCodeWithMap,
 } from "./transform.js";
@@ -14,8 +16,9 @@ import type { BuildStats, ZodCompilerPluginOptions } from "./types.js";
 import { BuildStatsAccumulator } from "./types.js";
 import {
   loadVirtual,
-  RESOLVED_RUNTIME_ID,
+  RESOLVED_RUNTIME_ID_FILTER,
   resolveVirtualId,
+  RUNTIME_SPECIFIER_FILTER,
   VIRTUAL_RUNTIME_ID,
   WP_RUNTIME_ID,
 } from "./virtual.js";
@@ -42,6 +45,18 @@ const WP_FRAMEWORKS = new Set(["rspack", "webpack"]);
 
 /** File extensions whose changes can affect a schema module graph. */
 const SOURCE_LIKE = /\.([cm]?[jt]sx?|json)$/;
+
+/**
+ * esbuild has no hook-filter support of its own: unplugin registers a single
+ * `onLoad` covering both the load and transform hooks, and its transform shim
+ * reads the file off disk before any JS-side filter runs. `onLoadFilter` is
+ * the one filter esbuild itself applies (in Go, before calling into JS), so it
+ * carries the union of what either hook can handle — source files for
+ * transform, the resolved runtime module for load (derived from the load
+ * filter so the two cannot drift; a miss there would leave the lean-mode
+ * runtime import unresolved). The hooks' own filters narrow it further.
+ */
+const ESBUILD_LOAD_FILTER = new RegExp(`\\.[cm]?[jt]sx?$|${RESOLVED_RUNTIME_ID_FILTER.source}`);
 
 export const unplugin = createUnplugin(
   (options: ZodCompilerPluginOptions | undefined, meta: UnpluginContextMeta) => {
@@ -101,145 +116,166 @@ export const unplugin = createUnplugin(
           ((_config: unknown, env: { command: string; mode: string }) =>
             env.command === "build" || env.mode === "test" || process.env["VITEST"] !== undefined));
 
+    // Hook filters (unplugin object hooks): bundlers that support them
+    // natively — Rolldown, Vite, Rollup 4.40+ — reject a module before ever
+    // calling into JS, and unplugin applies the same patterns itself
+    // everywhere else. The `code` filter is the big one: a file that never
+    // mentions zod cannot produce output, so it no longer costs a hook call,
+    // a content hash and an import scan per build.
+    const codeFilter = transformCodeFilter(options);
+    const transformFilter =
+      codeFilter === undefined
+        ? { id: TRANSFORM_ID_FILTER }
+        : { code: codeFilter, id: TRANSFORM_ID_FILTER };
+
     return {
       name: "zod-compiler",
       enforce: "pre" as const,
 
       vite: viteApply === undefined ? {} : { apply: viteApply },
 
-      resolveId(id: string) {
-        return resolveVirtualId(id);
+      esbuild: { onLoadFilter: ESBUILD_LOAD_FILTER },
+
+      resolveId: {
+        filter: { id: RUNTIME_SPECIFIER_FILTER },
+        handler(id: string) {
+          return resolveVirtualId(id);
+        },
       },
 
-      loadInclude(id: string): boolean {
-        return id === RESOLVED_RUNTIME_ID;
+      load: {
+        filter: { id: RESOLVED_RUNTIME_ID_FILTER },
+        handler(id: string) {
+          return loadVirtual(id);
+        },
       },
 
-      load(id: string) {
-        return loadVirtual(id);
-      },
+      transform: {
+        filter: transformFilter,
+        async handler(code: string, id: string) {
+          // The filter covers the static half of shouldTransform(); the
+          // include/exclude options — picomatch `contains` semantics, which the
+          // native filters do not reproduce — are applied here, as is the whole
+          // check for hosts that ignore filters.
+          if (!shouldTransform(id, options)) return;
 
-      transformInclude(id: string): boolean {
-        return shouldTransform(id, options);
-      },
-
-      async transform(code: string, id: string) {
-        const cached = cache.get(id);
-        if (cached && cached.code === code) {
-          return cached.result === null
-            ? undefined
-            : { code: cached.result, map: cached.map ?? null };
-        }
-        if (cached) {
-          // Content changed but no watchChange fired (bundlers without the
-          // hook): drop stale module executions before re-discovering.
-          invalidateModuleCache();
-        }
-
-        // Disk cache: skip static-filtering, discovery (file execution!) and
-        // codegen entirely when a previous process already transformed this
-        // exact content and every dep it executed is unchanged.
-        const diskKey = diskCache === null ? null : diskCache.key(id, code);
-        if (diskCache !== null && diskKey !== null) {
-          const entry = diskCache.load(diskKey);
-          if (entry !== null) {
-            cache.set(id, { code, result: entry.result, map: entry.map ?? null });
-            if (entry.stats) {
-              stats.add({
-                files: 1,
-                schemas: entry.stats.schemas,
-                optimized: entry.stats.optimized,
-                failed: 0,
-              });
-            }
-            if (verbose && entry.result !== null) {
-              log(`Using cached transform for ${id}`);
-            }
-            return entry.result === null
+          const cached = cache.get(id);
+          if (cached && cached.code === code) {
+            return cached.result === null
               ? undefined
-              : { code: entry.result, map: entry.map ?? null };
+              : { code: cached.result, map: cached.map ?? null };
           }
-        }
+          if (cached) {
+            // Content changed but no watchChange fired (bundlers without the
+            // hook): drop stale module executions before re-discovering.
+            invalidateModuleCache();
+          }
 
-        let discoveryRan = false;
-        let substantialWork = false;
-        let uncacheable = false;
-        let fileStats: BuildStats | null = null;
-        const output = await transformCodeWithMap(code, id, {
-          mode,
-          runtimeId,
-          verbose,
-          zodCompat,
-          compact,
-          autoDiscover,
-          stripUnknownKeys,
-          hoist: options?.hoist,
-          onDiscovery() {
-            discoveryRan = true;
-          },
-          onSubstantialWork() {
-            substantialWork = true;
-          },
-          onUncacheableResult() {
-            uncacheable = true;
-          },
-          onBuildStats(s) {
-            stats.add(s);
-            fileStats = s;
-          },
-        });
-        const result = output === null ? null : output.code;
-        const map = output === null ? null : output.map;
-        cache.set(id, { code, result, map });
-
-        // Persist when the transform did real work: produced output, ran
-        // discovery, or did parse-level work (hoist scan / static filter) —
-        // even when that work concluded "no transform needed". Null results
-        // used to be skipped on the theory that bail-outs are cheaper than a
-        // cache probe; that holds for textual bail-outs (still never
-        // persisted) but not for the scans: hoist-only mode re-paid a full
-        // scan per zod-importing file per run (35.8s/run in a field report)
-        // purely to re-derive nulls.
-        if (
-          diskCache !== null &&
-          diskKey !== null &&
-          !uncacheable &&
-          (result !== null || discoveryRan || substantialWork)
-        ) {
-          // TS narrows fileStats to null here (assignment happens inside a
-          // callback it cannot track) — widen back.
-          const s = fileStats as BuildStats | null;
-          const entryStats =
-            s === null ? undefined : { schemas: s.schemas, optimized: s.optimized };
-          if (!discoveryRan) {
-            // Discovery-free results (hoist scans, static-filter rejections,
-            // hoist-only rewrites) are pure functions of the file content:
-            // no deps.
-            diskCache.save(diskKey, result, [], entryStats, map);
-          } else {
-            // Per-file dependency sets: the file's static first-party import
-            // graph, so editing an unrelated file no longer invalidates this
-            // entry (the global superset recorded the whole project — in
-            // large codebases every commit wiped the entire cache). The
-            // entry file itself is always a dep: the cache key hashes the
-            // content the BUNDLER passed, but discovery executed the file
-            // from DISK — recording it guards the (rare) divergence between
-            // the two. When the graph cannot be fully analyzed (non-literal
-            // dynamic imports, unresolvable relative specifiers), the entry
-            // is deferred and flushed in buildEnd against ONE end-of-build
-            // executed-modules superset — immediate snapshots gave every
-            // entry a distinct point-in-time copy (283 MB in the field).
-            const staticDeps = collectStaticDeps(id);
-            if (staticDeps.complete) {
-              diskCache.save(diskKey, result, [id, ...staticDeps.deps], entryStats, map);
-            } else {
-              diskCache.saveDeferred(diskKey, result, entryStats, map);
+          // Disk cache: skip static-filtering, discovery (file execution!) and
+          // codegen entirely when a previous process already transformed this
+          // exact content and every dep it executed is unchanged.
+          const diskKey = diskCache === null ? null : diskCache.key(id, code);
+          if (diskCache !== null && diskKey !== null) {
+            const entry = diskCache.load(diskKey);
+            if (entry !== null) {
+              cache.set(id, { code, result: entry.result, map: entry.map ?? null });
+              if (entry.stats) {
+                stats.add({
+                  files: 1,
+                  schemas: entry.stats.schemas,
+                  optimized: entry.stats.optimized,
+                  failed: 0,
+                });
+              }
+              if (verbose && entry.result !== null) {
+                log(`Using cached transform for ${id}`);
+              }
+              return entry.result === null
+                ? undefined
+                : { code: entry.result, map: entry.map ?? null };
             }
           }
-        }
 
-        if (!result) return;
-        return { code: result, map };
+          let discoveryRan = false;
+          let substantialWork = false;
+          let uncacheable = false;
+          let fileStats: BuildStats | null = null;
+          const output = await transformCodeWithMap(code, id, {
+            mode,
+            runtimeId,
+            verbose,
+            zodCompat,
+            compact,
+            autoDiscover,
+            stripUnknownKeys,
+            hoist: options?.hoist,
+            onDiscovery() {
+              discoveryRan = true;
+            },
+            onSubstantialWork() {
+              substantialWork = true;
+            },
+            onUncacheableResult() {
+              uncacheable = true;
+            },
+            onBuildStats(s) {
+              stats.add(s);
+              fileStats = s;
+            },
+          });
+          const result = output === null ? null : output.code;
+          const map = output === null ? null : output.map;
+          cache.set(id, { code, result, map });
+
+          // Persist when the transform did real work: produced output, ran
+          // discovery, or did parse-level work (hoist scan / static filter) —
+          // even when that work concluded "no transform needed". Null results
+          // used to be skipped on the theory that bail-outs are cheaper than a
+          // cache probe; that holds for textual bail-outs (still never
+          // persisted) but not for the scans: hoist-only mode re-paid a full
+          // scan per zod-importing file per run (35.8s/run in a field report)
+          // purely to re-derive nulls.
+          if (
+            diskCache !== null &&
+            diskKey !== null &&
+            !uncacheable &&
+            (result !== null || discoveryRan || substantialWork)
+          ) {
+            // TS narrows fileStats to null here (assignment happens inside a
+            // callback it cannot track) — widen back.
+            const s = fileStats as BuildStats | null;
+            const entryStats =
+              s === null ? undefined : { schemas: s.schemas, optimized: s.optimized };
+            if (!discoveryRan) {
+              // Discovery-free results (hoist scans, static-filter rejections,
+              // hoist-only rewrites) are pure functions of the file content:
+              // no deps.
+              diskCache.save(diskKey, result, [], entryStats, map);
+            } else {
+              // Per-file dependency sets: the file's static first-party import
+              // graph, so editing an unrelated file no longer invalidates this
+              // entry (the global superset recorded the whole project — in
+              // large codebases every commit wiped the entire cache). The
+              // entry file itself is always a dep: the cache key hashes the
+              // content the BUNDLER passed, but discovery executed the file
+              // from DISK — recording it guards the (rare) divergence between
+              // the two. When the graph cannot be fully analyzed (non-literal
+              // dynamic imports, unresolvable relative specifiers), the entry
+              // is deferred and flushed in buildEnd against ONE end-of-build
+              // executed-modules superset — immediate snapshots gave every
+              // entry a distinct point-in-time copy (283 MB in the field).
+              const staticDeps = collectStaticDeps(id);
+              if (staticDeps.complete) {
+                diskCache.save(diskKey, result, [id, ...staticDeps.deps], entryStats, map);
+              } else {
+                diskCache.saveDeferred(diskKey, result, entryStats, map);
+              }
+            }
+          }
+
+          if (!result) return;
+          return { code: result, map };
+        },
       },
 
       watchChange(id: string) {
