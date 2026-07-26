@@ -2,6 +2,7 @@ import type { SchemaIR, UnionIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
 import { hasMutation } from "../context.js";
 import { emit } from "../emit.js";
+import { orderByRuntimeCost } from "../fast-size.js";
 import { detectUnionDiscriminator, emitFastDiscriminatedSwitch } from "./discriminated-union.js";
 
 export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string {
@@ -121,8 +122,13 @@ export function fastUnion(ir: UnionIR, g: FastGen): string | null {
     );
   }
 
+  // Probe cheap options first: the ||-chain stops at the first match, and an
+  // option that cannot match is rejected by its own cheapest-first conjunct
+  // chain. Which option matches is unobservable here (the result is a single
+  // boolean), and the slow path — where option order IS observable, through
+  // zod's first-match output and invalid_union issue order — is untouched.
   const optionChecks: string[] = [];
-  for (const option of ir.options) {
+  for (const option of orderByRuntimeCost(ir.options, (o) => o, g.ctx)) {
     const check = g.visit(option);
     if (check === null) return null;
     optionChecks.push(`(${check})`);

@@ -10,6 +10,7 @@ import {
 } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, unrecognizedKeys } from "../emit-issue.js";
+import { orderByRuntimeCost } from "../fast-size.js";
 import { ZC_HOP_DECL } from "../issue-decls.js";
 import { refineCheck } from "./effect.js";
 
@@ -99,6 +100,20 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
 }
 
 /**
+ * Property entries in the order their fast-checks should be `&&`-chained:
+ * cheapest first, declaration order preserved among equals (Array#sort is
+ * stable). Valid input runs every conjunct whatever the order, so this costs
+ * nothing on the hot path; a REJECT stops at the first false conjunct, so
+ * pricing a `z.email()` behind the `kind` literal that actually discriminates
+ * is what makes union probing and `.is()` misses cheap (see
+ * estimateRuntimeCost). The SLOW path keeps declaration order — that one's
+ * output is the issue list, whose order is part of zod parity.
+ */
+function orderedProperties(ir: ObjectIR, g: FastGen): [string, SchemaIR][] {
+  return orderByRuntimeCost(Object.entries(ir.properties), ([, propIR]) => propIR, g.ctx);
+}
+
+/**
  * Property/strict/refine fast-checks for an object, WITHOUT the leading
  * `typeof===object && !==null && !Array.isArray` type-guard. Returns the
  * conjunct parts (joinable with `&&`), or null if any child is fast-ineligible.
@@ -111,7 +126,7 @@ function fastObjectBody(ir: ObjectIR, g: FastGen, skipKey?: string): string[] | 
   const x = g.input;
   const parts: string[] = [];
 
-  for (const [key, propIR] of Object.entries(ir.properties)) {
+  for (const [key, propIR] of orderedProperties(ir, g)) {
     if (key === skipKey) continue;
     const propExpr = `${x}[${escapeString(key)}]`;
     const propCheck = g.visit(propIR, { input: propExpr });

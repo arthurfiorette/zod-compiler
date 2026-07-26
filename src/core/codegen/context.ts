@@ -98,6 +98,8 @@ export interface CodeGenContext {
   effectFnCache?: Map<string, string>;
   /** Memo for estimateFastCost (size-gated fast-check extraction). Lazily created. */
   fastSizeCache?: WeakMap<SchemaIR, number>;
+  /** Memo for estimateRuntimeCost (cheapest-first check ordering). Lazily created. */
+  fastRuntimeCostCache?: WeakMap<SchemaIR, number>;
   /**
    * File-level shared slow-walk plan. Set only when generating a mutation-free
    * schema (so shared walks stay on the deferred cold path); the slow-path

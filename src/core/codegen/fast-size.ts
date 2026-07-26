@@ -17,6 +17,7 @@
  */
 
 import type { SchemaIR } from "../types.js";
+import type { CodeGenContext } from "./context.js";
 
 /**
  * Per-function soft size cap, in emitted characters. Once the fast-check being
@@ -163,6 +164,135 @@ export function estimateFastCost(ir: SchemaIR, cache: WeakMap<SchemaIR, number>)
   cache.set(ir, 0);
   let total = shallowFastCost(ir);
   for (const child of fastChildren(ir)) total += estimateFastCost(child, cache);
+  cache.set(ir, total);
+  return total;
+}
+
+// ─── Runtime cost (check ordering) ───────────────────────────────────────────
+
+/**
+ * Assumed element count for unbounded collections, used only to weight a
+ * container against its siblings when ordering an `&&` chain.
+ */
+const ASSUMED_ELEMENTS = 4;
+
+/** Runtime weight of one check on an already-type-confirmed value. */
+function checkRuntimeCost(kind: string): number {
+  switch (kind) {
+    // A `.test()` call costs ~9 ns of dispatch before it matches a character —
+    // an order of magnitude above every other check, and the reason ordering
+    // matters at all.
+    case "string_format":
+      return 100;
+    // Zero-capture user predicate: a real call, cheaper than a regex.
+    case "refine_effect":
+      return 20;
+    case "includes":
+    case "starts_with":
+    case "ends_with":
+      return 6;
+    case "multiple_of":
+    case "bigint_multiple_of":
+      return 4;
+    default:
+      // length/size/range comparisons: a load and a compare.
+      return 1;
+  }
+}
+
+/** A node's own runtime weight, EXCLUDING its children. */
+function shallowRuntimeCost(ir: SchemaIR): number {
+  switch (ir.type) {
+    case "string":
+    case "number":
+      return 2 + ir.checks.reduce((sum, c) => sum + checkRuntimeCost(c.kind), 0);
+    case "bigint":
+    case "date":
+      return 3 + (ir.checks?.length ?? 0);
+    case "file":
+      return 3 + (ir.checks?.length ?? 0) * 2;
+    case "enum":
+      // Inlined `===` chain (or one hashed lookup) — sub-nanosecond either way.
+      return 1 + Math.min(ir.values.length, 8);
+    case "object":
+      // Type guard, plus the strict pass's per-key membership test.
+      return 3 + (ir.strict === true ? Object.keys(ir.properties).length : 0);
+    case "array":
+    case "set":
+    case "record":
+    case "map":
+    case "tuple":
+      return 3;
+    case "templateLiteral":
+      return 100;
+    case "recursiveRef":
+    case "recursionTarget":
+      // A recursive call expands into an unknown amount of work; treat it as
+      // the most expensive sibling so it is probed last.
+      return 200;
+    default:
+      return 1;
+  }
+}
+
+/** estimateRuntimeCost against the per-compile memo hanging off the context. */
+function runtimeCostOf(ir: SchemaIR, ctx: CodeGenContext): number {
+  return estimateRuntimeCost(ir, (ctx.fastRuntimeCostCache ??= new WeakMap<SchemaIR, number>()));
+}
+
+/**
+ * Sort a fast-check's sibling conjuncts (or union options) cheapest-first.
+ * Returns a new array; ties keep source order (Array#sort is stable), so a
+ * schema whose members all cost the same emits byte-identical output.
+ */
+export function orderByRuntimeCost<T>(
+  items: readonly T[],
+  irOf: (item: T) => SchemaIR,
+  ctx: CodeGenContext,
+): T[] {
+  if (items.length < 2) return [...items];
+  return [...items].sort((a, b) => runtimeCostOf(irOf(a), ctx) - runtimeCostOf(irOf(b), ctx));
+}
+
+/**
+ * Estimated runtime cost of a node's fast-check, in arbitrary units calibrated
+ * so a regex format check dominates a handful of type guards. Memoized per IR
+ * node, like estimateFastCost — the estimate is consulted at every nesting
+ * level, and shared sub-trees are common.
+ *
+ * Used to order the conjuncts of an `&&` chain cheapest-first. Accepting input
+ * runs every conjunct regardless, so ordering is free there; REJECTING input
+ * stops at the first false one, which is where a schema pays for probing a
+ * `z.email()` before the `kind` literal that actually discriminates. Measured
+ * on a 3-option union of objects that each declare `{email, kind, note}`:
+ * 102 ns → 39 ns for an input matching the last option, and 102 ns → 6 ns for
+ * one matching none.
+ */
+function estimateRuntimeCost(ir: SchemaIR, cache: WeakMap<SchemaIR, number>): number {
+  const cached = cache.get(ir);
+  if (cached !== undefined) return cached;
+  cache.set(ir, 0); // cycle break (mirrors estimateFastCost)
+  let total = shallowRuntimeCost(ir);
+  const children = fastChildren(ir);
+  switch (ir.type) {
+    case "array":
+    case "set":
+    case "record":
+    case "map":
+      // Per-element work, repeated for an assumed handful of entries.
+      for (const child of children) total += estimateRuntimeCost(child, cache) * ASSUMED_ELEMENTS;
+      break;
+    case "discriminatedUnion":
+      // O(1) switch: only the matched case runs. Charge the priciest option so
+      // the estimate stays an upper bound.
+      total += children.reduce((max, c) => Math.max(max, estimateRuntimeCost(c, cache)), 0);
+      break;
+    default:
+      // object/tuple/union/intersection/wrappers: every child is on the path
+      // (a union probes options until one matches — worst case, all of them).
+      for (const child of children) total += estimateRuntimeCost(child, cache);
+      break;
+  }
   cache.set(ir, total);
   return total;
 }

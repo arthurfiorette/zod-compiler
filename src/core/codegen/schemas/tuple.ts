@@ -1,6 +1,7 @@
 import type { SchemaIR, TupleIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
 import { extendPath, extendStaticPathIndex, hasMutation } from "../context.js";
+import { orderByRuntimeCost } from "../fast-size.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
 
@@ -92,11 +93,13 @@ export function fastTuple(ir: TupleIR, g: FastGen): string | null {
     parts.push(`${x}.length>=${required}`);
   }
 
-  // Per-index checks
-  for (let i = 0; i < ir.items.length; i++) {
-    const itemIR = ir.items[i];
-    if (!itemIR) continue;
-    const itemCheck = g.visit(itemIR, { input: `${x}[${i}]` });
+  // Per-index checks, cheapest-first: positions are independent, so the emitted
+  // order only decides which one a reject stops on (see estimateRuntimeCost).
+  // The Array.isArray + length conjuncts above stay in front — the element
+  // reads are only meaningful once they hold.
+  const indexed = ir.items.flatMap((itemIR, index) => (itemIR ? [{ index, itemIR }] : []));
+  for (const { index, itemIR } of orderByRuntimeCost(indexed, (e) => e.itemIR, g.ctx)) {
+    const itemCheck = g.visit(itemIR, { input: `${x}[${index}]` });
     if (itemCheck === null) return null;
     if (itemCheck !== "true") parts.push(itemCheck);
   }
