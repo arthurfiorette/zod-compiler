@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { generateValidator } from "#src/core/codegen/index.js";
 import type { ObjectIR } from "#src/core/types.js";
 import { compileFastCheck, compileIR } from "../helpers.js";
 
@@ -217,7 +218,7 @@ describe("strict objects (unknown-key rejection)", () => {
     ]);
   });
 
-  it("slow path: >5 keys uses Set membership", () => {
+  it("slow path: >5 keys uses the membership table", () => {
     const wide: ObjectIR = {
       type: "object",
       strict: true,
@@ -229,6 +230,54 @@ describe("strict objects (unknown-key rejection)", () => {
     const ok = Object.fromEntries(Array.from("abcdefg", (k) => [k, "v"]));
     expect(safeParse(ok).success).toBe(true);
     expect(safeParse({ ...ok, zz: "v" }).success).toBe(false);
+  });
+
+  /**
+   * The >5-key membership test is an object literal consulted as
+   * `TABLE[k]===1` (measured 3.7-4.5x faster than `Set.has` over a for-in
+   * pass). `===1` is what keeps Object.prototype's own names out: they resolve
+   * to functions/accessors, never to the number 1.
+   */
+  describe("membership table (>5 keys)", () => {
+    const wideIR = (keys: readonly string[]): ObjectIR => ({
+      type: "object",
+      strict: true,
+      properties: Object.fromEntries(keys.map((k) => [k, { type: "string", checks: [] }])),
+    });
+    const valueFor = (keys: readonly string[]): Record<string, string> =>
+      Object.fromEntries(keys.map((k) => [k, "v"]));
+    const plain = ["a", "b", "c", "d", "e", "f"];
+
+    it.each(["toString", "constructor", "hasOwnProperty", "valueOf", "__proto__"])(
+      "treats an undeclared %s key as unrecognized",
+      (inherited) => {
+        const input = { ...valueFor(plain), [inherited]: "v" };
+        expect(compileFastCheck(wideIR(plain))?.(input)).toBe(false);
+        const result = compileIR(wideIR(plain))(input);
+        expect(result.success).toBe(false);
+        expect((result.error?.issues[0] as { keys?: string[] } | undefined)?.keys).toEqual([
+          inherited,
+        ]);
+      },
+    );
+
+    it("recognizes a DECLARED key that shadows an Object.prototype name", () => {
+      const keys = ["toString", "valueOf", "c", "d", "e", "f"];
+      expect(compileFastCheck(wideIR(keys))?.(valueFor(keys))).toBe(true);
+      expect(compileIR(wideIR(keys))(valueFor(keys)).success).toBe(true);
+    });
+
+    it("recognizes a DECLARED __proto__ key (object literals cannot hold one)", () => {
+      const keys = ["__proto__", "b", "c", "d", "e", "f"];
+      // The literal form would silently drop this key, so the Set form is kept.
+      const generated = generateValidator(wideIR(keys), "protoKey");
+      expect(generated.code).toContain("new Set(");
+      const input = JSON.parse(
+        `{"__proto__":"v","b":"v","c":"v","d":"v","e":"v","f":"v"}`,
+      ) as Record<string, string>;
+      expect(compileFastCheck(wideIR(keys))?.(input)).toBe(true);
+      expect(compileIR(wideIR(keys))(input).success).toBe(true);
+    });
   });
 
   it("fast path: strict stays eligible and rejects extras", () => {

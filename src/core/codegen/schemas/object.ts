@@ -1,36 +1,17 @@
 import type { ObjectIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
 import {
-  ENUM_INLINE_THRESHOLD,
   emitEffectFn,
   emitRuntimeHelper,
-  emitSet,
   escapeString,
   extendStaticPath,
   hasMutation,
+  keyMembershipTest,
 } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, unrecognizedKeys } from "../emit-issue.js";
 import { ZC_HOP_DECL } from "../issue-decls.js";
 import { refineCheck } from "./effect.js";
-
-/**
- * Boolean membership test for one key variable against the shape's key set.
- * Small shapes inline `===` chains (the enum-inlining result applies — string
- * internalization makes repeat comparisons pointer-equality); larger shapes
- * share a preamble Set. An empty shape recognizes nothing ("false").
- */
-function keyMembershipTest(
-  keys: readonly string[],
-  keyVar: string,
-  emitKeySet: () => string,
-): string {
-  if (keys.length === 0) return "false";
-  if (keys.length <= ENUM_INLINE_THRESHOLD) {
-    return keys.map((k) => `${keyVar}===${escapeString(k)}`).join("||");
-  }
-  return `${emitKeySet()}.has(${keyVar})`;
-}
 
 export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): string {
   let code = emit`
@@ -91,7 +72,7 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
     const keys = Object.keys(ir.properties);
     const ukVar = g.temp("uk");
     const kVar = g.temp("k");
-    const test = keyMembershipTest(keys, kVar, () => g.set("ks", keys));
+    const test = keyMembershipTest(g.ctx, keys, kVar);
     code += emit`
       var ${ukVar}=null;
       for(var ${kVar} in ${g.input}){
@@ -146,7 +127,7 @@ function fastObjectBody(ir: ObjectIR, g: FastGen, skipKey?: string): string[] | 
   if (ir.strict) {
     const keys = Object.keys(ir.properties);
     const fnName = g.temp("so");
-    const test = keyMembershipTest(keys, "k", () => emitSet(g.ctx, "ks", keys));
+    const test = keyMembershipTest(g.ctx, keys, "k");
     g.ctx.preamble.push(
       `function ${fnName}(o){for(var k in o){if(!(${test}))return false;}return true;}`,
     );
