@@ -21,7 +21,7 @@ function compileZodSchema(schema: z.ZodType, name = "test") {
   const fn = new Function(
     "__zcZodError",
     "__zcFin",
-    `${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${result.code}\nreturn ${result.functionDef};`,
+    `"use strict";${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${result.code}\nreturn ${result.functionDef};`,
   );
   return fn(ZodRealError, __zcFin) as (input: unknown) => {
     success: boolean;
@@ -1146,12 +1146,12 @@ function compileWithRefs(schema: z.ZodType, name = "test") {
         "__zcZodError",
         "__zcFin",
         "__rf",
-        `${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${result.code}\nreturn ${result.functionDef};`,
+        `"use strict";${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${result.code}\nreturn ${result.functionDef};`,
       )(ZodRealError, __zcFin, refSchemas) as (input: unknown) => SafeParseResult<unknown>)
     : (new Function(
         "__zcZodError",
         "__zcFin",
-        `${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${result.code}\nreturn ${result.functionDef};`,
+        `"use strict";${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${result.code}\nreturn ${result.functionDef};`,
       )(ZodRealError, __zcFin) as (input: unknown) => SafeParseResult<unknown>);
 }
 
@@ -3042,7 +3042,7 @@ describe("integration — refine custom message", () => {
       "__zcMsg",
       "__zcZodError",
       "__zcFin",
-      `${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${generated.code}\nreturn ${generated.functionDef};`,
+      `"use strict";${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${generated.code}\nreturn ${generated.functionDef};`,
     )(z.config().localeError, ZodRealError, localizedFin) as (
       input: unknown,
     ) => SafeParseResult<unknown>;

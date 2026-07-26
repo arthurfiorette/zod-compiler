@@ -19,6 +19,14 @@ const __zcFinD = new Function(
 )(undefined, ZodRealError);
 
 /**
+ * Generated code ships inside ES modules, which are always strict — so every
+ * harness compiles it strict too. Without this, an assignment to an undeclared
+ * identifier quietly creates a global here and throws a ReferenceError in the
+ * bundle (a shipped `z.date().min()` fast check did exactly that).
+ */
+const STRICT = '"use strict";';
+
+/**
  * Helper: generate code from IR, compile it, and return the safeParse function.
  */
 export function compileIR(
@@ -36,13 +44,13 @@ export function compileIR(
           "__zcFin",
           "__zcFinD",
           "__rf",
-          `${result.code}\nreturn ${result.functionDef};`,
+          `${STRICT}${result.code}\nreturn ${result.functionDef};`,
         )
       : new Function(
           "__zcZodError",
           "__zcFin",
           "__zcFinD",
-          `${result.code}\nreturn ${result.functionDef};`,
+          `${STRICT}${result.code}\nreturn ${result.functionDef};`,
         );
   return (
     refSchemas && refSchemas.length > 0
@@ -73,6 +81,6 @@ export function compileFastCheck(ir: SchemaIR): ((input: unknown) => boolean) | 
   if (expr === null) return null;
   if (expr === "true") return () => true;
   if (expr === "false") return () => false;
-  const code = [...ctx.preamble, `return function(input){return ${expr};}`].join("\n");
+  const code = [STRICT, ...ctx.preamble, `return function(input){return ${expr};}`].join("\n");
   return new Function(code)() as (input: unknown) => boolean;
 }

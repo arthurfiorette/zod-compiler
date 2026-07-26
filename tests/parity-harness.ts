@@ -61,7 +61,9 @@ export function compileLikeProduction(
     "__zcFin",
     "__zcFinZ",
     "__rf",
-    `${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${generated.code}\nreturn ${generated.functionDef};`,
+    // Strict, like the ES module the generated code ships inside: an
+    // assignment to an undeclared identifier must fail here, not in the bundle.
+    `"use strict";${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${generated.code}\nreturn ${generated.functionDef};`,
   );
   return factory(z.config().localeError, ZodRealError, localizedFin, finZ, rf) as (
     input: unknown,
