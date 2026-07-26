@@ -753,9 +753,9 @@ What this means in practice:
 
   | Schema (input)                | Zod (strips) | compiler (keep, default) | compiler (strip) | strip vs keep | strip vs Zod |
   | ----------------------------- | ------------ | ------------------------ | ---------------- | ------------- | ------------ |
-  | medium object, 7 keys (clean) | 2.3M         | 10.7M                    | 7.7M             | 0.7x          | **3.3x**     |
-  | wide object, 20 keys (clean)  | 3.5M         | 15.7M                    | 4.7M             | 0.3x          | **1.3x**     |
-  | nested API response (clean)   | 152K         | 7.8M                     | 1.3M             | 0.17x         | **8.7x**     |
+  | medium object, 7 keys (clean) | 2.6M         | 13.8M                    | 8.9M             | 0.6x          | **3.4x**     |
+  | wide object, 20 keys (clean)  | 4.0M         | 23.7M                    | 5.3M             | 0.2x          | **1.3x**     |
+  | nested API response (clean)   | 171K         | 9.3M                     | 1.2M             | 0.13x         | **7.2x**     |
 
   The cost scales with key count and nesting depth (every declared key is copied into the fresh object); it's independent of whether unknown keys are actually present. Keep stripping off where you don't need sanitization (forwarding to an ORM, etc.) and on where you do.
 
@@ -769,42 +769,44 @@ Matching Zod on these would mean allocating a fresh object (or a `Reflect.ownKey
 
 | Scenario                                          | Zod v3 | Zod v4 | **zod-compiler** | Typia | AJV   | vs Zod v4 |
 | ------------------------------------------------- | ------ | ------ | ---------------- | ----- | ----- | --------- |
-| simple string                                     | 13.3M  | 14.4M  | **16.2M**        | 17.7M | 17.8M | 1.1x      |
-| string (min/max)                                  | 13.0M  | 8.0M   | **17.2M**        | 18.1M | 16.3M | 2.2x      |
-| number (int+positive)                             | 11.5M  | 7.8M   | **15.7M**        | 16.4M | 16.7M | 2.0x      |
-| enum                                              | 11.3M  | 12.3M  | **16.9M**        | 17.2M | 17.6M | 1.4x      |
-| bigint (min/max)                                  | 11.8M  | 7.9M   | **15.7M**        | —     | —     | 2.0x      |
-| tuple [string, int, bool]                         | 6.0M   | 6.5M   | **17.0M**        | 16.2M | 16.5M | 2.6x      |
-| record\<string, number\>                          | 3.3M   | 2.8M   | **8.5M**         | 11.5M | 15.1M | 3.0x      |
-| set\<string\> (5 items)                           | 3.7M   | 2.3M   | **15.2M**        | —     | —     | 6.7x      |
-| set\<string\> (20 items)                          | 1.3M   | 695K   | **12.1M**        | —     | —     | **17x**   |
-| map\<string, number\> (5 entries)                 | 2.1M   | 1.4M   | **13.1M**        | —     | —     | 9.6x      |
-| map\<string, number\> (20 entries)                | 652K   | 361K   | **8.6M**         | —     | —     | **24x**   |
-| pipe (non-transform)                              | 8.8M   | 5.9M   | **16.1M**        | —     | —     | 2.7x      |
-| discriminatedUnion (3 variants)                   | 3.3M   | 4.0M   | **16.1M**        | 15.8M | 8.0M  | 4.0x      |
+| simple string                                     | 12.5M  | 14.1M  | **16.6M**        | 17.4M | 17.6M | 1.2x      |
+| string (min/max)                                  | 12.1M  | 7.7M   | **17.1M**        | 17.1M | 15.6M | 2.2x      |
+| number (int+positive)                             | 12.2M  | 7.6M   | **15.4M**        | 16.9M | 18.1M | 2.0x      |
+| enum                                              | 11.5M  | 12.1M  | **16.9M**        | 17.0M | 17.5M | 1.4x      |
+| bigint (min/max)                                  | 11.8M  | 7.7M   | **16.6M**        | —     | —     | 2.1x      |
+| tuple [string, int, bool]                         | 5.7M   | 6.5M   | **16.2M**        | 16.8M | 15.9M | 2.5x      |
+| record\<string, number\>                          | 3.3M   | 2.8M   | **8.5M**         | 12.3M | 15.6M | 3.0x      |
+| set\<string\> (5 items)                           | 3.6M   | 2.3M   | **14.5M**        | —     | —     | 6.4x      |
+| set\<string\> (20 items)                          | 1.3M   | 681K   | **12.1M**        | —     | —     | **18x**   |
+| map\<string, number\> (5 entries)                 | 2.1M   | 1.4M   | **13.0M**        | —     | —     | 9.5x      |
+| map\<string, number\> (20 entries)                | 641K   | 350K   | **8.4M**         | —     | —     | **24x**   |
+| pipe (non-transform)                              | 8.5M   | 5.7M   | **15.8M**        | —     | —     | 2.8x      |
+| discriminatedUnion (3 variants)                   | 3.2M   | 4.0M   | **15.2M**        | 15.4M | 7.5M  | 3.8x      |
 | discriminatedUnion (8 variants, rotating)         | 2.7M   | 3.5M   | **9.6M**         | —     | —     | 2.7x      |
-| plain union of 8 tagged objects (auto-discrim.)   | 368K   | 655K   | **8.6M**         | —     | —     | **13x**   |
-| strict object (DB row)                            | 1.8M   | 3.2M   | **7.3M**         | —     | —     | 2.3x      |
-| medium object (valid)                             | 2.0M   | 2.4M   | **10.3M**        | 11.4M | 7.7M  | 4.3x      |
-| medium object (invalid)                           | 536K   | 80K    | **15.5M**        | 2.9M  | 7.9M  | **194x**  |
-| large object (10 items)                           | 123K   | 174K   | **8.0M**         | 5.9M  | 1.3M  | **46x**   |
-| large object (100 items)                          | 13K    | 19K    | **1.4M**         | 1.3M  | 127K  | **73x**   |
-| recursive tree (7 nodes)                          | 547K   | 2.0M   | **11.8M**        | 11.7M | 4.7M  | 5.8x      |
-| recursive tree (121 nodes)                        | 32K    | 142K   | **2.3M**         | 1.9M  | 356K  | **16x**   |
-| nested recursion (7 nodes)                        | 389K   | 1.0M   | **11.7M**        | 10.8M | 3.0M  | 12x       |
-| nested recursion (121 nodes)                      | 24K    | 61K    | **2.0M**         | 1.6M  | 220K  | **33x**   |
-| deeply nested object (243 leaves)                 | 11K    | 19K    | **1.2M**         | 1.0M  | 122K  | **64x**   |
-| event log (combined)                              | 382K   | 618K   | **5.8M**         | —     | —     | 9.4x      |
-| object with transform (zero-capture)              | 1.2M   | 1.9M   | **6.1M**         | —     | —     | 3.3x      |
-| array 10 × transform (zero-capture)               | 129K   | 220K   | **3.4M**         | —     | —     | **15x**   |
-| array 50 × transform (zero-capture)               | 26K    | 44K    | **821K**         | —     | —     | **19x**   |
-| object with captured transform (partial fallback) | 1.4M   | 6.4M   | **6.2M**         | —     | —     | 1.0x      |
+| plain union of 8 tagged objects (auto-discrim.)   | 358K   | 653K   | **9.5M**         | —     | —     | **15x**   |
+| strict object (DB row)                            | 1.8M   | 3.1M   | **7.1M**         | —     | —     | 2.3x      |
+| medium object (valid)                             | 2.0M   | 2.4M   | **9.9M**         | 11.3M | 7.5M  | 4.2x      |
+| medium object (invalid)                           | 524K   | 79K    | **14.9M**        | 2.9M  | 7.2M  | **188x**  |
+| large object (10 items)                           | 120K   | 167K   | **7.7M**         | 5.8M  | 1.2M  | **46x**   |
+| large object (100 items)                          | 13K    | 18K    | **1.4M**         | 1.3M  | 123K  | **76x**   |
+| recursive tree (7 nodes)                          | 576K   | 2.0M   | **13.0M**        | 11.8M | 4.8M  | 6.4x      |
+| recursive tree (121 nodes)                        | 31K    | 138K   | **2.4M**         | 1.9M  | 378K  | **18x**   |
+| nested recursion (7 nodes)                        | 385K   | 1.0M   | **11.7M**        | 11.0M | 3.0M  | 12x       |
+| nested recursion (121 nodes)                      | 24K    | 63K    | **2.0M**         | 1.6M  | 205K  | **32x**   |
+| deeply nested object (243 leaves)                 | 11K    | 19K    | **1.2M**         | 1.1M  | 122K  | **61x**   |
+| event log (combined)                              | 384K   | 619K   | **5.7M**         | —     | —     | 9.2x      |
+| object with transform (zero-capture)              | 1.1M   | 1.9M   | **6.0M**         | —     | —     | 3.1x      |
+| array 10 × transform (zero-capture)               | 120K   | 214K   | **3.2M**         | —     | —     | **15x**   |
+| array 50 × transform (zero-capture)               | 25K    | 44K    | **807K**         | —     | —     | **18x**   |
+| object with captured transform (partial fallback) | 1.3M   | 6.2M   | **6.2M**         | —     | —     | 1.0x      |
 
-_ops/s, higher is better. "—" = not supported by the library. Measured with `vitest bench` on Apple M4 Max (zod 4.3.6, zod v3 3.23.8, typia 12, ajv 8)._
+_ops/s, higher is better. "—" = not supported by the library. Measured with `vitest bench` on Apple M4 Max (zod 4.3.6, zod v3 3.23.8, typia 12, ajv 8), best of two full runs; rows reproduce within ~5% between runs. The harness itself costs ~55 ns per iteration — the fastest rows sit at that floor — so it compresses the top of the range: gaps between the three AOT columns on the primitive rows are below the noise, not real._
 
-Performance scales with schema complexity. Nested objects and arrays see the biggest gains because zod-compiler eliminates per-node traversal overhead. Deeply nested schemas (the 243-leaf dashboard row) stay fast because oversized fast-check functions are split into smaller boolean helpers, each kept within V8's optimizing-compiler budget. `discriminatedUnion` uses O(1) `switch` dispatch instead of Zod's sequential trial, and each case validates only its variant's distinctive fields — the object type-guard and the discriminator are checked once before dispatch, never re-checked inside the matched case (a redundancy the engine only elides on unions small enough to inline, so large unions get a measured ~1.5x on the fast check). A **plain `z.union`** of objects that all pin a shared key to disjoint literals is auto-detected and lowered to the same switch dispatch — so an untagged union written without `discriminatedUnion` still validates in O(1) (13x faster than Zod here), as long as it has enough options to outweigh the switch's setup cost; below that it keeps the fully-inlined `||`-chain. The invalid-input row is large because failed `safeParse` defers error materialization until `.error` is read. Zero-capture `transform`/`refine` callbacks are compiled (3-19x); schemas with captured callbacks fall back per-field and roughly match Zod.
+Performance scales with schema complexity. Nested objects and arrays see the biggest gains because zod-compiler eliminates per-node traversal overhead. Deeply nested schemas (the 243-leaf dashboard row) stay fast because oversized fast-check functions are split into smaller boolean helpers, each kept within V8's optimizing-compiler budget. `discriminatedUnion` uses O(1) `switch` dispatch instead of Zod's sequential trial, and each case validates only its variant's distinctive fields — the object type-guard and the discriminator are checked once before dispatch, never re-checked inside the matched case (a redundancy the engine only elides on unions small enough to inline, so large unions get a measured ~1.5x on the fast check). A **plain `z.union`** of objects that all pin a shared key to disjoint literals is auto-detected and lowered to the same switch dispatch — so an untagged union written without `discriminatedUnion` still validates in O(1) (15x faster than Zod here), as long as it has enough options to outweigh the switch's setup cost; below that it keeps the fully-inlined `||`-chain, whose options and per-option checks are ordered cheapest-first so a non-matching option is dropped without running its regexes. The invalid-input row is large because failed `safeParse` defers error materialization until `.error` is read. Zero-capture `transform`/`refine` callbacks are compiled (3-18x); schemas with captured callbacks fall back per-field and roughly match Zod.
 
-`parse()` (throwing API) rides a zero-allocation fast path: medium object 2.3M → 9.7M ops/s (4.1x), large object (100 items) 17K → 1.4M ops/s (79x).
+`parse()` (throwing API) rides a zero-allocation fast path: medium object 2.4M → 10.1M ops/s (4.3x), large object (100 items) 18K → 1.4M ops/s (76x).
+
+The `.is()` guard answers both halves of "does this match?" cheaply — 10.1M ops/s on matching input and 9.9M on non-matching, against Zod's 2.4M / 162K via `safeParse().success` (medium object). Rejection is the cheap case by construction: the fast check's conjuncts are ordered so a mismatch is decided on a type guard rather than on the schema's most expensive check.
 
 ```bash
 pnpm benchmark   # run locally
@@ -817,7 +819,11 @@ For eligible schemas, zod-compiler generates a **two-phase validator**:
 1. **Fast Path** — A single `&&` expression chain that validates the entire input with zero allocations. Valid input returns immediately.
 2. **Slow Path** — Error-collecting validation that only runs when the Fast Path fails.
 
-Additional optimizations: check ordering (cheap checks first), pre-compiled regex, Set-based enum lookups, small enum inlining (`===` for up to 5 values), discriminated-union cases that skip the now-redundant object-guard and discriminator re-check after `switch` dispatch, and auto-discrimination of plain `z.union`s of tagged objects into the same switch dispatch.
+Additional optimizations: pre-compiled regex, per-type check ordering (a string's `.min()` before its format regex), discriminated-union cases that skip the now-redundant object-guard and discriminator re-check after `switch` dispatch, and auto-discrimination of plain `z.union`s of tagged objects into the same switch dispatch.
+
+**Cheapest-first check ordering.** A fast check is one `&&` chain, so accepting input runs every conjunct whatever the order — but a _rejection_ stops at the first false one. Object properties, tuple positions, intersection sides and union options are therefore emitted in estimated-cost order, cheap type guards ahead of regex formats and nested containers. Valid input is unaffected; deciding that input does _not_ match gets much cheaper, which is what `.is()` guards, `z.union` probing and every failed `safeParse` actually do. Measured per validator (no harness overhead) on a 3-option union of objects declaring `{email, kind, note}`: an input matching the last option 102 ns → 39 ns (2.6x), one matching none 102 ns → 6 ns (16x); a 6-property object guard rejecting a wrong-typed field 38 ns → 5 ns (8x).
+
+**Membership tests.** A strict object's unknown-key pass consults an object literal (`TABLE[k] === 1`) rather than a `Set`, whose `has` costs a flat ~4 ns hash probe per key however small the set — 3.7x (8 keys) to 4.5x (32 keys) faster over the same for-in, taking an 8-key strict object from 53 ns to 32 ns end to end. Enum values keep the existing split: an inlined `===` chain up to 5 values, one `Set` lookup above that.
 
 Run `npx zod-compiler check --json` to see which schemas qualify for Fast Path.
 
