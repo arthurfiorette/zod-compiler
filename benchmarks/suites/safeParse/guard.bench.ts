@@ -10,6 +10,7 @@ import {
   UserSchema,
   validApiResponse10,
   validUser,
+  wrongShapeUser,
 } from "../../fixtures/schemas/index.js";
 
 // Boolean type guard ("does this match?") — the cheapest validation question.
@@ -33,6 +34,28 @@ describe("type guard: medium object — valid user", () => {
   });
   bench("ajv", () => {
     ajvUser(validUser);
+  });
+});
+
+// The other half of the guard question: input that does NOT match. The fast
+// check's conjuncts are emitted cheapest-first, so a mismatch is decided on a
+// type guard rather than on the schema's most expensive check (here, the email
+// regex the declaration order would have run first).
+describe("type guard: medium object — non-matching input", () => {
+  bench("zod-compiler .is", () => {
+    aotUser.is(wrongShapeUser);
+  });
+  bench("zod-compiler .safeParse().success", () => {
+    aotUser.safeParse(wrongShapeUser);
+  });
+  bench("zod .safeParse().success", () => {
+    UserSchema.safeParse(wrongShapeUser);
+  });
+  bench("typia is", () => {
+    typiaIsUser(wrongShapeUser);
+  });
+  bench("ajv", () => {
+    ajvUser(wrongShapeUser);
   });
 });
 

@@ -57,6 +57,17 @@ export const validApiResponse100: ApiResponse = {
   },
 };
 
+/**
+ * Shape-mismatch input: every field is well-formed except one cheap boolean —
+ * the common "this payload is not that type" case a type guard answers (and
+ * the one a union pays for per option). A validator that probes the email
+ * regex before the boolean does the expensive work to learn nothing.
+ */
+export const wrongShapeUser = {
+  ...validUser,
+  newsletter: "yes",
+};
+
 export const validStrictRow: StrictRow = {
   id: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   title: "Senior Engineer",
