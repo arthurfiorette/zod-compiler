@@ -2,16 +2,15 @@ import type { ObjectIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
 import {
   emitEffectFn,
-  emitRuntimeHelper,
   escapeString,
   extendStaticPath,
   hasMutation,
   keyMembershipTest,
+  rejectsUndefined,
 } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, unrecognizedKeys } from "../emit-issue.js";
 import { orderByRuntimeCost } from "../fast-size.js";
-import { ZC_HOP_DECL } from "../issue-decls.js";
 import { refineCheck } from "./effect.js";
 
 export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): string {
@@ -21,33 +20,33 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
     }else{`;
 
   // Strip mode (zod's default z.object() output) rebuilds a FRESH object from
-  // only the declared own keys, so it always writes back. Otherwise clone only
-  // when a property mutates the value.
+  // the declared keys, so it always writes back. Otherwise clone only when a
+  // property mutates the value.
   const strip = ir.stripUnknownKeys === true;
   const needsClone = strip || Object.values(ir.properties).some(hasMutation);
   const objVar = g.temp("o");
-  if (strip) {
-    code += `var ${objVar}={};`;
-  } else {
+  if (!strip) {
     // Spread, not Object.assign: V8's CloneObjectIC makes `{...x}` ~25% faster
     // on the whole safeParse call for mutation-bearing schemas.
     code += needsClone ? `var ${objVar}={...${g.input}};` : `var ${objVar}=${g.input};`;
   }
-  // Own-property guard for the strip copy (matches zod's own-key read and the
-  // {...input} clone — symbol, inherited, and unknown keys never carry over).
-  const hop = strip ? emitRuntimeHelper(g.ctx, "__zcHop", ZC_HOP_DECL) : "";
 
   const suppressAbsent = new Set(ir.suppressAbsentKeys ?? []);
+  /** Strip only: per-property output slot + whether it is always in the result. */
+  const slots: { always: boolean; keyStr: string; value: string }[] = [];
+
   for (const [key, propIR] of Object.entries(ir.properties)) {
     const keyStr = escapeString(key);
-    const propExpr = `${objVar}[${keyStr}]`;
     const propPath = extendStaticPath(g.path, key);
+    // Strip validates the value read from the INPUT, held in a local, and
+    // assembles the result afterwards. Reading through the half-built copy (the
+    // previous shape) both cost a megamorphic access per key — the copy's map
+    // changes with every key added — and diverged from zod, which parses
+    // `input[key]` and so accepts a value found on the prototype.
+    const propExpr = strip ? g.temp("sv") : `${objVar}[${keyStr}]`;
     if (strip) {
-      // Copy the present own key into the fresh object BEFORE its in-place
-      // validation, so the existing per-property logic (plain copy, defaults,
-      // overwrites, nested rebuilds) runs unchanged on `objVar`. Absent keys
-      // stay absent; a default fills them in via its own `===undefined` branch.
-      code += `if(${hop}.call(${g.input},${keyStr})){${propExpr}=${g.input}[${keyStr}];}`;
+      code += `var ${propExpr}=${g.input}[${keyStr}];`;
+      slots.push({ always: rejectsUndefined(propIR), keyStr, value: propExpr });
     }
     const propCode = g.visit(propIR, { input: propExpr, output: propExpr, path: propPath });
     if (suppressAbsent.has(key)) {
@@ -57,12 +56,40 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
       code += emit`
         var ${beforeVar}=${g.issues}.length;
         ${propCode}
-        if(!(${keyStr} in ${objVar})&&${g.issues}.length>${beforeVar}){
+        if(!(${keyStr} in ${strip ? g.input : objVar})&&${g.issues}.length>${beforeVar}){
           ${g.issues}.length=${beforeVar};
         }`;
     } else {
       code += propCode;
     }
+  }
+
+  if (strip) {
+    // Assemble the result in shape order (zod's key order), taking as long a
+    // LEADING run of always-present keys as possible into one object literal:
+    // V8 stamps a literal out of a cached boilerplate map in a single
+    // allocation, where adding keys one at a time walks a transition chain and
+    // re-checks the map on every store — measured 8.1x (20 keys) / 2.8x (7
+    // keys, one optional) on the whole safeParse.
+    //
+    // Everything after the first conditional key is appended so insertion order
+    // still matches zod. The per-key test is zod's own: keep the key when the
+    // parsed value is defined, or when it was present on the input at all
+    // (`key in input`, prototype included — an own `k: undefined` survives).
+    const literal: string[] = [];
+    let appends = "";
+    let leading = true;
+    for (const slot of slots) {
+      if (leading && slot.always) {
+        literal.push(`${slot.keyStr}:${slot.value}`);
+        continue;
+      }
+      leading = false;
+      appends += slot.always
+        ? `${objVar}[${slot.keyStr}]=${slot.value};`
+        : `if(${slot.value}!==undefined||(${slot.keyStr} in ${g.input})){${objVar}[${slot.keyStr}]=${slot.value};}`;
+    }
+    code += `var ${objVar}={${literal.join(",")}};${appends}`;
   }
 
   // Strict unknown-key pass — zod's handleCatchall, byte-exact: for-in over

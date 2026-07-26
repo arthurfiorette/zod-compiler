@@ -31,9 +31,9 @@ describe("compileSchemas", () => {
     expect(off.schemas[0]?.codegenResult.functionDef).not.toContain("__zcHop.call");
 
     const on = compileSchemas(schemas, { mode: "inline", stripUnknownKeys: true });
-    // Stripping: rebuild a fresh object, copying own keys via hasOwnProperty;
-    // no by-reference fast path.
-    expect(on.schemas[0]?.codegenResult.functionDef).toContain("__zcHop.call");
+    // Stripping: rebuild a fresh object from the declared keys (one literal for
+    // the always-present leading run); no by-reference fast path.
+    expect(on.schemas[0]?.codegenResult.functionDef).toContain('={"a":');
     expect(on.schemas[0]?.codegenResult.functionDef).not.toContain("data:input");
   });
 

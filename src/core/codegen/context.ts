@@ -572,6 +572,59 @@ export function hasMutation(ir: SchemaIR): boolean {
 }
 
 /**
+ * Does this schema reject `undefined` outright — i.e. does a SUCCESSFUL parse
+ * guarantee a defined output value?
+ *
+ * Used by the strip rebuild to decide whether a property can go straight into
+ * the output object literal or needs zod's presence test around it (see
+ * slowObject). Conservative: anything that might accept, produce, or default to
+ * `undefined` answers false, which only costs that key its literal slot.
+ */
+export function rejectsUndefined(ir: SchemaIR): boolean {
+  switch (ir.type) {
+    // Coercion turns undefined into a value (`String(undefined)`), so a
+    // coercing primitive is NOT a rejector.
+    case "string":
+    case "number":
+    case "boolean":
+    case "bigint":
+    case "date":
+      return ir.coerce !== true;
+    case "symbol":
+    case "null":
+    case "nan":
+    case "never":
+    case "enum":
+    case "object":
+    case "array":
+    case "tuple":
+    case "record":
+    case "set":
+    case "map":
+    case "file":
+    case "templateLiteral":
+    case "discriminatedUnion":
+    case "stringBool":
+      return true;
+    case "literal":
+      return !ir.values.includes(undefined);
+    case "union":
+      return ir.options.every(rejectsUndefined);
+    case "intersection":
+      return rejectsUndefined(ir.left) || rejectsUndefined(ir.right);
+    case "nullable":
+    case "readonly":
+    case "recursionTarget":
+      return rejectsUndefined(ir.inner);
+    default:
+      // optional / any / unknown / undefined / void / default / catch /
+      // fallback / effect / pipe / recursiveRef — each can yield undefined,
+      // or is opaque enough that we must not assume otherwise.
+      return false;
+  }
+}
+
+/**
  * Sort comparator for CheckIR: cheapest/most-discriminating checks first.
  * Used by fast-path generators after filtering out refine_effect entries.
  */

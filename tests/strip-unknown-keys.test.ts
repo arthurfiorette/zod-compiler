@@ -220,6 +220,52 @@ describe("stripUnknownKeys — mechanism", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
+  /**
+   * The rebuild reads `input[key]` and keeps the key when the parsed value is
+   * defined, or when `key in input` — zod's own rule (see its object fast-path
+   * codegen), which is prototype-inclusive. An earlier rebuild copied own keys
+   * first and validated the copy, so an inherited value was invisible: a
+   * required key read as `undefined` and REJECTED, and an inherited optional
+   * was silently dropped from the output. Both now match zod.
+   */
+  describe("inherited (prototype) values follow zod", () => {
+    it("accepts and copies an inherited required key", () => {
+      const schema = z.object({ a: z.string() });
+      const input = Object.create({ a: "fromProto" }) as Record<string, unknown>;
+      expect(schema.safeParse(input).success).toBe(true); // zod accepts it
+      const r = compileLikeProduction(schema, "stripInheritedReq", STRIP)(input);
+      expect(r.success).toBe(true);
+      expect(dataOf(r)).toEqual({ a: "fromProto" });
+      expect(Object.keys(dataOf(r))).toEqual(["a"]);
+    });
+
+    it("copies an inherited optional key", () => {
+      const schema = z.object({ a: z.string(), b: z.string().optional() });
+      const input = Object.create({ b: "protoB" }) as Record<string, unknown>;
+      input["a"] = "own";
+      expectParity(schema, [input], "stripInheritedOpt", STRIP);
+      const r = compileLikeProduction(schema, "stripInheritedOpt2", STRIP)(input);
+      expect(Object.keys(dataOf(r))).toEqual(["a", "b"]);
+    });
+
+    it("keeps an own present-but-undefined optional, omits an absent one", () => {
+      const schema = z.object({ a: z.string(), b: z.string().optional() });
+      const compiled = compileLikeProduction(schema, "stripUndef", STRIP);
+      expect(Object.keys(dataOf(compiled({ a: "x", b: undefined })))).toEqual(["a", "b"]);
+      expect(Object.keys(dataOf(compiled({ a: "x" })))).toEqual(["a"]);
+    });
+  });
+
+  it("rebuilds keys in shape order, not input order", () => {
+    const schema = z.object({ a: z.string(), b: z.string().optional(), c: z.string() });
+    const compiled = compileLikeProduction(schema, "stripOrder", STRIP);
+    const reversed = { c: "C", b: "B", a: "A" };
+    expect(Object.keys(dataOf(compiled(reversed)))).toEqual(["a", "b", "c"]);
+    expect(Object.keys(schema.safeParse(reversed).data as object)).toEqual(["a", "b", "c"]);
+    // …and an absent middle optional leaves the surrounding order intact.
+    expect(Object.keys(dataOf(compiled({ a: "A", c: "C" })))).toEqual(["a", "c"]);
+  });
+
   it("does NOT strip when the option is OFF (default behavior preserved)", () => {
     const schema = z.object({ a: z.string() });
     const input = { a: "x", b: 1 };
