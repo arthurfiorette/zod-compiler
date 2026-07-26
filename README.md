@@ -749,15 +749,15 @@ What this means in practice:
 
   All three compile fully, and validation of the declared keys is identical in every case.
 
-  **Performance of `stripUnknownKeys`** (`pnpm benchmark strip-unknown-keys`): stripping rebuilds the object, so it gives up the by-reference fast path — but still beats Zod, which also rebuilds. Representative throughput:
+  **Performance of `stripUnknownKeys`** (`pnpm benchmark strip-unknown-keys`): stripping rebuilds the object, so it gives up the by-reference fast path — but the rebuild is a single object literal per level, which costs little next to the validation itself. Representative throughput:
 
   | Schema (input)                | Zod (strips) | compiler (keep, default) | compiler (strip) | strip vs keep | strip vs Zod |
   | ----------------------------- | ------------ | ------------------------ | ---------------- | ------------- | ------------ |
-  | medium object, 7 keys (clean) | 2.6M         | 13.8M                    | 8.9M             | 0.6x          | **3.4x**     |
-  | wide object, 20 keys (clean)  | 4.0M         | 23.7M                    | 5.3M             | 0.2x          | **1.3x**     |
-  | nested API response (clean)   | 171K         | 9.3M                     | 1.2M             | 0.13x         | **7.2x**     |
+  | medium object, 7 keys (clean) | 2.8M         | 14.4M                    | 13.6M            | 0.94x         | **4.8x**     |
+  | wide object, 20 keys (clean)  | 4.2M         | 24.8M                    | 18.1M            | 0.73x         | **4.3x**     |
+  | nested API response (clean)   | 180K         | 9.6M                     | 5.7M             | 0.60x         | **32x**      |
 
-  The cost scales with key count and nesting depth (every declared key is copied into the fresh object); it's independent of whether unknown keys are actually present. Keep stripping off where you don't need sanitization (forwarding to an ORM, etc.) and on where you do.
+  The tax scales with nesting depth (one fresh object per level), not really with key count, and is independent of whether unknown keys are actually present. It is small enough that you should turn stripping on wherever you want sanitization — forwarding parsed bodies to an ORM, for instance — rather than trading it away for throughput.
 
 - **Records skip symbol / non-enumerable keys.** `z.record(z.string(), …)` validates (and rejects) a symbol-keyed or non-enumerable-keyed entry under Zod; the compiled record never visits it. Plain string-keyed records — the common case — are unaffected.
 
@@ -822,6 +822,8 @@ For eligible schemas, zod-compiler generates a **two-phase validator**:
 Additional optimizations: pre-compiled regex, per-type check ordering (a string's `.min()` before its format regex), discriminated-union cases that skip the now-redundant object-guard and discriminator re-check after `switch` dispatch, and auto-discrimination of plain `z.union`s of tagged objects into the same switch dispatch.
 
 **Cheapest-first check ordering.** A fast check is one `&&` chain, so accepting input runs every conjunct whatever the order — but a _rejection_ stops at the first false one. Object properties, tuple positions, intersection sides and union options are therefore emitted in estimated-cost order, cheap type guards ahead of regex formats and nested containers. Valid input is unaffected; deciding that input does _not_ match gets much cheaper, which is what `.is()` guards, `z.union` probing and every failed `safeParse` actually do. Measured per validator (no harness overhead) on a 3-option union of objects declaring `{email, kind, note}`: an input matching the last option 102 ns → 39 ns (2.6x), one matching none 102 ns → 6 ns (16x); a 6-property object guard rejecting a wrong-typed field 38 ns → 5 ns (8x).
+
+**Object construction.** Where a fresh object must be produced — `stripUnknownKeys` — it is emitted as one object literal rather than assembled key by key. V8 stamps a literal out of a cached boilerplate map in a single allocation; adding keys one at a time walks a transition chain and re-checks the map on every store, which measured 8.1x slower on a 20-key shape. Keys that can be absent (optionals) are appended after the literal, in shape order, under zod's own presence rule.
 
 **Membership tests.** A strict object's unknown-key pass consults an object literal (`TABLE[k] === 1`) rather than a `Set`, whose `has` costs a flat ~4 ns hash probe per key however small the set — 3.7x (8 keys) to 4.5x (32 keys) faster over the same for-in, taking an 8-key strict object from 53 ns to 32 ns end to end. Enum values keep the existing split: an inlined `===` chain up to 5 values, one `Set` lookup above that.
 
