@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { generateValidator } from "#src/core/codegen/index.js";
 import type { DateIR } from "#src/core/types.js";
 import { compileFastCheck, compileIR } from "../helpers.js";
 
@@ -216,5 +217,34 @@ describe("fast-path — date", () => {
 
   it("returns null for coerced date", () => {
     expect(compileFastCheck({ type: "date", checks: [], coerce: true })).toBeNull();
+  });
+
+  /**
+   * A bounded date reads `getTime()` once into a temp. That temp must be a
+   * DECLARED local: generated code ships inside ES modules, which are strict,
+   * so an assignment to a bare identifier is a ReferenceError on every parse
+   * (sloppy mode only hides it by inventing a global). The whole codegen test
+   * harness compiles strict for this reason; this pins the shape directly.
+   */
+  it("hosts bounded checks in a helper with a declared getTime temp", () => {
+    const ir: DateIR = {
+      type: "date",
+      checks: [
+        { kind: "date_greater_than", value: "1970-01-01", timestamp: 0, inclusive: true },
+        {
+          kind: "date_less_than",
+          value: "2030-01-01",
+          timestamp: new Date("2030-01-01T00:00:00.000Z").getTime(),
+          inclusive: true,
+        },
+      ],
+    };
+    const generated = generateValidator(ir, "boundedDate");
+    expect(generated.code).toMatch(/function __dc_\d+\(d\)\{var __dt_\d+=d\.getTime\(\);/);
+    const fn = compileFastCheck(ir);
+    expect(fn?.(new Date(5))).toBe(true);
+    expect(fn?.(new Date(-1))).toBe(false);
+    expect(fn?.(new Date("invalid"))).toBe(false);
+    expect(compileIR(ir)(new Date(5)).success).toBe(true);
   });
 });

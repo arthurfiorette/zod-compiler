@@ -66,20 +66,26 @@ export function fastDate(ir: DateIR, g: FastGen): string | null {
   // no check at all; `t >= NaN` would reject every date.
   const checks = ir.checks.filter((c) => !Number.isNaN(c.timestamp));
   if (checks.length > 0) {
-    // Cache getTime() in a temp variable to avoid repeated calls
+    // Bounded dates get a hosted helper so `getTime()` is called once and its
+    // result lives in a DECLARED local. A comma expression assigning to a bare
+    // temp (`(t=d.getTime(),…)`) has no binding to assign to: sloppy mode would
+    // silently create a global, and generated code ships inside ES modules,
+    // where that is a ReferenceError on every parse.
     const t = g.temp("dt");
-    parts.push(`(${t}=${x}.getTime(),!Number.isNaN(${t}))`);
-
+    const bounds: string[] = [`!Number.isNaN(${t})`];
     for (const check of [...checks].sort(checkPriority)) {
       switch (check.kind) {
         case "date_greater_than":
-          parts.push(check.inclusive ? `${t}>=${check.timestamp}` : `${t}>${check.timestamp}`);
+          bounds.push(check.inclusive ? `${t}>=${check.timestamp}` : `${t}>${check.timestamp}`);
           break;
         case "date_less_than":
-          parts.push(check.inclusive ? `${t}<=${check.timestamp}` : `${t}<${check.timestamp}`);
+          bounds.push(check.inclusive ? `${t}<=${check.timestamp}` : `${t}<${check.timestamp}`);
           break;
       }
     }
+    const fnName = g.temp("dc");
+    g.ctx.preamble.push(`function ${fnName}(d){var ${t}=d.getTime();return ${bounds.join("&&")};}`);
+    parts.push(`${fnName}(${x})`);
   } else {
     parts.push(`!Number.isNaN(${x}.getTime())`);
   }
