@@ -156,3 +156,32 @@ describe("known divergence — record iterates own enumerable string keys only",
     expect((compiled(input) as { success: boolean }).success).toBe(true); // for-in never visits it
   });
 });
+
+describe("known divergence — a catchall validates inherited keys but cannot re-home them", () => {
+  // zod's handleCatchall iterates the input with a BARE for-in, so a key found
+  // on the prototype is validated — the compiler matches that exactly. What it
+  // cannot match is the output: zod parses into a fresh `{}` and writes every
+  // for-in key onto it, turning an inherited key into an OWN key, while
+  // compiled output is the input by reference and leaves it on the prototype.
+  const schema = z.object({ a: z.number() }).catchall(z.string());
+  const withInherited = () => Object.assign(Object.create({ inh: "yes" }), { a: 1 });
+
+  it("agrees on the verdict, including rejecting a bad inherited value", () => {
+    const compiled = compileLikeProduction(schema, "caInhVerdict");
+    const bad = Object.assign(Object.create({ inh: 99 }), { a: 1 });
+    expect(schema.safeParse(withInherited()).success).toBe(true);
+    expect((compiled(withInherited()) as { success: boolean }).success).toBe(true);
+    expect(schema.safeParse(bad).success).toBe(false);
+    expect((compiled(bad) as { success: boolean }).success).toBe(false);
+  });
+
+  it("zod promotes the inherited key to an own key; the compiler does not", () => {
+    const compiled = compileLikeProduction(schema, "caInhOutput");
+    const zodData = schema.safeParse(withInherited()).data as Record<string, unknown>;
+    const ourData = (compiled(withInherited()) as { data: Record<string, unknown> }).data;
+    expect(Object.hasOwn(zodData, "inh")).toBe(true);
+    expect(Object.hasOwn(ourData, "inh")).toBe(false);
+    // Still readable through the chain, so property access agrees.
+    expect(ourData["inh"]).toBe("yes");
+  });
+});

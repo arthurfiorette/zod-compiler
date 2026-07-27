@@ -42,8 +42,19 @@ describe("extractObject", () => {
     expect((extractSchema(z.looseObject({ a: z.string() })) as ObjectIR).strict).toBeUndefined();
   });
 
-  it("still falls back for value-validating catchall", () => {
-    const ir = extractSchema(z.object({ a: z.string() }).catchall(z.number()));
+  it("extracts a value-validating catchall as the object's catchall IR", () => {
+    const ir = extractSchema(z.object({ a: z.string() }).catchall(z.number())) as ObjectIR;
+    expect(ir.type).toBe("object");
+    expect(ir.catchall).toEqual({ type: "number", checks: [] });
+    expect(ir.strict).toBeUndefined();
+  });
+
+  it("still falls back when the catchall itself delegates", () => {
+    // Compiling would mean calling zod once per unknown key; delegating the
+    // whole object is cheaper (mirrors the all-properties-fallback coalescing).
+    const ir = extractSchema(
+      z.object({ a: z.string() }).catchall(z.string().transform((v, _ctx) => v)),
+    );
     expect(ir.type).toBe("fallback");
   });
 

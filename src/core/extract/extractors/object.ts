@@ -8,15 +8,19 @@ export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   //   compiled as a for-in membership pass (ObjectIR.strict). Pass-through is
   //   preserved: valid strict data has no extras, so no clone is needed.
   // - z.looseObject (catchall: unknown/any) matches compiled pass-through.
-  // - .catchall(schema) validates unknown keys against a schema — fallback.
+  // - .catchall(schema) validates unknown keys against a schema (ObjectIR.catchall).
   // - default z.object() (no catchall): pass-through by default, but STRIPS
   //   unknown keys (zod's default) when the `stripUnknownKeys` build option is
   //   on (ObjectIR.stripUnknownKeys). looseObject/strictObject are unaffected.
   const catchallType = def.catchall?._zod?.def?.type;
   const strict = catchallType === "never";
-  if (def.catchall && !strict && catchallType !== "unknown" && catchallType !== "any") {
-    return ctx.fallback("unsupported");
-  }
+  const valueCatchall =
+    def.catchall && !strict && catchallType !== "unknown" && catchallType !== "any"
+      ? ctx.visit(def.catchall, "._zod.def.catchall")
+      : undefined;
+  // A delegating catchall would need zod per unknown key; hand it the object.
+  if (valueCatchall?.type === "fallback") return ctx.fallback("unsupported");
+  const catchallFlag = valueCatchall ? { catchall: valueCatchall } : {};
   const strictFlag = strict ? { strict: true } : {};
   const stripFlag =
     !def.catchall && ctx.options.stripUnknownKeys === true ? { stripUnknownKeys: true } : {};
@@ -71,9 +75,10 @@ export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
         checks: refineChecks,
         ...strictFlag,
         ...stripFlag,
+        ...catchallFlag,
         ...suppress,
       };
     }
   }
-  return { type: "object", properties, ...strictFlag, ...stripFlag, ...suppress };
+  return { type: "object", properties, ...strictFlag, ...stripFlag, ...catchallFlag, ...suppress };
 }

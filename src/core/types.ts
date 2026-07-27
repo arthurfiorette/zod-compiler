@@ -333,6 +333,13 @@ export interface ObjectIR {
   /** Object-level refine effects from z.object({...}).refine(fn) */
   checks?: (RefineEffectCheckIR | SuperRefineEffectCheckIR)[];
   /**
+   * `.catchall(schema)`: every key not in the shape is validated against this
+   * schema instead of being ignored (plain object) or rejected (strict).
+   * Mutually exclusive with `strict` — `.catchall(z.never())` IS strict — and
+   * with `stripUnknownKeys`, since a catchall exists to KEEP unknown keys.
+   */
+  catchall?: SchemaIR;
+  /**
    * Fallback-typed property keys whose zod schema is optional-out: when the
    * key is ABSENT from the input, their issues are suppressed (mirrors zod's
    * handlePropertyResult). Lets z.exactOptional() and friends fall back at

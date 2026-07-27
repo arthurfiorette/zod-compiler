@@ -3,6 +3,7 @@ import type { FastGen, SlowGen } from "../context.js";
 import {
   emitEffectCallable,
   escapeString,
+  extendPath,
   extendStaticPath,
   hasMutation,
   keyMembershipTest,
@@ -23,7 +24,10 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
   // the declared keys, so it always writes back. Otherwise clone only when a
   // property mutates the value.
   const strip = ir.stripUnknownKeys === true;
-  const needsClone = strip || Object.values(ir.properties).some(hasMutation);
+  const needsClone =
+    strip ||
+    (ir.catchall !== undefined && hasMutation(ir.catchall)) ||
+    Object.values(ir.properties).some(hasMutation);
   const objVar = g.temp("o");
   if (!strip) {
     // Spread, not Object.assign: V8's CloneObjectIC makes `{...x}` ~25% faster
@@ -119,6 +123,40 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
       }`;
   }
 
+  // .catchall(schema): validate every key NOT in the shape, mirroring zod's
+  // handleCatchall — same bare for-in over the ORIGINAL input as the strict
+  // pass (inherited enumerable keys count, no hasOwnProperty guard), each
+  // issue reported at the key. Runs after the properties, as zod does.
+  //
+  // The key's slot is BOTH the input and the output, exactly as a shape
+  // property's is: a value-rewriting catchall (coerce, .trim(), a default)
+  // writes through the same expression it later re-reads, so splitting them
+  // makes the rewrite invisible to its own checks.
+  //
+  // When the catchall mutates, objVar is a clone, and each unknown key is
+  // copied into it before validation — which also reproduces zod, whose fresh
+  // output object gains an OWN key for every for-in key it saw, inherited ones
+  // included. A non-mutating catchall writes nothing, so objVar is the input
+  // and the object stays pass-through by reference.
+  if (ir.catchall) {
+    const keys = Object.keys(ir.properties);
+    const kVar = g.temp("ck");
+    const test = keyMembershipTest(g.ctx, keys, kVar);
+    const slot = `${objVar}[${kVar}]`;
+    const seed = needsClone ? `${slot}=${g.input}[${kVar}];` : "";
+    code += emit`
+      for(var ${kVar} in ${g.input}){
+        if(!(${test})){
+          ${seed}
+          ${g.visit(ir.catchall, {
+            input: slot,
+            output: slot,
+            path: extendPath(g.path, kVar),
+          })}
+        }
+      }`;
+  }
+
   if (needsClone) {
     code += `${g.output}=${objVar};`;
   }
@@ -188,6 +226,25 @@ function fastObjectBody(ir: ObjectIR, g: FastGen, skipKey?: string): string[] | 
       `function ${fnName}(o){for(var k in o){if(!(${test}))return false;}return true;}`,
     );
     parts.push(`${fnName}(${x})`);
+  }
+
+  // .catchall(schema): same hosted for-in as strict, but each unrecognized key
+  // is checked against the catchall rather than rejected outright. The value is
+  // hoisted into a local for the same reason fastRecord does it — repeated
+  // `o[k]` computed loads are not eliminated across check boundaries.
+  if (ir.catchall) {
+    const kv = g.temp("cak");
+    const vv = g.temp("cav");
+    const valCheck = g.scoped(vv).visit(ir.catchall, { input: vv });
+    if (valCheck === null) return null;
+    if (valCheck !== "true") {
+      const fnName = g.temp("co");
+      const test = keyMembershipTest(g.ctx, Object.keys(ir.properties), kv);
+      g.ctx.preamble.push(
+        `function ${fnName}(o){var ${kv},${vv};for(${kv} in o){if(!(${test})){${vv}=o[${kv}];if(!(${valCheck}))return false;}}return true;}`,
+      );
+      parts.push(`${fnName}(${x})`);
+    }
   }
 
   // Object-level refine effects (appended last — run after property checks short-circuit)

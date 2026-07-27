@@ -614,6 +614,7 @@ export function hasMutation(ir: SchemaIR): boolean {
       return (
         ir.stripUnknownKeys === true ||
         hasSuperRefine(ir.checks) ||
+        (ir.catchall !== undefined && hasMutation(ir.catchall)) ||
         Object.values(ir.properties).some((p) => hasMutation(p))
       );
     case "array":

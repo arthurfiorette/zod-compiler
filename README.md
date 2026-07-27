@@ -715,7 +715,6 @@ These reach JavaScript that generated code cannot reproduce — an opaque callba
 | `custom` / raw `.check(fn)`                         | Arbitrary validation logic against zod's raw payload         | Use `superRefine`, which compiles              |
 | `preprocess`                                        | Input preprocessing function                                 | Use `z.coerce` when possible                   |
 | `lazy` (unresolvable inner)                         | Getter throws / inner type can't be resolved at compile time | Ensure the lazy getter returns a static schema |
-| `.catchall(schema)`                                 | Unknown keys validated against a value schema                | `strictObject` and `looseObject` both compile  |
 
 **Zero-capture effects compile:** a `transform`/`refine` callback that takes a
 single argument and references only its own parameters, locals, and safe
@@ -759,6 +758,16 @@ callback holds the payload unmediated rather than through Zod's wrapper. An
 wrapper; the promise it returns raises Zod's own `$ZodAsyncError`, exactly as a
 synchronous Zod parse does. `ctx.value`, `ctx.aborted`, and direct
 `ctx.issues.push` are all honored.
+
+**`.catchall(schema)` compiles.** Unknown keys are validated against the value
+schema by the same bare `for-in` the `strict` pass uses — zod's own
+`handleCatchall` iteration, inherited enumerable keys included — with each issue
+reported at its key. A header bag (`z.object({...}).catchall(z.string())`)
+measures 117.2 ns → 9.0 ns (**13x**), a numeric metrics bag 105.1 ns → 11.5 ns
+(9.1x); both were 1.0x. Value-rewriting catchalls (`z.coerce.number()`,
+`.trim()`, a `.default()`) write through a clone, so the caller's input is never
+mutated. A catchall that itself delegates keeps the whole object delegated —
+one zod call beats one per unknown key.
 
 **Partial fallback:** If an object has 10 properties and 1 uses `transform`, the other 9 are still compiled. Only the `transform` property falls back to Zod.
 

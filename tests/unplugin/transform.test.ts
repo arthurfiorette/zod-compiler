@@ -1205,9 +1205,11 @@ describe("transform output — downstream CSE/dedup safety (field incident)", ()
   // before __zcMkv mutates anything, making the merged shape safe.
   it("dedup-merged root-fallback IIFE still parses (no self-recursion)", async () => {
     const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
-    // The original incident schema was z.strictObject — strict objects
-    // compile now, so a value-validating catchall keeps this a ROOT fallback.
-    const expr = "z.object({ id: z.string(), createdAt: z.date() }).catchall(z.number())";
+    // The original incident schema was z.strictObject; strict objects compile
+    // now, and so does a value-validating .catchall(). A ctx-taking transform
+    // is what keeps this a ROOT fallback — it collects issues through zod's
+    // payload, so there is no call generated code can make.
+    const expr = "z.strictObject({ id: z.string(), createdAt: z.date() }).transform((v, ctx) => v)";
     const source = [
       'import { z } from "zod";',
       `export const ProfessionalRoleShape = ${expr};`,
