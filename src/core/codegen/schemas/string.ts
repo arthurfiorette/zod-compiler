@@ -3,7 +3,7 @@ import type { FastGen, SlowGen } from "../context.js";
 import {
   checkPriority,
   emitEffectFn,
-  emitRefinePredicate,
+  emitEffectCallable,
   emitRegexSourceString,
   escapeString,
 } from "../context.js";
@@ -249,7 +249,7 @@ export function fastString(ir: StringIR, g: FastGen): string | null {
   // Refine effect checks (appended last — run after cheap checks short-circuit)
   for (const check of ir.checks) {
     if (check.kind === "refine_effect") {
-      parts.push(`${emitRefinePredicate(g.ctx, check)}(${x})`);
+      parts.push(`${emitEffectCallable(g.ctx, check)}(${x})`);
     }
   }
 

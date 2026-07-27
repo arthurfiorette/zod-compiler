@@ -60,11 +60,24 @@ describe("extractSchema — catch", () => {
     expect((ir as CatchIR).inner.type).toBe("effect");
   });
 
-  it("falls back when inner type has captured-variable transform", () => {
+  it("compiles a captured-variable transform inside catch, calling it by reference", () => {
     const external = "prefix_";
     const schema = z
       .string()
       .transform((s) => external + s)
+      .catch("DEFAULT");
+    const { ir, refs } = extractWithRefs(schema);
+    expect(ir.type).toBe("catch");
+    expect(refs[0]?.schema).toBeTypeOf("function");
+  });
+
+  it("still falls back when the transform takes zod's ctx argument", () => {
+    const schema = z
+      .string()
+      .transform((s, ctx) => {
+        if (s === "") ctx.addIssue({ code: "custom" });
+        return s;
+      })
       .catch("DEFAULT");
     const { ir } = extractWithRefs(schema);
     expect(ir.type).toBe("fallback");

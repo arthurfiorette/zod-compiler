@@ -1,11 +1,4 @@
-import type {
-  BigIntCheckIR,
-  CheckIR,
-  DateCheckIR,
-  RefineEffectCheckIR,
-  SchemaIR,
-  SetCheckIR,
-} from "../types.js";
+import type { BigIntCheckIR, CheckIR, DateCheckIR, SchemaIR, SetCheckIR } from "../types.js";
 import type { SharedSchemaPlan } from "./dedupe.js";
 import {
   lookupFastRegexSource,
@@ -275,7 +268,7 @@ export function emitEffectFn(ctx: CodeGenContext, source: string): string {
 }
 
 /**
- * Callable expression for a refine predicate.
+ * Callable expression for a user callback — a refine predicate or a transform.
  *
  * A zero-capture callback is hosted from its source text; one that CAPTURES
  * outer variables is called by reference through `__rf[N]` — the user's own
@@ -284,12 +277,15 @@ export function emitEffectFn(ctx: CodeGenContext, source: string): string {
  * re-read per call, for the same reason call-invoked helpers are (a per-call
  * array element load is not a foldable callee).
  */
-export function emitRefinePredicate(ctx: CodeGenContext, check: RefineEffectCheckIR): string {
-  if (check.refIndex !== undefined) return emitConstant(ctx, "rfn", `__rf[${check.refIndex}]`);
-  if (check.source === undefined) {
-    throw new Error("refine_effect check has neither inlineable source nor a reference index");
+export function emitEffectCallable(
+  ctx: CodeGenContext,
+  effect: { refIndex?: number | undefined; source?: string | undefined },
+): string {
+  if (effect.refIndex !== undefined) return emitConstant(ctx, "rfn", `__rf[${effect.refIndex}]`);
+  if (effect.source === undefined) {
+    throw new Error("effect has neither inlineable source nor a reference index");
   }
-  return emitEffectFn(ctx, check.source);
+  return emitEffectFn(ctx, effect.source);
 }
 
 /**

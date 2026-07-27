@@ -1,5 +1,5 @@
 import type { SchemaIR } from "../../types.js";
-import { tryCompileEffect } from "../effects.js";
+import { isReferenceablePredicate, tryCompileEffect } from "../effects.js";
 import type { ExtractorContext, ZodDef } from "../types.js";
 import { extractStringBool, isStringBoolCodec } from "./string-bool.js";
 
@@ -25,6 +25,20 @@ export function extractPipe(def: ZodDef, ctx: ExtractorContext): SchemaIR {
     if (source) {
       const inIR = ctx.visit(def.in, "._zod.def.in");
       return { type: "effect", effectKind: "transform", source, inner: inIR };
+    }
+    // Not inlineable (the callback captures). Call the user's own function
+    // through a schema reference rather than delegating: falling back costs the
+    // schema its compiled path AND adds the delegate wrapper on top, which
+    // measured SLOWER than plain zod. A two-argument transform is zod's `ctx`
+    // protocol and an async one returns a promise, so both still delegate.
+    if (ctx.refs && isReferenceablePredicate(outDef.transform)) {
+      const refIndex = ctx.refs.length;
+      ctx.refs.push({
+        schema: outDef.transform,
+        accessPath: `${ctx.path}._zod.def.out._zod.def.transform`,
+      });
+      const inIR = ctx.visit(def.in, "._zod.def.in");
+      return { type: "effect", effectKind: "transform", refIndex, inner: inIR };
     }
     return ctx.fallback("transform");
   }

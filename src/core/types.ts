@@ -414,8 +414,18 @@ export interface PipeIR {
 export interface TransformEffectIR {
   type: "effect";
   effectKind: "transform";
-  /** fn.toString() result, e.g. "v => v.toLowerCase()" */
-  source: string;
+  /**
+   * fn.toString() result, e.g. "v => v.toLowerCase()". Set when the callback is
+   * zero-capture and can be inlined. Mutually exclusive with {@link refIndex}.
+   */
+  source?: string;
+  /**
+   * `__rf[N]` index of the transform, used when the callback CAPTURES outer
+   * variables. Calling the user's own function object keeps the schema compiled;
+   * delegating the whole schema to zod instead measured 163.7 ns against zod's
+   * own 136.7 ns — the fallback wrapper made it SLOWER than not compiling.
+   */
+  refIndex?: number;
   /** The input schema to validate before applying the transform */
   inner: SchemaIR;
 }

@@ -1,5 +1,5 @@
 /**
- * `.refine()` callbacks that CAPTURE outer variables.
+ * `.refine()` and `.transform()` callbacks that CAPTURE outer variables.
  *
  * A zero-capture predicate is inlined from its source text. One that captures
  * cannot be — but it can still be CALLED, through an `__rf[N]` reference to the
@@ -16,8 +16,8 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { extractSchema, type RefEntry } from "#src/core/extract/index.js";
-import type { FallbackIR, ObjectIR, SchemaIR } from "#src/core/types.js";
-import { expectParity } from "./parity-harness.js";
+import type { FallbackIR, ObjectIR, SchemaIR, TransformEffectIR } from "#src/core/types.js";
+import { compileLikeProduction, expectParity } from "./parity-harness.js";
 
 const irOf = (schema: unknown): { ir: SchemaIR; refs: RefEntry[] } => {
   const refs: RefEntry[] = [];
@@ -161,5 +161,86 @@ describe("refine issue shape", () => {
       path: [Symbol("s") as unknown as string],
     });
     expect(irOf(schema).ir.type).toBe("fallback");
+  });
+});
+
+/**
+ * The same reference trick for `.transform()`. A captured transform on the root
+ * was the worst case in the library: the schema delegated AND paid the fallback
+ * wrapper on top, measuring 163.7 ns against zod's own 136.7 ns — i.e. compiling
+ * made it slower than not compiling.
+ */
+describe("captured transform — compiles by reference", () => {
+  const prefix = "id_";
+  const multiplier = 3;
+
+  it("keeps a root object compiled when its transform captures", () => {
+    const schema = z.object({ id: z.string() }).transform((d) => ({ ...d, id: prefix + d.id }));
+    const { ir, refs } = irOf(schema);
+    expect(ir.type).toBe("effect");
+    expect((ir as TransformEffectIR).refIndex).toBe(0);
+    expect(refs[0]?.accessPath).toBe("._zod.def.out._zod.def.transform");
+    expect(refs[0]?.schema).toBeTypeOf("function");
+  });
+
+  it.each([
+    [
+      "root object",
+      z.object({ id: z.string(), n: z.number() }).transform((d) => ({ ...d, id: prefix + d.id })),
+      [{ id: "x", n: 1 }, { id: 1, n: 1 }, { id: "x" }, null],
+    ],
+    [
+      "field",
+      z.object({ id: z.string().transform((s) => prefix + s), n: z.number() }),
+      [
+        { id: "x", n: 1 },
+        { id: 1, n: 1 },
+      ],
+    ],
+    ["string", z.string().transform((s) => prefix + s), ["x", 1]],
+    ["number", z.number().transform((n) => n * multiplier), [2, "x"]],
+    [
+      "transform piped into a schema",
+      z
+        .string()
+        .transform((s) => prefix + s)
+        .pipe(z.string().min(5)),
+      ["abcdef", "a"],
+    ],
+    ["array element", z.array(z.string().transform((s) => prefix + s)), [["a", "b"], [1]]],
+    [
+      "optional field",
+      z.object({
+        id: z
+          .string()
+          .transform((s) => prefix + s)
+          .optional(),
+      }),
+      [{ id: "x" }, {}],
+    ],
+  ])("matches zod (verdict AND output) for %s", (_label, schema, inputs) => {
+    expectParity(schema as never, inputs as unknown[]);
+  });
+
+  it("still delegates a transform that takes zod's ctx", () => {
+    const schema = z.object({ n: z.number() }).transform((d, ctx) => {
+      if (d.n < 0) ctx.addIssue({ code: "custom", message: "neg" });
+      return d;
+    });
+    expect(irOf(schema).ir.type).toBe("fallback");
+    expectParity(schema, [{ n: 1 }, { n: -1 }]);
+  });
+
+  it("does not run the transform when the inner parse failed", () => {
+    let ran = 0;
+    const schema = z.object({ n: z.number() }).transform((d) => {
+      ran++;
+      return { ...d, tag: prefix };
+    });
+    const compiled = compileLikeProduction(schema, "notRun");
+    expect(compiled({ n: "bad" }).success).toBe(false);
+    expect(ran, "transform must not run on a failed inner parse").toBe(0);
+    expect(compiled({ n: 1 }).success).toBe(true);
+    expect(ran).toBe(1);
   });
 });

@@ -1,11 +1,6 @@
 import type { RefineEffectCheckIR, TransformEffectIR } from "../../types.js";
 import type { SlowGen } from "../context.js";
-import {
-  emitEffectFn,
-  emitRefinePredicate,
-  extendStaticPath,
-  extendStaticPathIndex,
-} from "../context.js";
+import { emitEffectCallable, extendStaticPath, extendStaticPathIndex } from "../context.js";
 import { emit } from "../emit.js";
 
 /**
@@ -25,7 +20,7 @@ export function slowEffect(ir: TransformEffectIR, g: SlowGen): string {
     var ${beforeVar}=${g.issues}.length;
     ${innerCode}
     if(${g.issues}.length===${beforeVar}){
-      ${g.output}=${emitEffectFn(g.ctx, ir.source)}(${g.output});
+      ${g.output}=${emitEffectCallable(g.ctx, ir)}(${g.output});
     }${abortBranch}
   `}\n`;
 }
@@ -54,7 +49,7 @@ export function refineCheck(check: RefineEffectCheckIR, expr: string, g: SlowGen
     g.path,
   );
   return emit`
-    if(!${emitRefinePredicate(g.ctx, check)}(${expr})){
+    if(!${emitEffectCallable(g.ctx, check)}(${expr})){
       ${g.issues}.push({code:"custom",path:${path}${messageProp},input:${expr}});
     }`;
 }

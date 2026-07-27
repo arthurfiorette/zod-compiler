@@ -1,7 +1,7 @@
 import type { ObjectIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
 import {
-  emitRefinePredicate,
+  emitEffectCallable,
   escapeString,
   extendStaticPath,
   hasMutation,
@@ -189,7 +189,7 @@ function fastObjectBody(ir: ObjectIR, g: FastGen, skipKey?: string): string[] | 
   if (ir.checks) {
     for (const check of ir.checks) {
       if (check.kind === "refine_effect") {
-        parts.push(`${emitRefinePredicate(g.ctx, check)}(${x})`);
+        parts.push(`${emitEffectCallable(g.ctx, check)}(${x})`);
       }
     }
   }

@@ -840,7 +840,7 @@ describe("extractSchema — zero-capture transform produces EffectIR (no fallbac
 });
 
 describe("extractSchema — partial fallback (RefEntry collection with external captures)", () => {
-  it("collects fallback entries for object with captured-variable transform property", () => {
+  it("references the callback for an object with a captured-variable transform property", () => {
     const prefix = "prefix_";
     const schema = z.object({
       name: z.string(),
@@ -851,13 +851,15 @@ describe("extractSchema — partial fallback (RefEntry collection with external 
 
     expect(ir.type).toBe("object");
     expect(ir.properties["name"]?.type).toBe("string");
-    expect(ir.properties["slug"]?.type).toBe("fallback");
-    expect((ir.properties["slug"] as FallbackIR).refIndex).toBe(0);
+    // The property stays COMPILED — only the callback itself is referenced.
+    expect(ir.properties["slug"]?.type).toBe("effect");
+    expect((ir.properties["slug"] as TransformEffectIR).refIndex).toBe(0);
     expect(refs).toHaveLength(1);
-    expect(refs[0]?.accessPath).toBe('.shape["slug"]');
+    expect(refs[0]?.accessPath).toBe('.shape["slug"]._zod.def.out._zod.def.transform');
+    expect(refs[0]?.schema).toBeTypeOf("function");
   });
 
-  it("stores the original Zod schema reference in fallback entries for captured transform", () => {
+  it("stores the callback itself as the ref entry for a captured transform", () => {
     const external = "captured";
     const slugSchema = z.string().transform((v) => external + v);
     const schema = z.object({ slug: slugSchema });
@@ -865,6 +867,10 @@ describe("extractSchema — partial fallback (RefEntry collection with external 
     extractSchema(schema, refs);
 
     expect(refs).toHaveLength(1);
-    expect(refs[0]?.schema).toBeDefined();
+    // The runtime value the access path resolves to is the user's function,
+    // which generated code calls directly.
+    expect(refs[0]?.schema).toBeTypeOf("function");
+    const callback = refs[0]?.schema as ((v: string) => string) | undefined;
+    expect(callback?.("x")).toBe("capturedx");
   });
 });
