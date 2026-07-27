@@ -12,6 +12,10 @@ import {
   CapturedRefineSchema,
   CapturedTransformObjectSchema,
   CapturedTransformSchema,
+  aotSuperRefineObject,
+  SuperRefineObjectSchema,
+  v3SuperRefineObjectSchema,
+  validSuperRefineObject,
   v3CapturedRefineObjectSchema,
   v3CapturedRefineSchema,
   v3CapturedTransformObjectSchema,
@@ -137,5 +141,20 @@ describe("safeParse: captured refine — object (cross-field)", () => {
   });
   bench("zod-compiler", () => {
     aotCapturedRefineObject.safeParse(validCapturedRefineObject);
+  });
+});
+
+// The same cross-field validation as the row above, written with superRefine.
+// Its callback takes zod's payload rather than returning a verdict, so before
+// it could be called by reference the whole object delegated to zod.
+describe("safeParse: superRefine — object (cross-field)", () => {
+  bench("zod", () => {
+    SuperRefineObjectSchema.safeParse(validSuperRefineObject);
+  });
+  bench("zod v3", () => {
+    v3SuperRefineObjectSchema.safeParse(validSuperRefineObject);
+  });
+  bench("zod-compiler", () => {
+    aotSuperRefineObject.safeParse(validSuperRefineObject);
   });
 });

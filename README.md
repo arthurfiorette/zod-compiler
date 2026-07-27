@@ -834,6 +834,7 @@ Matching Zod on these would mean allocating a fresh object (or a `Reflect.ownKey
 | array 50 × transform (zero-capture)             | 26K    | 44K    | **824K**         | —     | —     | **19x**   |
 | object with captured transform                  | 1.3M   | 6.0M   | **14.3M**        | —     | —     | 2.4x      |
 | object with captured refine (cross-field)       | 1.5M   | 2.5M   | **15.7M**        | —     | —     | 6.4x      |
+| object with superRefine (cross-field)           | 1.6M   | 2.3M   | **11.8M**        | —     | —     | 5.1x      |
 
 _ops/s, higher is better. "—" = not supported by the library. Measured with `vitest bench` on Apple M4 Max (zod 4.3.6, zod v3 3.23.8, typia 12, ajv 8), best of two full runs; rows reproduce within ~5% between runs. The harness itself costs ~55 ns per iteration — the fastest rows sit at that floor — so it compresses the top of the range: gaps between the three AOT columns on the primitive rows are below the noise, not real._
 

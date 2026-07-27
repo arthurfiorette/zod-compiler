@@ -7,6 +7,7 @@ import {
   CapturedRefineSchema,
   CapturedTransformObjectSchema,
   CapturedTransformSchema,
+  SuperRefineObjectSchema,
   ZeroCaptureRefineObjectSchema,
   ZeroCaptureRefineStringSchema,
   ZeroCaptureTransformObjectSchema,
@@ -21,3 +22,4 @@ export const aotCapturedTransform = compile(CapturedTransformSchema.clone());
 export const aotCapturedTransformObject = compile(CapturedTransformObjectSchema.clone());
 export const aotCapturedRefine = compile(CapturedRefineSchema.clone());
 export const aotCapturedRefineObject = compile(CapturedRefineObjectSchema.clone());
+export const aotSuperRefineObject = compile(SuperRefineObjectSchema.clone());

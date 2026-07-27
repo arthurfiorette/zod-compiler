@@ -62,3 +62,19 @@ export const v3CapturedRefineObjectSchema = z
     password: z.string().min(8),
   })
   .refine((v) => v.age >= minAge, { message: "Too young" });
+
+export const v3SuperRefineObjectSchema = z
+  .object({
+    age: z.number().int(),
+    confirm: z.string().min(8),
+    email: z.string().min(3),
+    id: z.string(),
+    name: z.string().min(1),
+    password: z.string().min(8),
+  })
+  .superRefine((v, ctx) => {
+    if (v.password !== v.confirm) {
+      ctx.addIssue({ code: "custom", message: "Passwords must match", path: ["confirm"] });
+    }
+    if (v.age < minAge) ctx.addIssue({ code: "custom", message: "Too young", path: ["age"] });
+  });

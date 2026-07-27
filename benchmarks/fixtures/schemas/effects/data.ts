@@ -30,3 +30,12 @@ export const validCapturedRefineObject = {
   name: "Alice",
   password: "securepass123",
 };
+
+export const validSuperRefineObject = {
+  age: 28,
+  confirm: "securepass123",
+  email: "alice@example.com",
+  id: "u_1",
+  name: "Alice",
+  password: "securepass123",
+};
