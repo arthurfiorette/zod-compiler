@@ -48,3 +48,17 @@ export const v3CapturedRefineSchema = z
   .refine((v) => allowedDomains.some((d) => v.endsWith(d)), {
     message: "Invalid domain",
   });
+
+// ─── Captured-variable refine on the ROOT object (cross-field validation) ───
+
+const minAge = 18;
+export const v3CapturedRefineObjectSchema = z
+  .object({
+    age: z.number().int(),
+    confirm: z.string().min(8),
+    email: z.string().min(3),
+    id: z.string(),
+    name: z.string().min(1),
+    password: z.string().min(8),
+  })
+  .refine((v) => v.age >= minAge, { message: "Too young" });

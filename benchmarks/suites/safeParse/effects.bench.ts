@@ -1,15 +1,18 @@
 import { bench, describe } from "vitest";
 import {
   aotCapturedRefine,
+  aotCapturedRefineObject,
   aotCapturedTransform,
   aotCapturedTransformObject,
   aotZeroCaptureRefineObject,
   aotZeroCaptureRefineString,
   aotZeroCaptureTransformObject,
   aotZeroCaptureTransformString,
+  CapturedRefineObjectSchema,
   CapturedRefineSchema,
   CapturedTransformObjectSchema,
   CapturedTransformSchema,
+  v3CapturedRefineObjectSchema,
   v3CapturedRefineSchema,
   v3CapturedTransformObjectSchema,
   v3CapturedTransformSchema,
@@ -17,6 +20,7 @@ import {
   v3ZeroCaptureRefineStringSchema,
   v3ZeroCaptureTransformObjectSchema,
   v3ZeroCaptureTransformStringSchema,
+  validCapturedRefineObject,
   validCapturedRefineString,
   validCapturedTransformObject,
   validCapturedTransformString,
@@ -118,5 +122,20 @@ describe("safeParse: captured refine — string", () => {
   });
   bench("zod-compiler", () => {
     aotCapturedRefine.safeParse(validCapturedRefineString);
+  });
+});
+
+// Cross-field validation: a captured predicate on the ROOT object. Until the
+// predicate could be called by reference this cost the WHOLE object its
+// compiled path — the schema, not the callback, is what this row measures.
+describe("safeParse: captured refine — object (cross-field)", () => {
+  bench("zod", () => {
+    CapturedRefineObjectSchema.safeParse(validCapturedRefineObject);
+  });
+  bench("zod v3", () => {
+    v3CapturedRefineObjectSchema.safeParse(validCapturedRefineObject);
+  });
+  bench("zod-compiler", () => {
+    aotCapturedRefineObject.safeParse(validCapturedRefineObject);
   });
 });

@@ -21,3 +21,12 @@ export const validCapturedTransformObject = {
 };
 
 export const validCapturedRefineString = "user@example.com";
+
+export const validCapturedRefineObject = {
+  age: 28,
+  confirm: "securepass123",
+  email: "alice@example.com",
+  id: "u_1",
+  name: "Alice",
+  password: "securepass123",
+};
