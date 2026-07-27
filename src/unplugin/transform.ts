@@ -54,7 +54,26 @@ class StagedTransform {
   }
 
   apply(edits: readonly Edit[], insert?: Insertion): void {
-    if (edits.length === 0 && insert === undefined) return;
+    this.applyThen(edits, insert === undefined ? undefined : () => insert);
+  }
+
+  /**
+   * Apply `edits`, then let `deferred` derive one more insertion from the
+   * resulting text — both inside ONE stage.
+   *
+   * The head injection (runtime import + shared dedup block) has to be decided
+   * from the REWRITTEN source, because `computeRuntimePrefix` probes it for
+   * already-present markers. Staging it separately made a whole second
+   * `generateMap` over the full generated output — for what is only a prepend at
+   * offset 0 — and then forced `remapping` to compose the two. Together those
+   * were the dominant cost of a transform: on a 320-schema project they ran to
+   * 64% of total wall time, more than discovery and codegen combined. Deferring
+   * the insertion into the same MagicString buys byte-identical output and an
+   * equivalent map for one generation and no composition — 1.6x (small schemas)
+   * to 3.4x (large ones) on the transform, scaling with how much code a file
+   * emits, since that is what both costs are proportional to.
+   */
+  applyThen(edits: readonly Edit[], deferred?: (rewritten: string) => Insertion | undefined): void {
     const s = new MagicString(this.current);
     for (const e of edits) {
       if (e.start === e.end) {
@@ -63,16 +82,30 @@ class StagedTransform {
         s.overwrite(e.start, e.end, e.text);
       }
     }
+    // `toString()` is the only way to show the deferred step what the rewrite
+    // produced; it measured well under 1% of a transform.
+    const insert = deferred?.(edits.length === 0 ? this.current : s.toString());
     if (insert !== undefined) {
       s.appendLeft(insert.offset, insert.text);
     }
+    if (edits.length === 0 && insert === undefined) return;
     this.current = s.toString();
+    // `hires: "boundary"` is load-bearing, not a tuning knob: without it every
+    // mapping collapses to column 0, so a stack frame or debugger breakpoint in
+    // untouched user code below a compiled schema lands at the start of its line
+    // instead of the right column (tests/unplugin/sourcemap.test.ts pins it). It
+    // is also the most expensive thing here, which is why the stage COUNT is
+    // what to economize on.
     this.maps.push(s.generateMap({ source: this.source, hires: "boundary", includeContent: true }));
   }
 
   /** Composed original→current map, or null when nothing was applied. */
   map(): TransformSourceMap | null {
     if (this.maps.length === 0) return null;
+    // A single stage needs no composition: `remapping` over a one-map chain
+    // reproduces that map, and it is expensive on generated-code-sized input.
+    const [only] = this.maps;
+    if (this.maps.length === 1) return only as TransformSourceMap;
     const chain = [...this.maps].reverse();
     return remapping(
       chain as Parameters<typeof remapping>[0],
@@ -470,6 +503,7 @@ export async function transformCodeWithMap(
   // target regions are disjoint (compile() assignments vs plain exported
   // declarations of OTHER names), so one batched application is equivalent
   // to the historical sequential rewrites.
+  let rewriteEdits: readonly Edit[];
   if (autoDiscover) {
     // Detect compile() schemas by checking source code patterns
     const compileExportNames = new Set<string>();
@@ -501,25 +535,29 @@ export async function transformCodeWithMap(
         }),
       );
     }
-    staged.apply(edits);
+    rewriteEdits = edits;
   } else {
-    staged.apply(
-      collectCompileRewriteEdits(staged.current, compiled, { zodCompat: options.zodCompat }),
-    );
+    rewriteEdits = collectCompileRewriteEdits(staged.current, compiled, {
+      zodCompat: options.zodCompat,
+    });
   }
 
-  const prefix = computeRuntimePrefix(staged.current, usedHelpers, mode, options.runtimeId);
   // Head = runtime helpers/import, then the file-level shared dedup block, then
   // the rewritten source. The shared `__zcSw_N` functions live at module scope
   // so every IIFE closes over them; they must follow the runtime import (lean)
   // and the helper decls (inline) that they reference. Guard against
   // double-injection on watch/HMR re-runs the same way computeRuntimePrefix
   // does — a second copy would redeclare every `__zcSw_N`.
-  const needsShared = shared.code !== "" && !staged.current.includes(SHARED_BLOCK_MARKER);
-  const head = (prefix ?? "") + (needsShared ? `${shared.code}\n` : "");
-  if (head !== "") {
-    staged.apply([], { offset: 0, text: head });
-  }
+  //
+  // Deferred into the rewrite's own stage rather than staged after it: both
+  // decisions read the REWRITTEN text, and giving a bare prepend its own stage
+  // doubled the sourcemap work and added a composition pass (see applyThen).
+  staged.applyThen(rewriteEdits, (rewritten) => {
+    const prefix = computeRuntimePrefix(rewritten, usedHelpers, mode, options.runtimeId);
+    const needsShared = shared.code !== "" && !rewritten.includes(SHARED_BLOCK_MARKER);
+    const head = (prefix ?? "") + (needsShared ? `${shared.code}\n` : "");
+    return head === "" ? undefined : { offset: 0, text: head };
+  });
   return { code: staged.current, map: staged.map() };
 }
 

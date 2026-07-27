@@ -123,4 +123,48 @@ describe("transformCodeWithMap() sourcemaps", () => {
     expect(map.sources).toContain(id);
     expect(map.sourcesContent?.[0]).toBe(source);
   });
+
+  it("traces COLUMNS, not just lines", async () => {
+    // Sourcemap generation is the single most expensive thing the transform does
+    // — it dominated total wall time on a 320-schema project — and the tempting
+    // saving is to drop MagicString's `hires: "boundary"`. That is a trap: line
+    // tracing survives it (the four cases above all still pass) while EVERY
+    // column silently collapses to 0, so a stack frame or a debugger breakpoint
+    // in untouched user code lands at the start of its line instead of the right
+    // column. These assertions are what makes that regression visible.
+    const source = [
+      `import { z } from "zod";`, // L1
+      ``,
+      `export const UserSchema = z.object({ name: z.string().min(1) });`, // L3
+      ``,
+      `export function checkUser(value: unknown) {`, // L5
+      `  const trimmed = String(value).trim();`, // L6
+      `  return UserSchema.safeParse(trimmed).success;`, // L7
+      `}`,
+    ].join("\n");
+    const id = write("columns.ts", source);
+    const out = await transformCodeWithMap(source, id, { mode: "lean", autoDiscover: true });
+    expect(out).not.toBeNull();
+    const { code, map } = out as { code: string; map: ConstructorParameters<typeof TraceMap>[0] };
+    const tm = new TraceMap(map);
+
+    /** Trace the LAST occurrence of `token` (past any generated copy) to line:column. */
+    const trace = (token: string): string => {
+      const at = code.lastIndexOf(token);
+      if (at === -1) throw new Error(`token not found: ${token}`);
+      const before = code.slice(0, at);
+      const position = originalPositionFor(tm, {
+        line: before.split("\n").length,
+        column: at - (before.lastIndexOf("\n") + 1),
+      });
+      return `${position.line}:${position.column}`;
+    };
+
+    // Mid-line tokens must keep their original column, not report column 0.
+    expect(trace("String(value)")).toBe("6:18");
+    expect(trace(".trim()")).toBe("6:31");
+    expect(trace("UserSchema.safeParse")).toBe("7:9");
+    expect(trace(".success")).toBe("7:38");
+    expect(trace("checkUser")).toBe("5:16");
+  });
 });
