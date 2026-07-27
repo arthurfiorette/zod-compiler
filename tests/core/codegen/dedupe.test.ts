@@ -59,15 +59,19 @@ function refs(info: CompiledSchemaInfo): string[] {
 
 describe("schema dedupe", () => {
   it("emits one shared walk and references it from every occurrence", () => {
-    const Address = z.object({ street: z.string(), city: z.string(), zip: z.string().min(3) });
+    const Address = z.strictObject({
+      street: z.string(),
+      city: z.string(),
+      zip: z.string().min(3),
+    });
     const { schemas, shared } = compileSchemas(
       [
         { exportName: "Address", schema: Address },
         {
           exportName: "User",
-          schema: z.object({ name: z.string(), home: Address, work: Address }),
+          schema: z.strictObject({ name: z.string(), home: Address, work: Address }),
         },
-        { exportName: "Company", schema: z.object({ legalName: z.string(), hq: Address }) },
+        { exportName: "Company", schema: z.strictObject({ legalName: z.string(), hq: Address }) },
       ],
       { mode: "inline" },
     );
@@ -80,9 +84,13 @@ describe("schema dedupe", () => {
   });
 
   it("validates byte-identically to zod through the shared walk (valid + nested errors)", () => {
-    const Address = z.object({ street: z.string(), city: z.string(), zip: z.string().min(3) });
-    const User = z.object({ name: z.string(), home: Address, work: Address });
-    const Company = z.object({ legalName: z.string(), hq: Address });
+    const Address = z.strictObject({
+      street: z.string(),
+      city: z.string(),
+      zip: z.string().min(3),
+    });
+    const User = z.strictObject({ name: z.string(), home: Address, work: Address });
+    const Company = z.strictObject({ legalName: z.string(), hq: Address });
     const { schemas, shared } = compileSchemas(
       [
         { exportName: "Address", schema: Address },
@@ -121,8 +129,8 @@ describe("schema dedupe", () => {
   it("is a no-op when no shape repeats", () => {
     const { schemas, shared } = compileSchemas(
       [
-        { exportName: "A", schema: z.object({ a: z.string(), b: z.number() }) },
-        { exportName: "B", schema: z.object({ c: z.boolean(), d: z.string().email() }) },
+        { exportName: "A", schema: z.strictObject({ a: z.string(), b: z.number() }) },
+        { exportName: "B", schema: z.strictObject({ c: z.boolean(), d: z.string().email() }) },
       ],
       { mode: "inline" },
     );
@@ -134,8 +142,8 @@ describe("schema dedupe", () => {
     // A bare repeated string appears many times but is too small to share.
     const { shared } = compileSchemas(
       [
-        { exportName: "A", schema: z.object({ a: z.string(), b: z.string() }) },
-        { exportName: "B", schema: z.object({ c: z.string(), d: z.string() }) },
+        { exportName: "A", schema: z.strictObject({ a: z.string(), b: z.string() }) },
+        { exportName: "B", schema: z.strictObject({ c: z.string(), d: z.string() }) },
       ],
       { mode: "inline" },
     );
@@ -143,11 +151,11 @@ describe("schema dedupe", () => {
   });
 
   it("delegates a root walk when the root shape is itself shared", () => {
-    const Row = z.object({ id: z.number().int(), name: z.string(), active: z.boolean() });
+    const Row = z.strictObject({ id: z.number().int(), name: z.string(), active: z.boolean() });
     const { schemas } = compileSchemas(
       [
         { exportName: "Row", schema: Row },
-        { exportName: "Wrapper", schema: z.object({ row: Row, count: z.number() }) },
+        { exportName: "Wrapper", schema: z.strictObject({ row: Row, count: z.number() }) },
       ],
       { mode: "inline" },
     );
@@ -159,11 +167,11 @@ describe("schema dedupe", () => {
   });
 
   it("keeps the fast path fully inlined (never shares the hot path)", () => {
-    const Address = z.object({ street: z.string(), city: z.string(), zip: z.string() });
+    const Address = z.strictObject({ street: z.string(), city: z.string(), zip: z.string() });
     const { schemas } = compileSchemas(
       [
-        { exportName: "User", schema: z.object({ a: Address, b: Address }) },
-        { exportName: "Co", schema: z.object({ hq: Address }) },
+        { exportName: "User", schema: z.strictObject({ a: Address, b: Address }) },
+        { exportName: "Co", schema: z.strictObject({ hq: Address }) },
       ],
       { mode: "inline" },
     );
@@ -176,14 +184,43 @@ describe("schema dedupe", () => {
     expect(fastBody).toContain('input["a"]["street"]');
   });
 
+  it("excludes a stripping z.object() — a shared walk cannot return the rebuild", () => {
+    // A genuine z.object() strips, so its walk PRODUCES the rebuilt object.
+    // A shared body writes nothing back and returns nothing, so it could never
+    // deliver that value — these shapes stay inline. Pass-through object kinds
+    // (strictObject/looseObject/catchall) are unaffected and still share.
+    const Stripping = z.object({ a: z.string(), b: z.string(), c: z.string() });
+    const { schemas: stripped, shared: strippedShared } = compileSchemas(
+      [
+        { exportName: "S1", schema: z.strictObject({ x: Stripping, y: Stripping }) },
+        { exportName: "S2", schema: z.strictObject({ z: Stripping }) },
+      ],
+      { mode: "inline" },
+    );
+    expect(strippedShared.code).not.toContain("__zcSw_");
+    expect(refs(pick(stripped, "S1"))).toHaveLength(0);
+    expect(refs(pick(stripped, "S2"))).toHaveLength(0);
+
+    // Same shape declared strict instead: shareable again.
+    const PassThrough = z.strictObject({ a: z.string(), b: z.string(), c: z.string() });
+    const { shared: passShared } = compileSchemas(
+      [
+        { exportName: "P1", schema: z.strictObject({ x: PassThrough, y: PassThrough }) },
+        { exportName: "P2", schema: z.strictObject({ z: PassThrough }) },
+      ],
+      { mode: "inline" },
+    );
+    expect(passShared.code).toContain("__zcSw_0");
+  });
+
   it("excludes mutation-bearing roots from sharing (cold-path-only guarantee)", () => {
-    const Shape = z.object({ a: z.string(), b: z.string(), c: z.string() });
+    const Shape = z.strictObject({ a: z.string(), b: z.string(), c: z.string() });
     const { schemas } = compileSchemas(
       [
-        { exportName: "R1", schema: z.object({ x: Shape, y: Shape }) },
-        { exportName: "R2", schema: z.object({ z: Shape }) },
+        { exportName: "R1", schema: z.strictObject({ x: Shape, y: Shape }) },
+        { exportName: "R2", schema: z.strictObject({ z: Shape }) },
         // Mutation root (coerce) embedding the same shape — must stay fully inline.
-        { exportName: "M", schema: z.object({ w: Shape, n: z.coerce.number() }) },
+        { exportName: "M", schema: z.strictObject({ w: Shape, n: z.coerce.number() }) },
       ],
       { mode: "inline" },
     );
@@ -196,7 +233,7 @@ describe("schema dedupe", () => {
   it("excludes recursive shapes and still validates correctly", () => {
     const makeTree = () => {
       const Tree: z.ZodType = z.lazy(() =>
-        z.object({ value: z.number(), children: z.array(Tree) }),
+        z.strictObject({ value: z.number(), children: z.array(Tree) }),
       );
       return Tree;
     };
@@ -237,16 +274,16 @@ describe("schema dedupe", () => {
     [
       "discriminatedUnion",
       z.discriminatedUnion("kind", [
-        z.object({ kind: z.literal("a"), x: z.number() }),
-        z.object({ kind: z.literal("b"), y: z.string().min(2) }),
+        z.strictObject({ kind: z.literal("a"), x: z.number() }),
+        z.strictObject({ kind: z.literal("b"), y: z.string().min(2) }),
       ]),
       [{ kind: "a", x: 1 }, { kind: "b", y: "z" }, { kind: "c" }, "no"],
     ],
     [
       "union",
       z.union([
-        z.object({ p: z.string(), q: z.number() }),
-        z.object({ r: z.boolean(), s: z.string() }),
+        z.strictObject({ p: z.string(), q: z.number() }),
+        z.strictObject({ r: z.boolean(), s: z.string() }),
       ]),
       [{ p: "s", q: 1 }, { p: "s", q: "bad" }, 5],
     ],
@@ -262,7 +299,7 @@ describe("schema dedupe", () => {
     ],
     [
       "refine",
-      z.object({ name: z.string().refine((v) => v.length > 2), age: z.number() }),
+      z.strictObject({ name: z.string().refine((v) => v.length > 2), age: z.number() }),
       [
         { name: "abc", age: 1 },
         { name: "ab", age: 1 },
@@ -272,7 +309,10 @@ describe("schema dedupe", () => {
   ] as [string, z.ZodType, unknown[]][])(
     "shares a %s shape and validates identically to zod (standalone + nested)",
     (_name, Shape, inputs) => {
-      const Wrap = z.object({ left: Shape, right: Shape });
+      // strictObject: a genuine z.strictObject() strips, and a stripping walk has to
+      // produce its rebuilt value — which a shared body cannot return. Every
+      // shape here is a pass-through kind for the same reason.
+      const Wrap = z.strictObject({ left: Shape, right: Shape });
       const { schemas, shared } = compileSchemas(
         [
           { exportName: "Shape", schema: Shape },
@@ -293,21 +333,21 @@ describe("schema dedupe", () => {
   );
 
   it("keys non-finite check bounds distinctly (no false merge)", () => {
-    const A = z.object({
+    const A = z.strictObject({
       a: z.number().gte(Number.POSITIVE_INFINITY),
       b: z.string(),
       c: z.boolean(),
     });
-    const B = z.object({
+    const B = z.strictObject({
       a: z.number().gte(Number.NEGATIVE_INFINITY),
       b: z.string(),
       c: z.boolean(),
     });
     const { schemas, shared } = compileSchemas(
       [
-        { exportName: "UsesA1", schema: z.object({ x: A }) },
-        { exportName: "UsesA2", schema: z.object({ y: A }) },
-        { exportName: "UsesB", schema: z.object({ w: B }) },
+        { exportName: "UsesA1", schema: z.strictObject({ x: A }) },
+        { exportName: "UsesA2", schema: z.strictObject({ y: A }) },
+        { exportName: "UsesB", schema: z.strictObject({ w: B }) },
       ],
       { mode: "inline" },
     );
@@ -316,15 +356,19 @@ describe("schema dedupe", () => {
     expect((shared.code.match(/function __zcSw_\d+/g) ?? []).length).toBe(1);
     const usesB = build(pick(schemas, "UsesB"), shared.code);
     const sample = { w: { a: 5, b: "x", c: true } };
-    expect(shape(usesB(sample))).toBe(shape(z.object({ w: B }).safeParse(sample)));
+    expect(shape(usesB(sample))).toBe(shape(z.strictObject({ w: B }).safeParse(sample)));
   });
 
   it("registers shared runtime helpers for lean-mode imports", () => {
-    const Address = z.object({ street: z.string(), city: z.string(), zip: z.string().min(3) });
+    const Address = z.strictObject({
+      street: z.string(),
+      city: z.string(),
+      zip: z.string().min(3),
+    });
     const { shared } = compileSchemas(
       [
-        { exportName: "User", schema: z.object({ a: Address, b: Address }) },
-        { exportName: "Co", schema: z.object({ hq: Address }) },
+        { exportName: "User", schema: z.strictObject({ a: Address, b: Address }) },
+        { exportName: "Co", schema: z.strictObject({ hq: Address }) },
       ],
       { mode: "lean" },
     );

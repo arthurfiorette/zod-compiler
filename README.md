@@ -2,7 +2,7 @@
 
 **Compile Zod schemas into zero-overhead validation functions at build time.**
 
-Keep your existing Zod schemas. Get **2-75x faster** validation. No code changes required.
+Keep your existing Zod schemas. Get **2-45x faster** validation. No code changes required.
 
 - [What Gets Compiled](#what-gets-compiled)
 - [Schema Hoisting](#schema-hoisting)
@@ -123,9 +123,6 @@ npx zod-compiler generate src/ --schemas explicit --emit bag
 
 # Compact output: fast path only, cold errors delegated to Zod (~70% smaller)
 npx zod-compiler generate src/ --emit compact
-
-# Strip unknown keys from z.object() output (matches Zod's default .parse())
-npx zod-compiler generate src/ --strip-unknown-keys
 ```
 
 ## Build Plugin
@@ -147,18 +144,17 @@ npx zod-compiler generate src/ --strip-unknown-keys
 
 ### Options
 
-| Option             | Type                             | Default         | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------ | -------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemas`          | `"auto" \| "explicit"`           | `"auto"`        | How schemas are found. `"auto"`: every exported Zod schema compiles (also enables compiling hoisted in-function schemas). `"explicit"`: only `compile()`-wrapped schemas; only files importing zod-compiler execute at build time                                                                                                                                                                                                                                                  |
-| `include`          | `string[]`                       | —               | Only process files matching these path globs (picomatch, matched anywhere in the path; plain substrings work too)                                                                                                                                                                                                                                                                                                                                                                  |
-| `exclude`          | `string[]`                       | —               | Skip files matching these path globs (same matching rules as `include`)                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `output`           | `"schema" \| "bag" \| "compact"` | `"schema"`      | What a compiled export evaluates to. `"schema"`: the original Zod schema with compiled methods installed (full API preserved). `"bag"`: a minimal methods-only object — smaller bundles, breaks Zod-schema consumers. `"compact"`: like `"schema"` but only the fast path is compiled — cold errors delegate to the retained Zod schema, dropping the slow walk (~70% smaller output, hot path unchanged). See [Compact Output](#compact-output-output-compact)                    |
-| `verbose`          | `boolean`                        | `false`         | Log per-schema compilation status during build                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `hoist`            | `boolean`                        | `true`          | Hoist Zod schemas defined inside function bodies to module scope so they're constructed once instead of per call (babel-plugin-zod-hoist equivalent). Only expressions built purely from imports and literals are hoisted                                                                                                                                                                                                                                                          |
-| `apply`            | `"build" \| "serve" \| "all"`    | builds + Vitest | **Vite only**: when the plugin runs. By default, production builds and test runs are compiled (so tests exercise what ships); plain dev servers use the Zod fallback. `"all"` also compiles the dev server; `"build"` also skips tests                                                                                                                                                                                                                                             |
-| `codegenMode`      | `"lean" \| "inline"`             | auto            | Override the codegen mode. `"lean"` (default for all supported bundlers): shared runtime helpers are imported from `virtual:zod-compiler/runtime`, which the bundler resolves via its module hooks. `"inline"`: helpers are emitted directly into each transformed file — use this for transpile-only esbuild builds (no `--bundle`) or similar setups where the bundler's hooks never fire for already-transformed output and the `virtual:` specifier would survive into `dist/` |
-| `stripUnknownKeys` | `boolean`                        | `false`         | Strip unknown keys from `z.object()` output, matching Zod's default `.parse()`. Off by default (a valid object is returned by reference, keeping extras). When on, genuine `z.object()` schemas rebuild a fresh object with only the declared keys; `z.looseObject()` still keeps extras and `z.strictObject()` still rejects them. Use it to sanitize untrusted input against mass-assignment. See [Behavioral Differences](#behavioral-differences-from-zod)                     |
-| `cache`            | `boolean \| string`              | `true`          | Persistent transform cache (`node_modules/.cache/zod-compiler`, or a custom directory). Skips discovery + codegen across processes when nothing changed; entries self-validate against dependency content hashes                                                                                                                                                                                                                                                                   |
+| Option        | Type                             | Default         | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------- | -------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemas`     | `"auto" \| "explicit"`           | `"auto"`        | How schemas are found. `"auto"`: every exported Zod schema compiles (also enables compiling hoisted in-function schemas). `"explicit"`: only `compile()`-wrapped schemas; only files importing zod-compiler execute at build time                                                                                                                                                                                                                                                  |
+| `include`     | `string[]`                       | —               | Only process files matching these path globs (picomatch, matched anywhere in the path; plain substrings work too)                                                                                                                                                                                                                                                                                                                                                                  |
+| `exclude`     | `string[]`                       | —               | Skip files matching these path globs (same matching rules as `include`)                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `output`      | `"schema" \| "bag" \| "compact"` | `"schema"`      | What a compiled export evaluates to. `"schema"`: the original Zod schema with compiled methods installed (full API preserved). `"bag"`: a minimal methods-only object — smaller bundles, breaks Zod-schema consumers. `"compact"`: like `"schema"` but only the fast path is compiled — cold errors delegate to the retained Zod schema, dropping the slow walk (~70% smaller output, hot path unchanged). See [Compact Output](#compact-output-output-compact)                    |
+| `verbose`     | `boolean`                        | `false`         | Log per-schema compilation status during build                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `hoist`       | `boolean`                        | `true`          | Hoist Zod schemas defined inside function bodies to module scope so they're constructed once instead of per call (babel-plugin-zod-hoist equivalent). Only expressions built purely from imports and literals are hoisted                                                                                                                                                                                                                                                          |
+| `apply`       | `"build" \| "serve" \| "all"`    | builds + Vitest | **Vite only**: when the plugin runs. By default, production builds and test runs are compiled (so tests exercise what ships); plain dev servers use the Zod fallback. `"all"` also compiles the dev server; `"build"` also skips tests                                                                                                                                                                                                                                             |
+| `codegenMode` | `"lean" \| "inline"`             | auto            | Override the codegen mode. `"lean"` (default for all supported bundlers): shared runtime helpers are imported from `virtual:zod-compiler/runtime`, which the bundler resolves via its module hooks. `"inline"`: helpers are emitted directly into each transformed file — use this for transpile-only esbuild builds (no `--bundle`) or similar setups where the bundler's hooks never fire for already-transformed output and the `virtual:` specifier would survive into `dist/` |
+| `cache`       | `boolean \| string`              | `true`          | Persistent transform cache (`node_modules/.cache/zod-compiler`, or a custom directory). Skips discovery + codegen across processes when nothing changed; entries self-validate against dependency content hashes                                                                                                                                                                                                                                                                   |
 
 ```typescript
 zodCompiler({
@@ -698,7 +694,7 @@ npx zod-compiler check src/schemas.ts --json --fail-under 80
 
 ## What Gets Compiled
 
-### Fully Compiled (2-75x faster)
+### Fully Compiled (2-45x faster)
 
 `string`, `number`, `bigint`, `boolean`, `null`, `undefined`, `any`, `unknown`, `literal`, `enum`, `stringbool`, `date`, `file`, `object`, `strictObject` / `.strict()`, `looseObject`, `array`, `tuple`, `record`, `set`, `map`, `union`, `discriminatedUnion`, `intersection`, `pipe` (non-transform), `optional`, `nullable`, `readonly`, `default`, `catch`, `coerce`, `templateLiteral`, `symbol`, `void`, `nan`, `never`, `lazy` (recursive — self-, mutual, and nested), `transform` / `refine` (zero-capture — see below)
 
@@ -747,7 +743,7 @@ Zod's payload and pushes issues onto it — so it is called through a reference 
 Zod's own wrapper with a synthesized payload, which leaves issue construction
 Zod's job and keeps error shapes identical by construction. That turns the most
 common form of cross-field validation from a total fallback into the 2.3M →
-13.3M row below; measured in isolation, where the harness floor stops
+11.7M row below; measured in isolation, where the harness floor stops
 compressing the ratio, the same object runs 357.8 ns → 39.9 ns (9.0x) and an
 array of numbers 240.7 ns → 5.3 ns (46x), with rejecting inputs 31-92x. Two
 shapes still delegate: a `superRefine` with another check after it
@@ -777,36 +773,21 @@ one zod call beats one per unknown key.
 
 ### Behavioral Differences from Zod
 
-Compiled validators match Zod on accept/reject decisions, output data for the known shape, and error messages — including issue ordering for multi-failure inputs. A few observable behaviors differ **by design**, all stemming from the zero-allocation fast path: a successful parse returns the **input value itself** rather than rebuilding it.
+Compiled validators match Zod on accept/reject decisions, output data, and error messages — including issue ordering for multi-failure inputs. A couple of observable behaviors differ **by design**, both stemming from the zero-allocation fast path: where nothing has to be reshaped, a successful parse returns the **input value itself** rather than rebuilding it.
 
 | Behavior                               | Zod                              | zod-compiler                                                                     |
 | -------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------- |
-| Unknown keys on a default `z.object()` | Stripped from the output         | **Kept** by default — returned by reference; opt in with `stripUnknownKeys`      |
+| Unknown keys on a default `z.object()` | Stripped from the output         | Stripped from the output — same as Zod                                           |
 | Record key iteration                   | All own keys (`Reflect.ownKeys`) | Own **enumerable string** keys only — symbol and non-enumerable keys are ignored |
-| Array / object output identity         | A fresh value                    | The input value, returned by reference                                           |
+| Array output identity                  | A fresh array                    | The input array, returned by reference                                           |
 
 What this means in practice:
 
-- **Unknown keys are not stripped by default.** `z.object({ a: z.string() }).parse({ a: "x", b: 1 })` returns `{ a: "x" }` under Zod but `{ a: "x", b: 1 }` compiled. Three ways to get stripping behavior, in order of preference:
-  - Enable the **`stripUnknownKeys`** build option (or the `--strip-unknown-keys` CLI flag). Genuine `z.object()` schemas then rebuild a fresh object with only the declared keys — exactly matching Zod's default strip, including nested objects, array elements, `.pick()`/`.partial()`/`.extend()` results, and discriminated-union options. This is the right choice if you forward parsed request bodies to an ORM and need protection against mass-assignment / overposting. (Cost: stripped objects are rebuilt on every successful parse, so they no longer take the by-reference fast path.)
-  - Use **`z.strictObject()`** if you'd rather reject unknown keys outright (changes the API contract — extras become errors).
-  - Use **`z.looseObject()`** to make the default keep-extras behavior explicit at the schema level.
-
-  All three compile fully, and validation of the declared keys is identical in every case.
-
-  **Performance of `stripUnknownKeys`** (`pnpm benchmark strip-unknown-keys`): stripping rebuilds the object, so it gives up the by-reference fast path — but the rebuild is a single object literal per level, which costs little next to the validation itself. Representative throughput:
-
-  | Schema (input)                | Zod (strips) | compiler (keep, default) | compiler (strip) | strip vs keep | strip vs Zod |
-  | ----------------------------- | ------------ | ------------------------ | ---------------- | ------------- | ------------ |
-  | medium object, 7 keys (clean) | 2.7M         | 13.5M                    | 12.7M            | 0.94x         | **4.7x**     |
-  | wide object, 20 keys (clean)  | 4.0M         | 24.4M                    | 18.1M            | 0.74x         | **4.5x**     |
-  | nested API response (clean)   | 176K         | 9.3M                     | 5.4M             | 0.58x         | **31x**      |
-
-  The tax scales with nesting depth (one fresh object per level), not really with key count, and is independent of whether unknown keys are actually present. It is small enough that you should turn stripping on wherever you want sanitization — forwarding parsed bodies to an ORM, for instance — rather than trading it away for throughput.
-
 - **Records skip symbol / non-enumerable keys.** `z.record(z.string(), …)` validates (and rejects) a symbol-keyed or non-enumerable-keyed entry under Zod; the compiled record never visits it. Plain string-keyed records — the common case — are unaffected.
 
-Matching Zod on these would mean allocating a fresh object (or a `Reflect.ownKeys` array) on every successful parse — the exact cost the fast path exists to avoid.
+- **A validated array is the input array.** Zod builds a fresh one, so a sparse array keeps its holes and any non-index own properties survive the compiled parse.
+
+Matching Zod on these would mean allocating a fresh array (or a `Reflect.ownKeys` array) on every successful parse — the exact cost the fast path exists to avoid.
 
 ## Benchmark
 
@@ -814,42 +795,43 @@ Matching Zod on these would mean allocating a fresh object (or a `Reflect.ownKey
 
 | Scenario                                        | Zod v3 | Zod v4 | **zod-compiler** | Typia | AJV   | vs Zod v4 |
 | ----------------------------------------------- | ------ | ------ | ---------------- | ----- | ----- | --------- |
-| simple string                                   | 13.3M  | 14.5M  | **17.3M**        | 17.7M | 17.9M | 1.2x      |
-| string (min/max)                                | 12.4M  | 8.0M   | **17.0M**        | 17.9M | 15.7M | 2.1x      |
-| number (int+positive)                           | 12.6M  | 8.3M   | **17.4M**        | 18.0M | 18.1M | 2.1x      |
-| enum                                            | 12.3M  | 12.6M  | **17.6M**        | 17.8M | 18.3M | 1.4x      |
-| bigint (min/max)                                | 12.2M  | 7.8M   | **17.0M**        | —     | —     | 2.2x      |
-| tuple [string, int, bool]                       | 5.9M   | 6.5M   | **16.5M**        | 16.5M | 16.4M | 2.6x      |
-| record\<string, number\>                        | 3.2M   | 2.8M   | **15.2M**        | 11.9M | 15.7M | 5.5x      |
-| set\<string\> (5 items)                         | 3.7M   | 2.3M   | **15.0M**        | —     | —     | 6.5x      |
-| set\<string\> (20 items)                        | 1.3M   | 715K   | **11.8M**        | —     | —     | **16x**   |
-| map\<string, number\> (5 entries)               | 2.0M   | 1.4M   | **13.2M**        | —     | —     | 9.6x      |
-| map\<string, number\> (20 entries)              | 665K   | 360K   | **8.4M**         | —     | —     | **23x**   |
-| pipe (non-transform)                            | 8.7M   | 5.7M   | **16.7M**        | —     | —     | 2.9x      |
-| discriminatedUnion (3 variants)                 | 3.5M   | 4.2M   | **16.0M**        | 15.9M | 7.9M  | 3.9x      |
-| discriminatedUnion (8 variants, rotating)       | 2.7M   | 3.5M   | **10.1M**        | —     | —     | 2.9x      |
-| plain union of 8 tagged objects (auto-discrim.) | 374K   | 678K   | **10.0M**        | —     | —     | **15x**   |
-| strict object (DB row)                          | 1.9M   | 3.2M   | **11.2M**        | —     | —     | 3.5x      |
-| medium object (valid)                           | 1.9M   | 2.4M   | **9.9M**         | 11.5M | 7.6M  | 4.1x      |
-| medium object (invalid)                         | 553K   | 80K    | **15.1M**        | 3.0M  | 7.8M  | **188x**  |
-| large object (10 items)                         | 122K   | 166K   | **7.9M**         | 6.1M  | 1.2M  | **48x**   |
-| large object (100 items)                        | 14K    | 18K    | **1.4M**         | 1.3M  | 127K  | **77x**   |
-| recursive tree (7 nodes)                        | 589K   | 2.1M   | **12.8M**        | 12.0M | 4.9M  | 6.0x      |
-| recursive tree (121 nodes)                      | 32K    | 143K   | **2.5M**         | 2.0M  | 392K  | **18x**   |
-| nested recursion (7 nodes)                      | 394K   | 1.0M   | **12.1M**        | 11.1M | 3.0M  | **12x**   |
-| nested recursion (121 nodes)                    | 25K    | 66K    | **2.1M**         | 1.7M  | 219K  | **32x**   |
-| deeply nested object (243 leaves)               | 11K    | 20K    | **1.2M**         | 1.1M  | 129K  | **59x**   |
-| event log (combined)                            | 381K   | 604K   | **7.2M**         | —     | —     | 12.0x     |
-| object with transform (zero-capture)            | 1.2M   | 2.0M   | **6.3M**         | —     | —     | 3.1x      |
-| array 10 × transform (zero-capture)             | 126K   | 208K   | **3.3M**         | —     | —     | **16x**   |
-| array 50 × transform (zero-capture)             | 26K    | 45K    | **839K**         | —     | —     | **19x**   |
-| object with captured transform                  | 1.3M   | 6.4M   | **15.0M**        | —     | —     | 2.4x      |
-| object with captured refine (cross-field)       | 1.6M   | 2.5M   | **16.1M**        | —     | —     | 6.4x      |
-| object with superRefine (cross-field)           | 1.6M   | 2.3M   | **13.3M**        | —     | —     | 5.7x      |
+| simple string                                   | 12.9M  | 14.5M  | **16.9M**        | 17.2M | 17.5M | 1.2x      |
+| string (min/max)                                | 12.1M  | 7.6M   | **16.3M**        | 17.6M | 14.9M | 2.1x      |
+| number (int+positive)                           | 11.5M  | 7.7M   | **16.5M**        | 16.8M | 17.7M | 2.1x      |
+| enum                                            | 11.8M  | 12.2M  | **16.8M**        | 17.1M | 17.2M | 1.4x      |
+| bigint (min/max)                                | 11.4M  | 7.6M   | **15.9M**        | —     | —     | 2.1x      |
+| tuple [string, int, bool]                       | 5.5M   | 6.3M   | **15.9M**        | 16.8M | 15.3M | 2.5x      |
+| record\<string, number\>                        | 3.2M   | 2.7M   | **15.5M**        | 12.3M | 15.3M | 5.7x      |
+| set\<string\> (5 items)                         | 3.6M   | 2.3M   | **15.0M**        | —     | —     | 6.6x      |
+| set\<string\> (20 items)                        | 1.3M   | 695K   | **11.9M**        | —     | —     | **17x**   |
+| map\<string, number\> (5 entries)               | 2.0M   | 1.3M   | **12.4M**        | —     | —     | 9.5x      |
+| map\<string, number\> (20 entries)              | 613K   | 352K   | **8.3M**         | —     | —     | **24x**   |
+| pipe (non-transform)                            | 8.7M   | 5.6M   | **16.8M**        | —     | —     | 3.0x      |
+| discriminatedUnion (3 variants)                 | 3.4M   | 4.0M   | **16.7M**        | 16.0M | 7.9M  | 4.1x      |
+| discriminatedUnion (8 variants, rotating)       | 2.7M   | 3.5M   | **9.8M**         | —     | —     | 2.8x      |
+| plain union of 8 tagged objects (auto-discrim.) | 358K   | 646K   | **9.5M**         | —     | —     | **15x**   |
+| strict object (DB row)                          | 1.8M   | 3.1M   | **11.0M**        | —     | —     | 3.6x      |
+| medium object (valid)                           | 1.5M   | 2.3M   | **9.4M**         | 10.9M | 7.4M  | 4.0x      |
+| medium object (extra keys stripped)             | 1.8M   | 2.2M   | **9.4M**         | —     | —     | 4.3x      |
+| medium object (invalid)                         | 536K   | 79K    | **14.2M**        | 3.0M  | 7.7M  | **180x**  |
+| large object (10 items)                         | 118K   | 162K   | **5.2M**         | 5.8M  | 1.2M  | **32x**   |
+| large object (100 items)                        | 13K    | 18K    | **811K**         | 1.4M  | 125K  | **45x**   |
+| recursive tree (7 nodes)                        | 589K   | 2.1M   | **8.1M**         | 11.9M | 4.9M  | 3.8x      |
+| recursive tree (121 nodes)                      | 32K    | 128K   | **803K**         | 1.9M  | 386K  | 6.3x      |
+| nested recursion (7 nodes)                      | 395K   | 1.0M   | **7.1M**         | 8.8M  | 2.5M  | 7.0x      |
+| nested recursion (121 nodes)                    | 23K    | 61K    | **804K**         | 1.4M  | 184K  | **13x**   |
+| deeply nested object (243 leaves)               | 11K    | 20K    | **832K**         | 1.0M  | 124K  | **42x**   |
+| event log (combined)                            | 377K   | 623K   | **7.3M**         | —     | —     | **12x**   |
+| object with transform (zero-capture)            | 1.1M   | 2.0M   | **6.0M**         | —     | —     | 3.0x      |
+| array 10 × transform (zero-capture)             | 120K   | 204K   | **3.7M**         | —     | —     | **18x**   |
+| array 50 × transform (zero-capture)             | 25K    | 41K    | **963K**         | —     | —     | **24x**   |
+| object with captured transform                  | 1.3M   | 6.1M   | **15.2M**        | —     | —     | 2.5x      |
+| object with captured refine (cross-field)       | 1.6M   | 2.5M   | **13.7M**        | —     | —     | 5.5x      |
+| object with superRefine (cross-field)           | 1.5M   | 2.3M   | **11.7M**        | —     | —     | 5.0x      |
 
 _ops/s, higher is better. "—" = not supported by the library. Measured with `vitest bench` on Apple M4 Max (zod 4.3.6, zod v3 3.23.8, typia 12, ajv 8), best of two full runs; rows reproduce within ~5% between runs. The harness itself costs ~55 ns per iteration — the fastest rows sit at that floor — so it compresses the top of the range: gaps between the three AOT columns on the primitive rows are below the noise, not real._
 
-Performance scales with schema complexity. Nested objects and arrays see the biggest gains because zod-compiler eliminates per-node traversal overhead. Deeply nested schemas (the 243-leaf dashboard row) stay fast because oversized fast-check functions are split into smaller boolean helpers, each kept within V8's optimizing-compiler budget. `discriminatedUnion` dispatches instead of trying options in sequence the way Zod does, and each case validates only its variant's distinctive fields — the object type-guard and the discriminator are checked once before dispatch, never re-checked inside the matched case (a redundancy the engine only elides on unions small enough to inline, so large unions get a measured ~1.5x on the fast check). Dispatch is genuinely O(1) for string discriminators: a `switch` over string labels is only _written_ as a jump, V8 lowers it to sequential `===` comparisons (~0.5 ns per preceding case, so 52 ns of pure dispatch at 80 variants), so the discriminator goes through a `{value: ordinal}` table into a dense integer switch — measured 1.9x at 8 variants and 2.8x at 60, for ~1% more generated bytes. Unions of two variants, or with non-string discriminators, keep the plain switch. A **plain `z.union`** of objects that all pin a shared key to disjoint literals is auto-detected and lowered to the same switch dispatch — so an untagged union written without `discriminatedUnion` still validates in O(1) (15x faster than Zod here), as long as it has enough options to outweigh the switch's setup cost; below that it keeps the fully-inlined `||`-chain, whose options and per-option checks are ordered cheapest-first so a non-matching option is dropped without running its regexes. The invalid-input row is large because failed `safeParse` defers error materialization until `.error` is read. `transform`/`refine` callbacks compile whether or not they capture (3-19x): a zero-capture one is inlined from its source, a capturing one is called by reference rather than costing the schema its compiled path — the cross-field refine row measures 2.5M → 16.1M, and captured transforms went from matching Zod (1.0x) to 2.4x. `superRefine` compiles as well, called through a reference to Zod's own payload wrapper (2.3M → 13.3M here, from a total fallback); only a `superRefine` with another check after it, raw `.check(fn)`, and `ctx`-taking or async transforms still delegate.
+Performance scales with schema complexity. Nested objects and arrays see the biggest gains because zod-compiler eliminates per-node traversal overhead. Deeply nested schemas (the 243-leaf dashboard row) stay fast because oversized fast-check functions are split into smaller boolean helpers, each kept within V8's optimizing-compiler budget. `discriminatedUnion` dispatches instead of trying options in sequence the way Zod does, and each case validates only its variant's distinctive fields — the object type-guard and the discriminator are checked once before dispatch, never re-checked inside the matched case (a redundancy the engine only elides on unions small enough to inline, so large unions get a measured ~1.5x on the fast check). Dispatch is genuinely O(1) for string discriminators: a `switch` over string labels is only _written_ as a jump, V8 lowers it to sequential `===` comparisons (~0.5 ns per preceding case, so 52 ns of pure dispatch at 80 variants), so the discriminator goes through a `{value: ordinal}` table into a dense integer switch — measured 1.9x at 8 variants and 2.8x at 60, for ~1% more generated bytes. Unions of two variants, or with non-string discriminators, keep the plain switch. A **plain `z.union`** of objects that all pin a shared key to disjoint literals is auto-detected and lowered to the same switch dispatch — so an untagged union written without `discriminatedUnion` still validates in O(1) (15x faster than Zod here), as long as it has enough options to outweigh the switch's setup cost; below that it keeps the fully-inlined `||`-chain, whose options and per-option checks are ordered cheapest-first so a non-matching option is dropped without running its regexes. The invalid-input row is large because failed `safeParse` defers error materialization until `.error` is read. `transform`/`refine` callbacks compile whether or not they capture (3-19x): a zero-capture one is inlined from its source, a capturing one is called by reference rather than costing the schema its compiled path — the cross-field refine row measures 2.5M → 13.7M, and captured transforms went from matching Zod (1.0x) to 2.5x. `superRefine` compiles as well, called through a reference to Zod's own payload wrapper (2.3M → 11.7M here, from a total fallback); only a `superRefine` with another check after it, raw `.check(fn)`, and `ctx`-taking or async transforms still delegate.
 
 `parse()` (throwing API) rides a zero-allocation fast path: medium object 2.4M → 10.2M ops/s (4.3x), large object (100 items) 18K → 1.4M ops/s (78x).
 
@@ -870,7 +852,7 @@ Additional optimizations: pre-compiled regex, per-type check ordering (a string'
 
 **Cheapest-first check ordering.** A fast check is one `&&` chain, so accepting input runs every conjunct whatever the order — but a _rejection_ stops at the first false one. Object properties, tuple positions, intersection sides and union options are therefore emitted in estimated-cost order, cheap type guards ahead of regex formats and nested containers. Valid input is unaffected; deciding that input does _not_ match gets much cheaper, which is what `.is()` guards, `z.union` probing and every failed `safeParse` actually do. Measured per validator (no harness overhead) on a 3-option union of objects declaring `{email, kind, note}`: an input matching the last option 102 ns → 39 ns (2.6x), one matching none 102 ns → 6 ns (16x); a 6-property object guard rejecting a wrong-typed field 38 ns → 5 ns (8x).
 
-**Object construction.** Where a fresh object must be produced — `stripUnknownKeys` — it is emitted as one object literal rather than assembled key by key. V8 stamps a literal out of a cached boilerplate map in a single allocation; adding keys one at a time walks a transition chain and re-checks the map on every store, which measured 8.1x slower on a 20-key shape. Keys that can be absent (optionals) are appended after the literal, in shape order, under zod's own presence rule.
+**Object construction.** A `z.object()` strips unknown keys, so every successful parse produces a fresh object; it is emitted as one object literal rather than assembled key by key. V8 stamps a literal out of a cached boilerplate map in a single allocation; adding keys one at a time walks a transition chain and re-checks the map on every store, which measured 8.1x slower on a 20-key shape. Keys that can be absent (optionals) are appended after the literal, in shape order, under zod's own presence rule.
 
 **Local bindings for called helpers.** Lean mode imports its shared helpers from the plugin's runtime module, and a bundler leaves those as module-scope `var`s. V8 folds a _local_ binding into a constant callee and inlines straight through `helper.call(...)`; a mutable module-scope one it will not, so the record fast path's per-key `__zcHop.call(o, k)` became a generic call. Aliasing such helpers into the IIFE once fixes it: measured on a plugin-transformed, esbuild-bundled artifact, a 5-key record went 34.6 ns → 9.2 ns and a 20-key record 157.3 ns → 23.1 ns. Only helpers invoked through `.call` need this — a direct call to an imported function, and an imported RegExp receiver, are both unaffected.
 

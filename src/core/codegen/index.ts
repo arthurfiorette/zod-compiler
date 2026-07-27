@@ -1,5 +1,6 @@
 import type { SchemaIR } from "../types.js";
 import type { CodeGenContext, CodeGenResult, CodegenMode, RecTargetGen } from "./context.js";
+import { generateBuild, rebuildsOutput } from "./build-path.js";
 import { declareFastTemps, emitRfDelegate, hasMutation } from "./context.js";
 import type { SharedSchemaPlan } from "./dedupe.js";
 import { createFastGen, generateFast } from "./fast-path.js";
@@ -161,6 +162,12 @@ export function generateValidator(
     fastExpr = `${fastFnName}(input)`;
   }
 
+  // Build Path: one pass that validates and assembles the stripped output,
+  // bailing on the first failure (see build-path). Null unless the schema
+  // rebuilds AND its only mutation is stripping AND the shape is modelled — so
+  // this emits nothing for the mutation-free schemas the compact branch takes.
+  const buildFnName = generateBuild(ir, ctx);
+
   const baseRefCount = options?.refCount ?? 0;
 
   // Compact mode: a mutation-free schema with a TOTAL fast path needs no
@@ -200,6 +207,37 @@ export function generateValidator(
     };
   }
 
+  // Compact + Build Path: same bargain for a stripping schema. The build pass
+  // still has to run (it produces the payload, which zod's schema would only
+  // reproduce by parsing again), but the compiled issue walk is what compact
+  // drops, and delegating that to the retained zod schema costs a few bytes.
+  if (
+    options?.compact === true &&
+    buildFnName !== null &&
+    ctx.buildFailName !== undefined &&
+    !hasNonRootTargets
+  ) {
+    const delegate = emitRfDelegate(ctx, baseRefCount);
+    ctx.usedHelpers.add("__zcFinZ");
+    const built = `__bd_${ctx.counter++}`;
+    return {
+      code: ["/* zod-compiler */", ...ctx.preamble].join("\n"),
+      functionDef: [
+        `function ${fnName}(input){`,
+        `var ${built}=${buildFnName}(input);`,
+        `if(${built}!==${ctx.buildFailName}){return{success:true,data:${built}};}`,
+        `return __zcFinZ(${delegate},input);`,
+        `}`,
+      ].join("\n"),
+      refCount: baseRefCount + 1,
+      usedHelpers: ctx.usedHelpers,
+      fastFnName: null,
+      fastTotal: false,
+      isFnName: fastFnName,
+      rootDelegateRefIndex: baseRefCount,
+    };
+  }
+
   // Host each non-root recursion target as a safeParse-shaped slow validator,
   // mirroring the root's eager body: collect issues, return success+data or a
   // deferred-error result. Always emitted (the slow path always exists); the
@@ -228,6 +266,52 @@ export function generateValidator(
   const buildCode = (): string => ["/* zod-compiler */", ...ctx.preamble].join("\n");
 
   const functionDefParts = [`function ${fnName}(input){`];
+
+  // Build Path: the schema's only mutation is stripping, so one pass can
+  // validate and assemble the output together and bail on the first failure,
+  // leaving the issue-producing walk deferred behind `.error` (see build-path).
+  // The fast check stays out of `safeParse` entirely — running it first would
+  // read every property twice — but it is still an EXACT acceptance predicate
+  // (stripping reshapes the output, never the verdict), so `.is()` installs it.
+  if (buildFnName !== null && ctx.buildFailName !== undefined) {
+    ctx.usedHelpers.add("__zcFinD");
+    const built = `__bd_${ctx.counter++}`;
+    // A self-recursive walk calls this validator BY NAME (slowRecursiveRef),
+    // and that binding exists only inside the named function expression — so
+    // there the walk stays a per-call closure. Everything else hosts it in the
+    // preamble, keeping safeParse to three statements. Mirrors the same split
+    // in the mutation-free branch below.
+    const recursive = slowCode.includes(fnName);
+    let deferred: string;
+    if (recursive) {
+      deferred = `__zcFinD(function(input){var _e=[];\nvar _d=input;\n${slowCode}\nreturn _e;},input)`;
+    } else {
+      const walkName = `__sw_${ctx.counter++}`;
+      ctx.preamble.push(
+        `function ${walkName}(input){var _e=[];\nvar _d=input;\n${slowCode}\nreturn _e;}`,
+      );
+      deferred = `__zcFinD(${walkName},input)`;
+    }
+    return {
+      code: buildCode(),
+      functionDef: [
+        `function ${fnName}(input){`,
+        `var ${built}=${buildFnName}(input);`,
+        `if(${built}!==${ctx.buildFailName}){return{success:true,data:${built}};}`,
+        `return ${deferred};`,
+        `}`,
+      ].join("\n"),
+      refCount: options?.refCount ?? 0,
+      usedHelpers: ctx.usedHelpers,
+      // No by-reference shortcut: `data` is the freshly built object, so
+      // parse() must go through safeParse rather than returning its input.
+      fastFnName: null,
+      // `fastTotal` qualifies `fastFnName`, which is null here; the predicate
+      // travels in `isFnName` instead.
+      fastTotal: false,
+      isFnName: fastFnName,
+    };
+  }
 
   if (fastExpr === "true") {
     // Schema always succeeds (any/unknown) — skip slow path entirely
@@ -302,9 +386,14 @@ export function generateValidator(
     };
   }
 
-  if (fastExpr !== null) {
+  if (fastExpr !== null && !rebuildsOutput(ir)) {
     // Partial fast path (default/catch/... present-value shortcut): the slow
     // path must run eagerly — it can succeed where the fast check failed.
+    //
+    // Withheld when the schema rebuilds its output: there the fast check is a
+    // sound VERDICT but says nothing about the payload, and `data:input` would
+    // hand back the unstripped input. Such schemas reach here only when the
+    // build path declined them, so the eager walk produces the output instead.
     functionDefParts.push(`if(${fastExpr}){return{success:true,data:input};}`);
   }
 

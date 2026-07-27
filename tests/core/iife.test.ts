@@ -105,7 +105,9 @@ describe("generateIIFE()", () => {
     const info = makeInfo("validateUser", simpleSchema);
     const iife = generateIIFE("UserSchema", info);
 
-    expect(iife).toMatch(/return __zcMkv\(safeParse_validateUser,UserSchema,__fc_\d+,__fc_\d+\);/);
+    // A stripping object rebuilds its output, so there is no by-reference
+    // parse shortcut (fc is null) — but `.is()` still gets the exact predicate.
+    expect(iife).toMatch(/return __zcMkv\(safeParse_validateUser,UserSchema,null,__fc_\d+\);/);
     expect(iife).not.toContain("var __w=");
     expect(iife).not.toContain("__w.schema=");
   });
@@ -116,7 +118,7 @@ describe("generateIIFE()", () => {
       const iife = generateIIFE("UserSchema", info, { zodCompat: false });
 
       expect(iife).toContain("/* @__PURE__ */");
-      expect(iife).toMatch(/return __zcMkv\(safeParse_validateUser,null,__fc_\d+,__fc_\d+\);/);
+      expect(iife).toMatch(/return __zcMkv\(safeParse_validateUser,null,null,__fc_\d+\);/);
       expect(iife).not.toContain("Object.create");
       expect(iife).not.toContain("var __w=");
     });
@@ -294,12 +296,15 @@ describe("generateIIFE() — runtime execution", () => {
     it("is the compiled fast-check itself for total schemas (zero allocation)", () => {
       const info = makeInfo("validateUser", simpleSchema);
       const validator = executeIIFE(info);
-      // The IIFE wires fc as the 4th __zcMkv arg, so `.is` IS that function —
-      // not a closure over safeParse. Identity-check via the generated source.
+      // The IIFE passes the predicate as the 4th __zcMkv arg, so `.is` IS that
+      // function — not a closure over safeParse. A stripping object rebuilds
+      // its output, so it has no by-reference `fc` (3rd arg null) while the
+      // predicate stays exact: stripping reshapes the payload, not the verdict.
       const iife = generateIIFE("Schema", info);
-      const fcName = /,(__fc_\d+),\1\)/.exec(iife)?.[1];
-      expect(fcName, "total schema should pass fc as the is arg").toBeTruthy();
+      const isName = /,null,(__fc_\d+)\)/.exec(iife)?.[1];
+      expect(isName, "total schema should pass its predicate as the is arg").toBeTruthy();
       expect(validator.is({ name: "Alice", age: 30 })).toBe(true);
+      expect(validator.is({ name: "Alice" })).toBe(false);
     });
 
     it("does NOT install a partial fast path as the guard (soundness, source-level)", () => {

@@ -71,7 +71,6 @@ function toTransformOptions(options?: ZodCompilerSwcOptions): TransformOptions {
     zodCompat: output === "schema" || output === "compact",
     compact: output === "compact",
     autoDiscover: (options?.schemas ?? "auto") === "auto",
-    stripUnknownKeys: options?.stripUnknownKeys,
     hoist: options?.hoist,
   };
 }

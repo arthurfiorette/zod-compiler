@@ -38,6 +38,13 @@ export interface CodeGenResult {
    */
   fastTotal: boolean;
   /**
+   * Hosted predicate installed as `.is()`, when it differs from `fastFnName`.
+   * A schema that rebuilds its output has no by-reference shortcut (so
+   * `fastFnName` is null) yet still has an exact acceptance predicate, because
+   * stripping reshapes the payload and never the verdict.
+   */
+  isFnName?: string | null;
+  /**
    * Compact mode only: the `__rf[N]` index this validator delegates its cold
    * error path to (the schema itself, captured as a fresh root RefEntry). When
    * set, the pipeline appends a `{ schema, accessPath: "" }` entry at this index
@@ -98,6 +105,10 @@ export interface CodeGenContext {
   effectFnCache?: Map<string, string>;
   /** Dedup cache for constant preamble declarations: initializer text → preamble var. */
   valueCache?: Map<string, string>;
+  /** Name of the build path's FAIL sentinel, declared once per validator. */
+  buildFailName?: string;
+  /** Hosted build-function name per recursion target refId, so back-edges resolve. */
+  buildRecNames?: Map<number, string>;
   /** Memo for estimateFastCost (size-gated fast-check extraction). Lazily created. */
   fastSizeCache?: WeakMap<SchemaIR, number>;
   /** Memo for estimateRuntimeCost (cheapest-first check ordering). Lazily created. */

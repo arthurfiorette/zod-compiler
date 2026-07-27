@@ -34,6 +34,7 @@ describe("dispatch", () => {
     expect(ir).toEqual({
       type: "object",
       properties: { name: { type: "string", checks: [] } },
+      stripUnknownKeys: true,
     });
   });
 
@@ -70,8 +71,10 @@ describe("dispatch", () => {
         user: {
           type: "object",
           properties: { name: { type: "string", checks: [] } },
+          stripUnknownKeys: true,
         },
       },
+      stripUnknownKeys: true,
     });
   });
 });

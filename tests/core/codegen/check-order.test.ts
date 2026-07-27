@@ -62,10 +62,11 @@ describe("fast-path check ordering", () => {
   });
 
   it("checks the cheaper intersection side first", () => {
-    const code = fastCheckOf(
-      z.intersection(z.object({ email: z.email() }), z.object({ id: z.string() })),
-    );
-    expect(posIn(code, '["id"]')).toBeLessThan(posIn(code, ".test("));
+    // Objects strip, and zod's parse-both-sides-then-merge cannot be
+    // reproduced by validating one value twice — so an intersection OF OBJECTS
+    // delegates to zod entirely. Order is still pinned for sides that compile.
+    const code = fastCheckOf(z.intersection(z.email(), z.string().min(1)));
+    expect(posIn(code, ".length>=1")).toBeLessThan(posIn(code, ".test("));
   });
 
   it("checks the cheaper tuple position first", () => {

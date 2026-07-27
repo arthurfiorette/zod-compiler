@@ -29,8 +29,6 @@ export interface CompileSchemasResult {
 export interface CompileSchemasOptions {
   /** "inline" for CLI .compiled.ts; "lean" for unplugin (imports from virtual:zod-compiler/runtime). */
   mode: CodegenMode;
-  /** Strip unknown keys from z.object() output, matching zod's default .parse(). */
-  stripUnknownKeys?: boolean | undefined;
   /**
    * Compact output (`output: "compact"`). Drop the compiled slow walk for
    * mutation-free, total-fast-path schemas and delegate their cold error path
@@ -76,9 +74,7 @@ export function compileSchemas(
   for (const s of schemas) {
     try {
       const refEntries: RefEntry[] = [];
-      const ir = extractSchema(s.schema, refEntries, {
-        stripUnknownKeys: options.stripUnknownKeys,
-      });
+      const ir = extractSchema(s.schema, refEntries);
       extracted.push({ exportName: s.exportName, schema: s.schema, ir, refEntries });
     } catch (err) {
       handle(s.exportName, err);

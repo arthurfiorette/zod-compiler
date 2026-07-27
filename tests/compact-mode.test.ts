@@ -170,8 +170,11 @@ describe("compact mode — codegen shape", () => {
       z.object({ name: z.string().min(1), age: z.number().int() }),
     );
     expect(result.rootDelegateRefIndex).toBe(0);
-    expect(result.fastTotal).toBe(true);
-    expect(result.fastFnName).not.toBeNull();
+    // A z.object() strips, so its payload comes from the build pass rather than
+    // a by-reference `fc` — but the predicate is still exact and drives `.is()`.
+    expect(result.fastFnName).toBeNull();
+    expect(result.isFnName).not.toBeNull();
+    expect(source).toMatch(/=__vb_\d+\(input\);/);
     expect(result.usedHelpers.has("__zcFinZ")).toBe(true);
     expect(source).toContain("__zcFinZ(");
     expect(source).toContain("__rfp_0");
@@ -272,7 +275,11 @@ describe("compact mode — runtime behavior", () => {
   it("parse / safeParse / .is behave like the compiled+zod combination", () => {
     const compiled = buildCompact(z.object({ name: z.string().min(2), age: z.number().int() }));
     const ok = { name: "Jane", age: 30 };
-    expect(compiled.parse(ok)).toBe(ok); // valid → input by reference (hot path)
+    // The object strips, so a valid parse returns the REBUILT payload, not the
+    // caller's object — and unknown keys never ride through.
+    expect(compiled.parse(ok)).toEqual(ok);
+    expect(compiled.parse(ok)).not.toBe(ok);
+    expect(compiled.parse({ ...ok, extra: 1 })).toEqual(ok);
     expect(compiled.safeParse(ok)).toEqual({ success: true, data: ok });
     expect(compiled.is(ok)).toBe(true);
     expect(compiled.is({ name: "x", age: 1.5 })).toBe(false);
@@ -329,16 +336,19 @@ describe("compact mode — interactions", () => {
     expect(withDefault.codegenResult.functionDef).not.toContain("__zcFinZ");
   });
 
-  it("does not delegate object schemas under stripUnknownKeys (strip mutates output)", () => {
+  it("delegates a stripping object's cold path while keeping its build pass", () => {
     const { schemas: results } = compileSchemas(
       [{ exportName: "Obj", schema: z.object({ a: z.string() }) }],
-      { mode: "lean", compact: true, stripUnknownKeys: true },
+      { mode: "lean", compact: true },
     );
     const [obj] = results;
     if (obj === undefined) throw new Error("expected a result");
-    // A strip object is a mutation node, so it keeps the compiled (rebuilding)
-    // path rather than delegating a by-reference result to zod.
-    expect(obj.codegenResult.rootDelegateRefIndex).toBeUndefined();
-    expect(obj.codegenResult.functionDef).not.toContain("__zcFinZ");
+    // The build pass has to stay — it produces the stripped payload, which zod
+    // would only reproduce by parsing again. What compact drops is the compiled
+    // issue walk, handing that to the retained zod schema.
+    expect(obj.codegenResult.rootDelegateRefIndex).toBe(0);
+    expect(obj.codegenResult.functionDef).toContain("__zcFinZ");
+    expect(obj.codegenResult.functionDef).toMatch(/=__vb_\d+\(input\);/);
+    expect(obj.codegenResult.functionDef).not.toContain("__sw_");
   });
 });

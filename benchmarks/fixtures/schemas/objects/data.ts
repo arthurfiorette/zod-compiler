@@ -76,3 +76,15 @@ export const validStrictRow: StrictRow = {
   isDefault: false,
   createdAt: new Date("2026-01-01T00:00:00Z"),
 };
+
+/**
+ * The overposting case: a client slipped extra keys into the payload. Both zod
+ * and the compiler drop them (z.object() strips), so this measures the rebuild
+ * against a payload that actually has something to strip.
+ */
+export const dirtyUser = {
+  ...validUser,
+  __extra: "injected",
+  internalId: 9001,
+  is_admin: true,
+};

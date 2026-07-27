@@ -17,7 +17,6 @@ interface WatchOptions {
   zodCompat?: boolean | undefined;
   compact?: boolean | undefined;
   autoDiscover?: boolean | undefined;
-  stripUnknownKeys?: boolean | undefined;
 }
 
 /** Dependencies for runWatch, injectable for testing. */
@@ -109,7 +108,6 @@ export async function runWatch(
         zodCompat: options.zodCompat,
         compact: options.compact,
         autoDiscover: options.autoDiscover,
-        stripUnknownKeys: options.stripUnknownKeys,
       });
       if (result) {
         logResult(result);
@@ -153,7 +151,6 @@ export async function runWatch(
           zodCompat: options.zodCompat,
           compact: options.compact,
           autoDiscover: options.autoDiscover,
-          stripUnknownKeys: options.stripUnknownKeys,
         });
         if (result) {
           logResult(result);

@@ -6,6 +6,7 @@ import {
   aotApiResponse,
   aotStrictRow,
   aotUser,
+  dirtyUser,
   invalidUser,
   StrictRowSchema,
   typiaValidateApiResponse,
@@ -101,5 +102,17 @@ describe("safeParse: strict object — DB row (rejects unknown keys)", () => {
   });
   bench("zod-compiler", () => {
     aotStrictRow.safeParse(validStrictRow);
+  });
+});
+
+describe("safeParse: medium object — extra keys stripped (overposting)", () => {
+  bench("zod", () => {
+    UserSchema.safeParse(dirtyUser);
+  });
+  bench("zod v3", () => {
+    v3UserSchema.safeParse(dirtyUser);
+  });
+  bench("zod-compiler", () => {
+    aotUser.safeParse(dirtyUser);
   });
 });

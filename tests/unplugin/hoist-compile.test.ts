@@ -42,7 +42,9 @@ describe("compileHoistedSchemas()", () => {
       "lean",
     );
     expect(compiled).toHaveLength(1);
-    expect(compiled[0]?.info.codegenResult.fastFnName).toBeTruthy();
+    // A stripping object has no by-reference `fastFnName`; its exact predicate
+    // (what `.is()` installs) is named separately.
+    expect(compiled[0]?.info.codegenResult.isFnName).toBeTruthy();
   });
 
   it("skips schemas with eager non-zod references (non-deterministic construction)", async () => {
@@ -108,7 +110,11 @@ describe("transformCode() — hoisted schema compilation", () => {
     };
     const schema = getRowSchema(1);
     const valid = { id: 7, name: "alice" };
-    expect(schema.parse(valid)).toBe(valid);
+    // A stripped object is rebuilt, so parse() returns a fresh equal object
+    // rather than the input — the caller's object is never handed back.
+    expect(schema.parse(valid)).toEqual(valid);
+    expect(schema.parse(valid)).not.toBe(valid);
+    expect(schema.parse({ ...valid, extra: 1 })).toEqual(valid);
     expect(schema.safeParse(valid).success).toBe(true);
     expect(schema.safeParse({ id: "x", name: 3 }).success).toBe(false);
     // zodCompat: the wrapper's prototype is the real zod schema

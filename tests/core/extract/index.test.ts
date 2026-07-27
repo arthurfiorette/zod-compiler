@@ -400,16 +400,20 @@ describe("extractSchema — intersection", () => {
     const ir = extractSchema(
       z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })),
     ) as IntersectionIR;
-    expect(ir.type).toBe("intersection");
-    expect(ir.left.type).toBe("object");
-    expect(ir.right.type).toBe("object");
+    // Both sides strip to their own declared keys, so zod's
+    // parse-both-sides-then-MERGE cannot be reproduced by validating the same
+    // value twice in sequence — the extractor hands the whole thing to zod.
+    expect(ir.type).toBe("fallback");
   });
 
   it("extracts .and() syntax", () => {
     const ir = extractSchema(
       z.object({ a: z.string() }).and(z.object({ b: z.number() })),
     ) as IntersectionIR;
-    expect(ir.type).toBe("intersection");
+    // Both sides strip to their own declared keys, so zod's
+    // parse-both-sides-then-MERGE cannot be reproduced by validating the same
+    // value twice in sequence — the extractor hands the whole thing to zod.
+    expect(ir.type).toBe("fallback");
   });
 });
 

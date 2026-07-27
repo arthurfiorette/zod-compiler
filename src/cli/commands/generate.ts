@@ -15,7 +15,6 @@ export interface GenerateOptions {
   zodCompat?: boolean | undefined;
   compact?: boolean | undefined;
   autoDiscover?: boolean | undefined;
-  stripUnknownKeys?: boolean | undefined;
 }
 
 export interface GenerateFileResult {
@@ -99,7 +98,6 @@ export async function generateFile(
     zodCompat?: boolean | undefined;
     compact?: boolean | undefined;
     autoDiscover?: boolean | undefined;
-    stripUnknownKeys?: boolean | undefined;
   },
 ): Promise<GenerateFileResult | null> {
   const relPath = path.relative(process.cwd(), filePath);
@@ -127,7 +125,6 @@ export async function generateFile(
 
   const { schemas: codegenResults, shared } = compileSchemas(schemas, {
     mode: "inline",
-    stripUnknownKeys: options?.stripUnknownKeys,
     compact: options?.compact,
   });
 
@@ -166,7 +163,6 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
         zodCompat: options.zodCompat,
         compact: options.compact,
         autoDiscover: options.autoDiscover,
-        stripUnknownKeys: options.stripUnknownKeys,
       });
     } catch (err) {
       logger.error(getErrorMessage(err));

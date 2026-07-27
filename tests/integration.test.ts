@@ -16,14 +16,23 @@ const __zcFin = new Function("__zcZodError", `${FAIL_CLASS_DECL}${FIN_DECL}; ret
  * Returns a safeParse function from the generated code.
  */
 function compileZodSchema(schema: z.ZodType, name = "test") {
-  const ir = extractSchema(schema);
-  const result = generateValidator(ir, name);
+  // Refs are collected so schemas that delegate to Zod (an intersection of
+  // objects, say) resolve their `__rf[]` entries here exactly as they do in a
+  // real build — without them the generated delegation has nothing to call.
+  const refEntries: RefEntry[] = [];
+  const ir = extractSchema(schema, refEntries);
+  const result = generateValidator(ir, name, { refCount: refEntries.length });
   const fn = new Function(
     "__zcZodError",
     "__zcFin",
+    "__rf",
     `"use strict";${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${result.code}\nreturn ${result.functionDef};`,
   );
-  return fn(ZodRealError, __zcFin) as (input: unknown) => {
+  return fn(
+    ZodRealError,
+    __zcFin,
+    refEntries.map((e) => e.schema),
+  ) as (input: unknown) => {
     success: boolean;
     data?: unknown;
     error?: { issues: unknown[] };

@@ -264,11 +264,12 @@ function fastObjectBody(ir: ObjectIR, g: FastGen, skipKey?: string): string[] | 
 }
 
 export function fastObject(ir: ObjectIR, g: FastGen): string | null {
-  // Strip rebuilds a fresh output, so there is no by-reference fast path: fall
-  // to the eager slow build (mirrors how .trim()/overwrite disables fastString).
-  // Disabling it here also propagates up — any container holding a strip object
-  // loses its fast path too, and `.is()` derives from safeParse(input).success.
-  if (ir.stripUnknownKeys) return null;
+  // A strip object still gets an expression. Stripping reshapes the OUTPUT, not
+  // the verdict, so this remains an exact acceptance predicate — which is what
+  // `.is()` installs, and what the build path reuses to validate the subtrees it
+  // passes through by reference. What it must NOT do is stand in for the parse
+  // result: generateValidator withholds the `data:input` shortcut whenever the
+  // schema rebuilds (see rebuildsOutput).
   const x = g.input;
   const body = fastObjectBody(ir, g, g.discSkipKey);
   if (body === null) return null;

@@ -72,7 +72,6 @@ async function compileOne(
   id: string,
   mode: CodegenMode,
   moduleCache: Map<string, Promise<Record<string, unknown>>>,
-  stripUnknownKeys: boolean | undefined,
 ): Promise<CompiledHoistedSchema | null> {
   const analysis = analyzeHoistedExpression(schema.text);
   if (analysis === null) return null;
@@ -119,7 +118,7 @@ async function compileOne(
     if (!isZodSchema(value)) return null;
 
     const refEntries: RefEntry[] = [];
-    const ir = extractSchema(value, refEntries, { stripUnknownKeys });
+    const ir = extractSchema(value, refEntries);
     // A root fallback compiles to a pure delegation wrapper — strictly worse
     // than leaving the plain hoisted construction in place.
     if (ir.type === "fallback") return null;
@@ -153,13 +152,12 @@ export async function compileHoistedSchemas(
   code: string,
   id: string,
   mode: CodegenMode,
-  stripUnknownKeys?: boolean,
 ): Promise<CompiledHoistedSchema[]> {
   const { details } = collectImportBindings(code);
   const moduleCache = new Map<string, Promise<Record<string, unknown>>>();
   const compiled: CompiledHoistedSchema[] = [];
   for (const schema of schemas) {
-    const result = await compileOne(schema, details, id, mode, moduleCache, stripUnknownKeys);
+    const result = await compileOne(schema, details, id, mode, moduleCache);
     if (result !== null) compiled.push(result);
   }
   return compiled;

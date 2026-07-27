@@ -9,9 +9,9 @@ export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   //   preserved: valid strict data has no extras, so no clone is needed.
   // - z.looseObject (catchall: unknown/any) matches compiled pass-through.
   // - .catchall(schema) validates unknown keys against a schema (ObjectIR.catchall).
-  // - default z.object() (no catchall): pass-through by default, but STRIPS
-  //   unknown keys (zod's default) when the `stripUnknownKeys` build option is
-  //   on (ObjectIR.stripUnknownKeys). looseObject/strictObject are unaffected.
+  // - default z.object() (no catchall): STRIPS unknown keys, as zod does
+  //   (ObjectIR.stripUnknownKeys). looseObject/strictObject are unaffected —
+  //   the first keeps extras by design, the second rejects them outright.
   const catchallType = def.catchall?._zod?.def?.type;
   const strict = catchallType === "never";
   const valueCatchall =
@@ -22,8 +22,7 @@ export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   if (valueCatchall?.type === "fallback") return ctx.fallback("unsupported");
   const catchallFlag = valueCatchall ? { catchall: valueCatchall } : {};
   const strictFlag = strict ? { strict: true } : {};
-  const stripFlag =
-    !def.catchall && ctx.options.stripUnknownKeys === true ? { stripUnknownKeys: true } : {};
+  const stripFlag = def.catchall ? {} : { stripUnknownKeys: true };
 
   // Null-prototype: on a normal object `properties["__proto__"] = ir` sets the
   // prototype instead of defining a key, so a shape declaring `__proto__` (only

@@ -22,19 +22,17 @@ describe("compileSchemas", () => {
     expect(results[1]?.codegenResult.functionDef).toContain("safeParse_validatePost");
   });
 
-  it("threads stripUnknownKeys into extraction", () => {
+  it("compiles a z.object() to the stripping build path", () => {
     const schemas = [{ exportName: "validateUser", schema: z.object({ a: z.string() }) }];
+    const { schemas: out } = compileSchemas(schemas, { mode: "inline" });
+    const result = out[0]?.codegenResult;
 
-    const off = compileSchemas(schemas, { mode: "inline" });
-    // Default: mutation-free object takes the by-reference fast path.
-    expect(off.schemas[0]?.codegenResult.functionDef).toContain("data:input");
-    expect(off.schemas[0]?.codegenResult.functionDef).not.toContain("__zcHop.call");
-
-    const on = compileSchemas(schemas, { mode: "inline", stripUnknownKeys: true });
-    // Stripping: rebuild a fresh object from the declared keys (one literal for
-    // the always-present leading run); no by-reference fast path.
-    expect(on.schemas[0]?.codegenResult.functionDef).toContain('={"a":');
-    expect(on.schemas[0]?.codegenResult.functionDef).not.toContain("data:input");
+    // safeParse runs the build pass and hands back what it produced — never the
+    // input, which would carry the unknown keys stripping exists to drop.
+    expect(result?.functionDef).toMatch(/=__vb_\d+\(input\);/);
+    expect(result?.functionDef).not.toContain("data:input");
+    // The rebuild itself lives in the hosted build function.
+    expect(result?.code).toContain('={"a":');
   });
 
   it("collects refEntries independently per schema", () => {

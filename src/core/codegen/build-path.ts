@@ -1,0 +1,541 @@
+/**
+ * Build Path: one uninstrumented pass that VALIDATES and BUILDS the stripped
+ * output together, abandoning the whole parse at the first failing check.
+ *
+ * `z.object()` strips unknown keys, so a successful parse cannot return the
+ * input by reference — it must produce a fresh object. That rules out the Fast
+ * Path (whose contract is `data === input`), and before this the only remaining
+ * option was the eager slow walk: a fully instrumented traversal that collects
+ * issues on every parse, valid or not.
+ *
+ * Two passes are wasteful in either direction. Validating first and building
+ * afterwards reads every property twice (measured 29.7 ns vs 21.6 for the slow
+ * walk on a 6-field object). Building with issue collection pays the
+ * instrumentation even when nothing fails. Doing both in ONE pass, with a
+ * sentinel instead of an issues array, beats both — and a failure costs only
+ * the checks up to the first bad one, because the issue-producing walk is
+ * deferred into `.error` exactly as `__zcFinD` does for mutation-free schemas:
+ *
+ *              object clean   object invalid   array(8) invalid
+ *   slow walk       21.6 ns         30.4 ns           197.5 ns
+ *   build path      18.1 ns          7.7 ns             9.8 ns
+ *
+ * The generator is deliberately partial. A subtree that rebuilds nothing is
+ * validated with its existing Fast Path expression and passed through by
+ * reference, so only genuinely rebuilding containers need code here; anything
+ * else returns null and keeps the eager walk. Callers must also confirm
+ * {@link mutatesBeyondStrip} is false — coerce/default/transform/superRefine
+ * rewrite values, which this pass does not model.
+ */
+
+import type { ObjectIR, SchemaIR } from "../types.js";
+import type { CodeGenContext, FastScope } from "./context.js";
+import {
+  declareFastTemps,
+  emitRuntimeHelper,
+  emitTemp,
+  escapeString,
+  keyMembershipTest,
+  rejectsUndefined,
+} from "./context.js";
+import { createFastGen, generateFast } from "./fast-path.js";
+import { EXTRACT_CAP, estimateFastCost, MIN_EXTRACT, predictedInlineSize } from "./fast-size.js";
+import { ZC_HOP_DECL } from "./issue-decls.js";
+
+/** Statements that leave the built value in `value`, or `return <FAIL>` on failure. */
+interface Built {
+  code: string;
+  value: string;
+}
+
+interface BuildGen {
+  ctx: CodeGenContext;
+  /** Identifier of the per-validator FAIL sentinel. */
+  fail: string;
+  /** `var` temps and running emitted size of the function being assembled. */
+  scope: FastScope;
+  /**
+   * May THIS node be hosted in its own function? False for the node a hosted
+   * build was created for — it already IS that function, so re-hosting it would
+   * recurse forever. Children are always extractable, letting an oversized
+   * helper split further.
+   */
+  extractable: boolean;
+  /** Nodes of the root schema that rebuild (see rebuildSet). */
+  rebuilds: ReadonlySet<SchemaIR>;
+}
+
+/**
+ * Which nodes of `root` produce a value that is not their input — i.e. are, or
+ * contain, a stripping object. Everything else can be validated in place and
+ * passed through, which is what keeps this generator small.
+ *
+ * Computed as a fixpoint rather than a plain walk because of recursion: a
+ * `recursiveRef` is a back-edge with no children, so a local walk reads false
+ * for it and would pass the whole recursive subtree through by reference —
+ * leaving every nested value unstripped while the outermost one was rebuilt.
+ * Resolving the ref against its target closes the cycle, and iterating to a
+ * fixpoint settles the mutual dependency between the two.
+ */
+function rebuildSet(root: SchemaIR): ReadonlySet<SchemaIR> {
+  const targets = new Map<number, SchemaIR>([[0, root]]);
+  const nodes: SchemaIR[] = [];
+  const seen = new Set<SchemaIR>();
+  const collect = (node: SchemaIR): void => {
+    if (seen.has(node)) return;
+    seen.add(node);
+    nodes.push(node);
+    if (node.type === "recursionTarget") targets.set(node.refId, node.inner);
+    for (const child of children(node)) collect(child);
+  };
+  collect(root);
+
+  const rebuilds = new Set<SchemaIR>();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const node of nodes) {
+      if (rebuilds.has(node)) continue;
+      const target = node.type === "recursiveRef" ? targets.get(node.refId ?? 0) : undefined;
+      const rebuild =
+        (node.type === "object" && node.stripUnknownKeys === true) ||
+        (target !== undefined && rebuilds.has(target)) ||
+        children(node).some((child) => rebuilds.has(child));
+      if (rebuild) {
+        rebuilds.add(node);
+        changed = true;
+      }
+    }
+  }
+  return rebuilds;
+}
+
+/** Does `ir`, taken as a whole schema, produce a value that is not its input? */
+export function rebuildsOutput(ir: SchemaIR): boolean {
+  return rebuildSet(ir).has(ir);
+}
+
+/**
+ * True when the subtree mutates for any reason OTHER than stripping — coerce,
+ * `.default()`, `.catch()`, `.transform()`, `.trim()`, `superRefine`. Those
+ * rewrite values rather than merely reshaping objects, so the build pass (which
+ * only ever copies validated values) cannot reproduce them and the schema keeps
+ * the eager walk.
+ */
+function mutatesBeyondStrip(ir: SchemaIR): boolean {
+  return mutatesHere(ir) || children(ir).some(mutatesBeyondStrip);
+}
+
+/**
+ * Does this node rewrite values on its own account (ignoring its children, and
+ * ignoring the reshaping a strip object does)? Mirrors the node-local half of
+ * `hasMutation`; the recursion above supplies the other half.
+ */
+function mutatesHere(ir: SchemaIR): boolean {
+  switch (ir.type) {
+    case "string":
+      return (
+        ir.coerce === true ||
+        superRefines(ir.checks) ||
+        ir.checks.some(
+          (c) =>
+            c.kind === "overwrite_effect" || (c.kind === "string_format" && c.format === "url"),
+        )
+      );
+    case "number":
+      return ir.coerce === true || superRefines(ir.checks);
+    case "boolean":
+    case "bigint":
+    case "date":
+      return ir.coerce === true;
+    case "default":
+    case "catch":
+    case "effect":
+    case "fallback":
+    case "stringBool":
+      return true;
+    case "object":
+    case "array":
+      return superRefines(ir.checks);
+    default:
+      return false;
+  }
+}
+
+function superRefines(checks: readonly { kind: string }[] | undefined): boolean {
+  return checks !== undefined && checks.some((c) => c.kind === "super_refine_effect");
+}
+
+function children(ir: SchemaIR): readonly SchemaIR[] {
+  switch (ir.type) {
+    case "object":
+      return ir.catchall
+        ? [...Object.values(ir.properties), ir.catchall]
+        : Object.values(ir.properties);
+    case "array":
+      return [ir.element];
+    case "tuple":
+      return ir.rest === null ? ir.items : [...ir.items, ir.rest];
+    case "record":
+    case "map":
+      return [ir.keyType, ir.valueType];
+    case "set":
+      return [ir.valueType];
+    case "union":
+    case "discriminatedUnion":
+      return ir.options;
+    case "intersection":
+      return [ir.left, ir.right];
+    case "optional":
+    case "nullable":
+    case "readonly":
+    case "default":
+    case "catch":
+    case "effect":
+    case "recursionTarget":
+      return [ir.inner];
+    case "pipe":
+      return [ir.in, ir.out];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Host the whole schema as `function NAME(input){…}` returning the built value
+ * or the FAIL sentinel. Returns the function name, or null when the schema is
+ * not expressible as a single build pass.
+ */
+export function generateBuild(ir: SchemaIR, ctx: CodeGenContext): string | null {
+  const rebuilds = rebuildSet(ir);
+  if (!rebuilds.has(ir) || mutatesBeyondStrip(ir)) return null;
+  const fail = emitFailSentinel(ctx);
+  const scope: FastScope = { temps: [], used: 0 };
+  const built = build(ir, "input", { ctx, extractable: false, fail, rebuilds, scope });
+  if (built === null) return null;
+  const name = emitTemp(ctx, "vb");
+  ctx.preamble.push(
+    `function ${name}(input){${declareFastTemps(scope)}${built.code}return ${built.value};}`,
+  );
+  return name;
+}
+
+/** One `{}` per validator, compared by identity — no parse output can equal it. */
+function emitFailSentinel(ctx: CodeGenContext): string {
+  if (ctx.buildFailName === undefined) {
+    ctx.buildFailName = `__bf_${ctx.counter++}`;
+    ctx.preamble.push(`var ${ctx.buildFailName}={};`);
+  }
+  return ctx.buildFailName;
+}
+
+/**
+ * Statements producing the built value of `ir` read from `input`, or null.
+ *
+ * Size-gated exactly like the fast path: once inlining `ir` would push the
+ * function being assembled past EXTRACT_CAP, the sub-build is hosted as its own
+ * `__vb_N(p)` returning value-or-FAIL and replaced by a call. Without this a
+ * deeply nested schema emits one enormous build function — measured at 113 KB
+ * and 354 KB on the deep fixtures — far past the bytecode size where V8 stops
+ * running TurboFan on it, which would forfeit the speed this path exists for.
+ */
+function build(ir: SchemaIR, input: string, g: BuildGen): Built | null {
+  // Resolved before the passthrough shortcut below. A back-edge carries no
+  // children, so `rebuildsOutput` reads false for it — and passing it through by
+  // reference would leave every nested recursive value unstripped while the
+  // outermost one was rebuilt.
+  if (ir.type === "recursiveRef") return buildRecursiveCall(ir.refId ?? 0, input, g);
+  if (ir.type === "recursionTarget") return buildRecursionTarget(ir, input, g);
+  if (!g.rebuilds.has(ir)) return passthrough(ir, input, g);
+
+  const cache = (g.ctx.fastSizeCache ??= new WeakMap<SchemaIR, number>());
+  if (
+    g.extractable &&
+    g.scope.used + predictedInlineSize(ir, input.length, cache) > EXTRACT_CAP &&
+    (g.scope.used > EXTRACT_CAP || estimateFastCost(ir, cache) >= MIN_EXTRACT)
+  ) {
+    const hosted = hostBuild(ir, g);
+    if (hosted !== null) {
+      const slot = local(g, "bh");
+      const code = `${slot}=${hosted}(${input});if(${slot}===${g.fail})return ${g.fail};`;
+      g.scope.used += code.length;
+      return { code, value: slot };
+    }
+  }
+
+  // This node's extraction decision is made; its descendants get to make their
+  // own, so an oversized hosted helper keeps splitting.
+  const before = g.scope.used;
+  const out = buildInline(ir, input, { ...g, extractable: true });
+  if (out !== null) g.scope.used = before + out.code.length;
+  return out;
+}
+
+/** Host `ir`'s build in its own function over a fresh parameter; returns its name. */
+function hostBuild(ir: SchemaIR, g: BuildGen): string | null {
+  const param = emitTemp(g.ctx, "bp");
+  const scope: FastScope = { temps: [], used: 0 };
+  const inner = build(ir, param, { ...g, extractable: false, scope });
+  if (inner === null) return null;
+  const name = emitTemp(g.ctx, "vb");
+  g.ctx.preamble.push(
+    `function ${name}(${param}){${declareFastTemps(scope)}${inner.code}return ${inner.value};}`,
+  );
+  return name;
+}
+
+function buildInline(ir: SchemaIR, input: string, g: BuildGen): Built | null {
+  switch (ir.type) {
+    case "object":
+      return buildObject(ir, input, g);
+    case "array":
+      return buildArray(ir, input, g);
+    case "tuple":
+      return buildTuple(ir, input, g);
+    case "record":
+      return buildRecord(ir, input, g);
+    case "optional":
+      return buildSentinel(ir.inner, input, g, "===undefined", "undefined");
+    case "nullable":
+      return buildSentinel(ir.inner, input, g, "===null", "null");
+    case "readonly":
+      return build(ir.inner, input, g);
+    case "union":
+    case "discriminatedUnion":
+      return buildUnion(ir, input, g);
+    default:
+      // A rebuilding intersection, map or set: expressible in principle, but
+      // each needs its own output-shaping rules, so they keep the eager walk
+      // until there is a measured reason to add them.
+      return null;
+  }
+}
+
+/**
+ * Host the target's build once under a name registered BEFORE its body is
+ * generated, so the back-edges inside that body resolve to it.
+ */
+function buildRecursionTarget(
+  ir: SchemaIR & { type: "recursionTarget" },
+  input: string,
+  g: BuildGen,
+): Built | null {
+  const table = (g.ctx.buildRecNames ??= new Map<number, string>());
+  if (!table.has(ir.refId)) {
+    const name = emitTemp(g.ctx, "vbr");
+    table.set(ir.refId, name);
+    const param = emitTemp(g.ctx, "bp");
+    const scope: FastScope = { temps: [], used: 0 };
+    const inner = build(ir.inner, param, { ...g, extractable: false, scope });
+    if (inner === null) {
+      table.delete(ir.refId);
+      return null;
+    }
+    g.ctx.preamble.push(
+      `function ${name}(${param}){${declareFastTemps(scope)}${inner.code}return ${inner.value};}`,
+    );
+  }
+  return buildRecursiveCall(ir.refId, input, g);
+}
+
+/** Call the hosted build for a recursion target, propagating its FAIL. */
+function buildRecursiveCall(refId: number, input: string, g: BuildGen): Built | null {
+  const name = g.ctx.buildRecNames?.get(refId);
+  if (name === undefined) return null;
+  const slot = local(g, "bh");
+  return {
+    code: `${slot}=${name}(${input});if(${slot}===${g.fail})return ${g.fail};`,
+    value: slot,
+  };
+}
+
+/**
+ * Try each option in declaration order and take the first that builds — which
+ * is what zod's union does with the first option that parses.
+ *
+ * Every option is HOSTED rather than inlined, and that is load-bearing: a
+ * failing build signals with `return FAIL`, which inside the enclosing function
+ * would abandon the whole parse instead of moving on to the next option. Behind
+ * a call, the same signal is just a value to test.
+ *
+ * A discriminated union gets the same treatment rather than a switch: the
+ * options still have to be probed by call, and its dispatch advantage is
+ * already spent by the enclosing container's own work.
+ */
+function buildUnion(
+  ir: SchemaIR & { type: "discriminatedUnion" | "union" },
+  input: string,
+  g: BuildGen,
+): Built | null {
+  const hosted: string[] = [];
+  for (const option of ir.options) {
+    const fn = g.rebuilds.has(option) ? hostBuild(option, g) : hostPassthrough(option, g);
+    if (fn === null) return null;
+    hosted.push(fn);
+  }
+  if (hosted.length === 0) return null;
+
+  const out = local(g, "bu");
+  let code = `${out}=${hosted[0] as string}(${input});`;
+  for (const fn of hosted.slice(1)) {
+    code += `if(${out}===${g.fail}){${out}=${fn}(${input});}`;
+  }
+  code += `if(${out}===${g.fail})return ${g.fail};`;
+  return { code, value: out };
+}
+
+/**
+ * Host a non-rebuilding option as `value-or-FAIL`, so a union can probe it with
+ * the same protocol as a rebuilding one.
+ */
+function hostPassthrough(ir: SchemaIR, g: BuildGen): string | null {
+  const param = emitTemp(g.ctx, "bp");
+  const scope: FastScope = { temps: [], used: 0 };
+  const expr = generateFast(ir, createFastGen(param, g.ctx, true, scope));
+  if (expr === null) return null;
+  const name = emitTemp(g.ctx, "vp");
+  g.ctx.preamble.push(
+    `function ${name}(${param}){${declareFastTemps(scope)}return ${expr === "true" ? param : `(${expr})?${param}:${g.fail}`};}`,
+  );
+  return name;
+}
+
+/** Validate in place with the Fast Path and hand the input straight back. */
+function passthrough(ir: SchemaIR, input: string, g: BuildGen): Built | null {
+  const scoped = createFastGen(input, g.ctx, true, g.scope);
+  const expr = generateFast(ir, scoped);
+  if (expr === null) return null;
+  return { code: expr === "true" ? "" : `if(!(${expr}))return ${g.fail};`, value: input };
+}
+
+/**
+ * Rebuild from the declared keys. Sound for a stripping object (that IS the
+ * output) and for a strict one (unknown keys are rejected, so the declared keys
+ * are the whole key set). A loose object or one with a `.catchall()` keeps keys
+ * this pass does not enumerate, so those bail.
+ */
+function buildObject(ir: ObjectIR, input: string, g: BuildGen): Built | null {
+  if (ir.catchall !== undefined) return null;
+  if (ir.stripUnknownKeys !== true && ir.strict !== true) return null;
+  if (ir.checks !== undefined && ir.checks.length > 0) return null;
+  if (ir.suppressAbsentKeys !== undefined && ir.suppressAbsentKeys.length > 0) return null;
+
+  let code = `if(typeof ${input}!=="object"||${input}===null||Array.isArray(${input}))return ${g.fail};`;
+
+  if (ir.strict === true) {
+    const keyVar = local(g, "bk");
+    code += `for(${keyVar} in ${input}){if(!(${keyMembershipTest(g.ctx, Object.keys(ir.properties), keyVar)}))return ${g.fail};}`;
+  }
+
+  const slots: { always: boolean; keyStr: string; value: string }[] = [];
+  for (const [key, propIR] of Object.entries(ir.properties)) {
+    const keyStr = escapeString(key);
+    const slot = local(g, "bv");
+    code += `${slot}=${input}[${keyStr}];`;
+    const propBuilt = build(propIR, slot, g);
+    if (propBuilt === null) return null;
+    code += propBuilt.code;
+    slots.push({ always: rejectsUndefined(propIR), keyStr, value: propBuilt.value });
+  }
+
+  // Same assembly the eager strip walk uses: the longest LEADING run of
+  // always-present keys goes into one object literal (V8 stamps it from a
+  // cached boilerplate map in a single allocation), and everything after the
+  // first conditional key is appended so insertion order still matches zod.
+  // The per-key test is zod's own — keep the key when the parsed value is
+  // defined, or when it was present on the input at all.
+  const out = local(g, "bo");
+  const literal: string[] = [];
+  let appends = "";
+  let leading = true;
+  for (const slot of slots) {
+    if (leading && slot.always) {
+      literal.push(`${slot.keyStr}:${slot.value}`);
+      continue;
+    }
+    leading = false;
+    appends += slot.always
+      ? `${out}[${slot.keyStr}]=${slot.value};`
+      : `if(${slot.value}!==undefined||(${slot.keyStr} in ${input})){${out}[${slot.keyStr}]=${slot.value};}`;
+  }
+  code += `${out}={${literal.join(",")}};${appends}`;
+  return { code, value: out };
+}
+
+function buildArray(ir: SchemaIR & { type: "array" }, input: string, g: BuildGen): Built | null {
+  if (ir.checks.length > 0) return null;
+  const out = local(g, "ba");
+  const index = local(g, "bi");
+  const elem = local(g, "be");
+  const inner = build(ir.element, elem, g);
+  if (inner === null) return null;
+  const code =
+    `if(!Array.isArray(${input}))return ${g.fail};` +
+    `${out}=new Array(${input}.length);` +
+    `for(${index}=0;${index}<${input}.length;${index}++){` +
+    `${elem}=${input}[${index}];${inner.code}${out}[${index}]=${inner.value};}`;
+  return { code, value: out };
+}
+
+function buildTuple(ir: SchemaIR & { type: "tuple" }, input: string, g: BuildGen): Built | null {
+  // Trailing-optional and rest handling shape the output length; keep those on
+  // the eager walk rather than restating the rules here.
+  if (ir.rest !== null) return null;
+  if (ir.items.some((item) => !rejectsUndefined(item))) return null;
+
+  let code = `if(!Array.isArray(${input})||${input}.length!==${ir.items.length})return ${g.fail};`;
+  const values: string[] = [];
+  for (const [index, itemIR] of ir.items.entries()) {
+    const slot = local(g, "bt");
+    code += `${slot}=${input}[${index}];`;
+    const inner = build(itemIR as SchemaIR, slot, g);
+    if (inner === null) return null;
+    code += inner.code;
+    values.push(inner.value);
+  }
+  const out = local(g, "bl");
+  code += `${out}=[${values.join(",")}];`;
+  return { code, value: out };
+}
+
+function buildRecord(ir: SchemaIR & { type: "record" }, input: string, g: BuildGen): Built | null {
+  const plainStringKey =
+    ir.keyType.type === "string" && ir.keyType.checks.length === 0 && ir.keyType.coerce !== true;
+  if (!plainStringKey) return null;
+
+  const out = local(g, "br");
+  const keyVar = local(g, "brk");
+  const valVar = local(g, "brv");
+  const inner = build(ir.valueType, valVar, g);
+  if (inner === null) return null;
+  const hop = emitRuntimeHelper(g.ctx, "__zcHop", ZC_HOP_DECL);
+  const code =
+    `if(typeof ${input}!=="object"||${input}===null||Array.isArray(${input}))return ${g.fail};` +
+    `${out}={};` +
+    `for(${keyVar} in ${input}){if(${hop}.call(${input},${keyVar})){` +
+    `${valVar}=${input}[${keyVar}];${inner.code}${out}[${keyVar}]=${inner.value};}}`;
+  return { code, value: out };
+}
+
+/** `optional` / `nullable` around a rebuilding inner: pass the sentinel through. */
+function buildSentinel(
+  innerIR: SchemaIR,
+  input: string,
+  g: BuildGen,
+  test: string,
+  sentinel: string,
+): Built | null {
+  const inner = build(innerIR, input, g);
+  if (inner === null) return null;
+  const out = local(g, "bw");
+  return {
+    code: `if(${input}${test}){${out}=${sentinel};}else{${inner.code}${out}=${inner.value};}`,
+    value: out,
+  };
+}
+
+/** Allocate a `var` the hosted build function declares. */
+function local(g: BuildGen, prefix: string): string {
+  const name = emitTemp(g.ctx, prefix);
+  g.scope.temps.push(name);
+  return name;
+}

@@ -22,6 +22,13 @@
  *     recursively closed, so these trees also carry no `default`/`catch`/
  *     `coerce`/`effect`/`fallback` nodes: no per-export `__rf[]` reference can
  *     leak into a shared body, and the walk never writes back an output value.
+ *
+ *     That last clause is what excludes a genuine `z.object()`: it strips, so
+ *     its walk has to PRODUCE the rebuilt object, and a shared body — which
+ *     returns nothing and writes nothing back — cannot deliver it. Object
+ *     shapes that pass their input through unchanged are unaffected, so
+ *     `z.strictObject()`, `z.looseObject()` and `.catchall()` shapes still
+ *     share, as do tuples, records, unions and arrays of them.
  */
 
 import type { SchemaIR } from "../types.js";

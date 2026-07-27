@@ -178,8 +178,9 @@ export function generateIIFE(
   const schemaArg = zodCompat ? schemaExpr : "null";
   const fcArg = codegenResult.fastFnName ?? "null";
   // `.is()` gets the fast-check directly only when it is a total predicate;
-  // partial/none falls back to safeParse().success inside __zcMkv.
-  const isArg = codegenResult.fastTotal ? fcArg : "null";
+  // partial/none falls back to safeParse().success inside __zcMkv. A rebuilding
+  // schema has no by-reference `fc` but still names its predicate separately.
+  const isArg = codegenResult.isFnName ?? (codegenResult.fastTotal ? fcArg : "null");
 
   return [
     "/* @__PURE__ */ (() => {",

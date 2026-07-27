@@ -1,11 +1,15 @@
 /**
  * Known divergences from Zod — intentional tradeoffs the compiler does NOT
- * close, all rooted in its zero-allocation design: a mutation-free schema
- * returns the validated input BY REFERENCE on success (see generateValidator's
- * `return{success:true,data:input}` path) and iterates objects/records with an
- * allocation-free `for-in`. Matching Zod here would mean allocating a fresh
- * output object (or a Reflect.ownKeys array) on every successful parse — the
- * exact cost the compiler exists to avoid.
+ * close, all rooted in its zero-allocation design: a schema that reshapes
+ * nothing returns the validated input BY REFERENCE on success (see
+ * generateValidator's `return{success:true,data:input}` path) and iterates
+ * objects/records with an allocation-free `for-in`. Matching Zod here would
+ * mean allocating a fresh output on every successful parse — the exact cost the
+ * compiler exists to avoid.
+ *
+ * `z.object()` is NOT among these: it strips unknown keys like Zod, rebuilding
+ * its output in one validate-and-build pass (see build-path.ts). What remains
+ * below are containers Zod rebuilds and the compiler still passes through.
  *
  * Each gap is pinned with an explicit dual assertion (Zod's behavior AND the
  * compiler's) so the suite stays green and documents reality. If a future
@@ -18,94 +22,10 @@
  */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { compileLikeProduction, expectParity } from "./parity-harness.js";
+import { compileLikeProduction } from "./parity-harness.js";
 
 /**
- * 1. UNKNOWN-KEY STRIPPING.
- *
- * Zod's default `z.object()` strips unknown keys (only `z.looseObject()` keeps
- * them, `z.strictObject()` errors). The compiler returns the validated input by
- * reference whenever no property mutates (src/core/codegen/schemas/object.ts
- * clones only when `Object.values(properties).some(hasMutation)`), so unknown
- * keys — including `__proto__`, symbol keys, and inherited enumerables — pass
- * straight through. Observable, security-relevant (overposting), and systemic:
- * it affects every plain object in every position. Closing it means rebuilding
- * the object from only the known keys on every successful parse.
- *
- * This is the DEFAULT behavior. The opt-in `stripUnknownKeys` build option
- * rebuilds from the known keys for full Zod parity; these pins compile with the
- * option OFF, so they stay valid. tests/strip-unknown-keys.test.ts is the
- * opted-in parity suite covering the same positions.
- */
-describe("known divergence — z.object() does not strip unknown keys", () => {
-  it.fails("top-level object strips extra string keys", () => {
-    expectParity(z.object({ a: z.string() }), [{ a: "x", b: 1, c: "extra" }]);
-  });
-  it.fails("nested object strips extra keys at depth", () => {
-    expectParity(z.object({ outer: z.object({ a: z.string() }) }), [
-      { outer: { a: "x", b: 2 }, extra: 9 },
-    ]);
-  });
-  it.fails("object inside array element strips extra keys", () => {
-    expectParity(z.array(z.object({ a: z.string() })), [[{ a: "x", b: 1 }]]);
-  });
-  it.fails(".pick() result strips extra keys", () => {
-    expectParity(z.object({ a: z.string(), b: z.number() }).pick({ a: true }), [
-      { a: "x", b: 1, c: 9 },
-    ]);
-  });
-  it.fails(".partial() result strips extra keys", () => {
-    expectParity(z.object({ a: z.string() }).partial(), [{ a: "x", z: 9 }]);
-  });
-  it.fails("intersection of objects strips keys outside both shapes", () => {
-    expectParity(z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })), [
-      { a: "x", b: 1, c: 9 },
-    ]);
-  });
-  it.fails("discriminated-union option strips extra keys", () => {
-    expectParity(
-      z.discriminatedUnion("t", [
-        z.object({ t: z.literal("a"), x: z.string() }),
-        z.object({ t: z.literal("b"), y: z.number() }),
-      ]),
-      [{ t: "a", x: "s", extra: 9 }],
-    );
-  });
-
-  // Sharpest, dependency-free statement of the gap: the compiled output is the
-  // input object itself (same reference), so unknown keys are retained.
-  it("compiled returns the input by reference (documents the mechanism)", () => {
-    const schema = z.object({ a: z.string() });
-    const input = { a: "x", b: 1 };
-    const compiled = compileLikeProduction(schema, "stripDoc");
-    const r = compiled(input) as { success: true; data: Record<string, unknown> };
-    expect(z.object({ a: z.string() }).parse(input)).toEqual({ a: "x" }); // Zod strips
-    expect(r.data).toBe(input); // compiler passes the input through unchanged
-    expect(Object.keys(r.data)).toEqual(["a", "b"]); // including the unknown key
-  });
-
-  // A `__proto__` own ENUMERABLE data property (as produced by JSON.parse, which
-  // never sets the prototype) is just another unknown key: Zod strips it, the
-  // compiler retains it by reference. Pinned explicitly because the retained key
-  // is named `__proto__` — but this is NOT prototype pollution: the compiler only
-  // returns the input untouched, it never assigns `obj.__proto__ = …`, so the
-  // result's prototype stays Object.prototype and no global is mutated.
-  it("__proto__ own-key is retained by reference but does not pollute the prototype", () => {
-    const schema = z.object({ a: z.string() });
-    const input = JSON.parse('{"a":"x","__proto__":{"polluted":true}}') as Record<string, unknown>;
-    const compiled = compileLikeProduction(schema, "protoDoc");
-    const r = compiled(input) as { success: true; data: Record<string, unknown> };
-    expect(z.object({ a: z.string() }).parse(input)).toEqual({ a: "x" }); // Zod strips __proto__
-    expect(r.data).toBe(input); // compiler retains it (same reference)
-    expect(Object.prototype.hasOwnProperty.call(r.data, "__proto__")).toBe(true);
-    // No pollution: the prototype is untouched and no stray global leaked.
-    expect(Object.getPrototypeOf(r.data)).toBe(Object.prototype);
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-  });
-});
-
-/**
- * 2. ARRAY OUTPUT IDENTITY.
+ * 1. ARRAY OUTPUT IDENTITY.
  *
  * Zod builds a fresh array from the validated elements (dense, no extra own
  * properties). The compiler returns the input array by reference when the
@@ -127,7 +47,7 @@ describe("known divergence — array output keeps sparseness / extra properties"
 });
 
 /**
- * 3. RECORD KEY ITERATION — for-in vs Reflect.ownKeys.
+ * 2. RECORD KEY ITERATION — for-in vs Reflect.ownKeys.
  *
  * The compiler iterates records with an allocation-free `for-in` (own
  * ENUMERABLE STRING keys), while Zod walks `Reflect.ownKeys` — every own key,
@@ -183,51 +103,5 @@ describe("known divergence — a catchall validates inherited keys but cannot re
     expect(Object.hasOwn(ourData, "inh")).toBe(false);
     // Still readable through the chain, so property access agrees.
     expect(ourData["inh"]).toBe("yes");
-  });
-});
-
-/**
- * A DECLARED `__proto__` key survives on the compiler's output but not on Zod's.
- *
- * Both engines validate the property identically (pinned as a parity regression
- * in edge-cases.test.ts). They differ in what the SUCCESS payload carries: Zod
- * rebuilds its output and assigns each parsed value with `out[key] = value`,
- * which for `__proto__` re-enters the prototype setter and defines nothing — so
- * Zod's own result silently loses the key it just validated. The compiler
- * returns the input by reference, so the key is still there.
- *
- * This is the by-reference return of divergence 1 seen from the other side: the
- * compiler is the one preserving data here. Under `stripUnknownKeys` it rebuilds
- * the same way Zod does and the outputs match again.
- */
-describe("known divergence — a declared __proto__ key survives our output, not zod's", () => {
-  const schema = z.object(
-    Object.fromEntries([
-      ["__proto__", z.string()],
-      ["b", z.string()],
-    ]) as Record<string, z.ZodType>,
-  );
-  const input = () => JSON.parse('{"__proto__":"s","b":"x"}') as Record<string, unknown>;
-
-  it.fails("output data matches zod", () => {
-    expectParity(schema, [input()]);
-  });
-
-  it("agrees on the verdict", () => {
-    const compiled = compileLikeProduction(schema, "protoVerdict");
-    expect(schema.safeParse(input()).success).toBe(true);
-    expect((compiled(input()) as { success: boolean }).success).toBe(true);
-    const bad = JSON.parse('{"__proto__":123,"b":"x"}') as Record<string, unknown>;
-    expect(schema.safeParse(bad).success).toBe(false);
-    expect((compiled(bad) as { success: boolean }).success).toBe(false);
-  });
-
-  it("zod drops the validated key from its output; the compiler keeps it", () => {
-    const compiled = compileLikeProduction(schema, "protoOutput");
-    const zodData = schema.parse(input()) as Record<string, unknown>;
-    const ourData = (compiled(input()) as { data: Record<string, unknown> }).data;
-    expect(Object.hasOwn(zodData, "__proto__")).toBe(false);
-    expect(Object.hasOwn(ourData, "__proto__")).toBe(true);
-    expect(ourData["__proto__"]).toBe("s");
   });
 });

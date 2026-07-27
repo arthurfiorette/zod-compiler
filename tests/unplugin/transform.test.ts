@@ -547,15 +547,11 @@ describe("transformCode() E2E", () => {
 
     expect(result).not.toBeNull();
     const out = result ?? "";
-    // Exactly one shared Address walk, emitted at module scope and reused by both exports.
-    expect((out.match(/function __zcSw_\d+\(input,path,_e\)/g) ?? []).length).toBe(1);
-    expect((out.match(/__zcSw_0\(/g) ?? []).length).toBeGreaterThanOrEqual(3);
-    // The shared block follows the runtime import (its helpers ride that import).
-    const importIdx = out.indexOf('from "virtual:zod-compiler/runtime"');
-    const sharedIdx = out.indexOf("/* zod-compiler shared */");
-    expect(importIdx).toBeGreaterThanOrEqual(0);
-    expect(sharedIdx).toBeGreaterThan(importIdx);
-    // Both exports still compile and the fast path stays inline (no shared call in __fc).
+    // Walk sharing no longer reaches object shapes: a shared walk writes nothing
+    // back, but a stripping object's walk has to produce the rebuilt value, so
+    // rebuilding shapes are excluded from the plan (see createSharedSchemaPlan).
+    expect((out.match(/function __zcSw_\d+\(input,path,_e\)/g) ?? []).length).toBe(0);
+    // Both exports still compile, each with its own build pass.
     expect(out).toContain("safeParse_validateUser");
     expect(out).toContain("safeParse_validateCompany");
   });
