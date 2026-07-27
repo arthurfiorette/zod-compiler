@@ -72,8 +72,67 @@ export const ZC_FSR_DECL =
  */
 export const ZC_HOP_DECL = "const __zcHop=Object.prototype.hasOwnProperty;";
 
+/**
+ * superRefine fast-check: run the payload callback on a throwaway payload and
+ * report whether it both added nothing AND left the value alone. zod's own
+ * wrapper (the referenced function) installs `addIssue` and normalizes what the
+ * user adds, so the verdict is zod's; the issues themselves are re-collected by
+ * the slow walk.
+ *
+ * The `p.value===v` half is what lets a superRefine node keep a fast path at
+ * all. `value` is writable public API ($RefinementCtx extends ParsePayload), so
+ * a callback may rewrite it, and the fast path's caller returns the ORIGINAL
+ * input on success — which would then be stale. Reporting false when the value
+ * moved routes those parses into the slow walk, which propagates the new value
+ * (see ZC_SR_DECL). Callbacks that only validate — effectively all of them —
+ * still take the fast exit.
+ */
+export const ZC_SR_OK_DECL =
+  "function __zcSrOk(f,v){var p={value:v,issues:[]};__zcSrRun(f,p);" +
+  "return p.issues.length===0&&p.value===v;}";
+
+/**
+ * Module-local (never imported by generated code) — __zcSr/__zcSrOk call it.
+ * Lean mode declares it in the runtime module beside them; inline mode pushes it
+ * into the preamble alongside whichever of the two is used.
+ *
+ * Invoke the referenced wrapper, reproducing zod's synchronous-parse contract:
+ * a callback that returns a promise makes zod raise $ZodAsyncError rather than
+ * silently accepting. Because the ref points at zod's superRefine WRAPPER, not
+ * the user's function, an async callback cannot be detected while extracting —
+ * the returned thenable is the only evidence, so the test lives here. Sync
+ * callbacks return undefined, so the guard short-circuits on the first operand.
+ */
+export const ZC_SR_RUN_DECL =
+  "function __zcSrRun(f,p){var r=f(p);" +
+  'if(r&&typeof r.then==="function"){throw new __zcCore.$ZodAsyncError();}}';
+
+/**
+ * superRefine slow-path merge: run the callback, then move its issues onto the
+ * validator's list the way zod's finalizeIssue does — the node's path prefixed
+ * onto any path the user supplied, and the internal `inst`/`continue` fields
+ * dropped (they are zod bookkeeping, deleted before the issue is user-visible).
+ *
+ * Returns the payload, so the caller can write `.value` back (the callback may
+ * have rewritten it) and read `.aborted`. Aborted is set when any issue aborts
+ * in zod's sense (`continue !== true`, which covers `fatal: true` and the string
+ * shorthand, whose issue carries no `continue` at all) — or when the callback
+ * set it directly, also public payload API. A union option uses it to mark
+ * itself aborted, matching how zod prunes option errors; without it an option
+ * failing only through superRefine would be surfaced directly instead of inside
+ * `invalid_union`.
+ */
+export const ZC_SR_DECL =
+  "function __zcSr(f,v,p,e){var q={value:v,issues:[]};__zcSrRun(f,q);" +
+  "for(var i=0;i<q.issues.length;i++){var s=q.issues[i],t={};" +
+  'for(var k in s){if(k!=="inst"&&k!=="continue")t[k]=s[k];}' +
+  "if(s.continue!==true)q.aborted=true;" +
+  "t.path=s.path&&s.path.length?p.concat(s.path):p;e.push(t);}return q;}";
+
 /** Non-issue runtime helper declarations hosted in the virtual module. */
 export const RUNTIME_HELPER_DECLS: Readonly<Record<string, string>> = {
   __zcFsr: ZC_FSR_DECL,
   __zcHop: ZC_HOP_DECL,
+  __zcSr: ZC_SR_DECL,
+  __zcSrOk: ZC_SR_OK_DECL,
 };

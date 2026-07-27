@@ -64,6 +64,30 @@ export function isReferenceablePredicate(fn: unknown): boolean {
 }
 
 /**
+ * A `superRefine`: a `custom` check whose callback takes zod's PAYLOAD rather
+ * than the value, collecting issues instead of returning a verdict. Zod stores
+ * it on the check instance (`_zod.check`) rather than `def.fn`.
+ *
+ * Narrowed to zod's OWN wrapper, which is what `_superRefine` builds and the
+ * only thing whose payload handling is modelled here: it installs `addIssue`,
+ * so every issue the user adds has been through `util.issue`. The trait marks a
+ * genuine `$ZodCheck` instance and so excludes a raw `.check(fn)` — shape-
+ * identical, but there the callback IS the user's, holding the payload
+ * unmediated. A `when` predicate is likewise refused: it makes zod run the
+ * check conditionally, where generated code runs it always.
+ */
+export function isPayloadCheck(check: {
+  _zod?: { check?: unknown; def?: { fn?: unknown; when?: unknown }; traits?: Set<string> };
+}): boolean {
+  return (
+    check._zod?.def?.fn === undefined &&
+    check._zod?.def?.when === undefined &&
+    typeof check._zod?.check === "function" &&
+    check._zod?.traits?.has("$ZodCheck") === true
+  );
+}
+
+/**
  * Try to compile a function into an inlineable source string.
  * Returns the function source if it's a zero-capture function (safe to inline),
  * or undefined if it cannot be compiled (async, has captures, or parse failure).

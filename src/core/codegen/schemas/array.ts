@@ -3,7 +3,7 @@ import type { FastGen, SlowGen } from "../context.js";
 import { checkPriority, emitEffectCallable, extendPath, hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
-import { refineCheck } from "./effect.js";
+import { refineCheck, superRefineCheck, superRefineFastTest } from "./effect.js";
 
 export function slowArray(ir: SchemaIR & { type: "array" }, g: SlowGen): string {
   let code = emit`
@@ -54,6 +54,9 @@ export function slowArray(ir: SchemaIR & { type: "array" }, g: SlowGen): string 
       case "refine_effect":
         code += refineCheck(check, g.input, g);
         break;
+      case "super_refine_effect":
+        code += superRefineCheck(check, g.input, g);
+        break;
     }
   }
 
@@ -98,6 +101,8 @@ export function fastArray(ir: ArrayIR, g: FastGen): string | null {
   for (const check of ir.checks) {
     if (check.kind === "refine_effect") {
       parts.push(`${emitEffectCallable(g.ctx, check)}(${x})`);
+    } else if (check.kind === "super_refine_effect") {
+      parts.push(superRefineFastTest(check, x, g));
     }
   }
 

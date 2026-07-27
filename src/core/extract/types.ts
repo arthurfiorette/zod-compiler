@@ -33,6 +33,12 @@ export interface ZodCheckDef {
 export interface ZodCheckSchema {
   _zod?: {
     def: ZodCheckDef;
+    /**
+     * The check's own implementation. `superRefine` (and a raw `.check(fn)`)
+     * live here rather than in `def.fn`: they take zod's payload and push
+     * issues onto it instead of returning a verdict.
+     */
+    check?: unknown;
   };
 }
 

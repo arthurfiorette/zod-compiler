@@ -16,7 +16,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { extractSchema, type RefEntry } from "#src/core/extract/index.js";
-import type { FallbackIR, ObjectIR, SchemaIR, TransformEffectIR } from "#src/core/types.js";
+import type { ObjectIR, SchemaIR, TransformEffectIR } from "#src/core/types.js";
 import { compileLikeProduction, expectParity } from "./parity-harness.js";
 
 const irOf = (schema: unknown): { ir: SchemaIR; refs: RefEntry[] } => {
@@ -85,13 +85,15 @@ describe("captured refine — compiles by reference instead of falling back", ()
     expectParity(schema as never, inputs as unknown[]);
   });
 
-  it("still falls back for superRefine (needs zod's ctx)", () => {
+  it("compiles superRefine by calling zod's own payload wrapper", () => {
     const schema = z.object({ a: z.number() }).superRefine((d, ctx) => {
       if (d.a < MIN_AGE) ctx.addIssue({ code: "custom", message: "young" });
     });
-    const { ir } = irOf(schema);
-    expect(ir.type).toBe("fallback");
-    expect((ir as FallbackIR).reason).toBe("refine");
+    const { ir, refs } = irOf(schema);
+    expect(ir.type).toBe("object");
+    expect((ir as ObjectIR).checks?.[0]).toEqual({ kind: "super_refine_effect", refIndex: 0 });
+    expect(refs[0]?.accessPath).toBe("._zod.def.checks[0]._zod.check");
+    expectParity(schema, [{ a: 30 }, { a: 5 }, { a: "x" }, null]);
   });
 
   it("still falls back for an async refine", () => {

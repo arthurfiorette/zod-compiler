@@ -1,5 +1,5 @@
-import type { RefineEffectCheckIR, SchemaIR } from "../../types.js";
-import { extractChecks, refineRefRegistrar } from "../checks.js";
+import type { RefineEffectCheckIR, SchemaIR, SuperRefineEffectCheckIR } from "../../types.js";
+import { extractChecks, payloadCheckRef, refineRefRegistrar } from "../checks.js";
 import type { ExtractorContext, ZodDef } from "../types.js";
 
 export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
@@ -52,16 +52,18 @@ export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
     const { checkIRs, hasFallback } = extractChecks(
       def.checks,
       refineRefRegistrar(ctx, def.checks),
+      (index) => payloadCheckRef(ctx, def.checks, index),
     );
     if (hasFallback) return ctx.fallback("refine");
-    // Object codegen only supports refine effects; anything else (overwrite,
+    // Object codegen supports the two callback kinds; anything else (overwrite,
     // exotic .check() entries) must not be dropped.
-    if (checkIRs.some((c) => c.kind !== "refine_effect")) {
+    if (checkIRs.some((c) => c.kind !== "refine_effect" && c.kind !== "super_refine_effect")) {
       return ctx.fallback("unsupported");
     }
-    const refineChecks = checkIRs.filter((c): c is RefineEffectCheckIR => {
-      return c.kind === "refine_effect";
-    });
+    const refineChecks = checkIRs.filter(
+      (c): c is RefineEffectCheckIR | SuperRefineEffectCheckIR =>
+        c.kind === "refine_effect" || c.kind === "super_refine_effect",
+    );
     if (refineChecks.length > 0) {
       return {
         type: "object",

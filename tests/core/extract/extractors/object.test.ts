@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { extractObject } from "#src/core/extract/extractors/object.js";
 import { extractSchema } from "#src/core/extract/index.js";
-import type { FallbackIR, ObjectIR } from "#src/core/types.js";
+import type { ObjectIR } from "#src/core/types.js";
 
 describe("extractObject", () => {
   it("extracts empty object", () => {
@@ -59,14 +59,28 @@ describe("extractObject", () => {
     expect(refs[0]?.schema).toBeTypeOf("function");
   });
 
-  it("still falls back when the refine takes zod's ctx argument", () => {
+  it("compiles a superRefine that is the last check, calling it by reference", () => {
     const schema = z.object({ x: z.string() }).superRefine((v, ctx) => {
       if (v.x === "") ctx.addIssue({ code: "custom" });
     });
     const refs: { schema: unknown; accessPath: string }[] = [];
-    const ir = extractSchema(schema, refs);
-    expect(ir.type).toBe("fallback");
-    expect((ir as FallbackIR).reason).toBe("refine");
+    const ir = extractSchema(schema, refs) as ObjectIR;
+    expect(ir.type).toBe("object");
+    expect(ir.checks?.[0]).toEqual({ kind: "super_refine_effect", refIndex: 0 });
+    expect(refs[0]?.accessPath).toBe("._zod.def.checks[0]._zod.check");
+  });
+
+  it("still falls back when a superRefine is followed by another check", () => {
+    // An issue carrying fatal/continue:false aborts zod's remaining chain,
+    // which compiled output (running every check) could not reproduce.
+    const schema = z
+      .object({ x: z.string() })
+      .superRefine((v, ctx) => {
+        if (v.x === "") ctx.addIssue({ code: "custom", fatal: true });
+      })
+      .refine((v) => v.x !== "no");
+    const refs: { schema: unknown; accessPath: string }[] = [];
+    expect(extractSchema(schema, refs).type).toBe("fallback");
   });
 
   it("handles object with compilable refine via direct call", () => {

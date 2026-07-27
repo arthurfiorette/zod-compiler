@@ -710,9 +710,9 @@ These contain JavaScript callbacks that cannot be reproduced in generated code:
 
 | Type                                                | Why                                                          | Alternative                                    |
 | --------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------- |
-| `transform` / `refine` that is async or takes `ctx` | A promise result, or zod's issue-collection protocol         | Use a plain single-argument callback           |
-| `superRefine`                                       | Callback needs `ctx` for issue collection                    | Use `refine` or built-in checks                |
-| `custom`                                            | Arbitrary validation logic                                   | —                                              |
+| `transform` that is async or takes `ctx`            | A promise result, or zod's issue-collection protocol         | Use a plain single-argument callback           |
+| `superRefine` followed by another check             | An aborting issue truncates zod's remaining checks           | Put the `superRefine` last in the chain        |
+| `custom` / raw `.check(fn)`                         | Arbitrary validation logic against zod's raw payload         | Use `superRefine`, which compiles              |
 | `preprocess`                                        | Input preprocessing function                                 | Use `z.coerce` when possible                   |
 | `lazy` (unresolvable inner)                         | Getter throws / inner type can't be resolved at compile time | Ensure the lazy getter returns a static schema |
 | `.catchall(schema)`                                 | Unknown keys validated against a value schema                | `strictObject` and `looseObject` both compile  |
@@ -741,8 +741,22 @@ callback used to send the whole object through Zod:
 Where the callback itself dominates, compiled output reaches its cost and no
 more: a captured `refine` doing `allowedDomains.some(…)` measures 23.9 ns
 against 24.1 ns for calling that predicate alone — zero remaining validation
-overhead. Only `superRefine` (needs Zod's `ctx`), other two-argument callbacks,
-and async ones still delegate.
+overhead.
+
+**`superRefine` compiles too.** It has no verdict to read — the callback takes
+Zod's payload and pushes issues onto it — so it is called through a reference to
+Zod's own wrapper with a synthesized payload, which leaves issue construction
+Zod's job and keeps error shapes identical by construction. That turns the most
+common form of cross-field validation from a total fallback into **9-46x**
+(object 357.8 ns → 39.9 ns, array 240.7 ns → 5.3 ns), and rejecting inputs
+31-92x. Two shapes still delegate: a `superRefine` with another check after it
+(an issue marked `fatal` aborts Zod's remaining chain, which generated code —
+running every check — cannot reproduce), and a raw `.check(fn)`, where the
+callback holds the payload unmediated rather than through Zod's wrapper. An
+`async` callback is invisible at compile time, since the reference points at the
+wrapper; the promise it returns raises Zod's own `$ZodAsyncError`, exactly as a
+synchronous Zod parse does. `ctx.value`, `ctx.aborted`, and direct
+`ctx.issues.push` are all honored.
 
 **Partial fallback:** If an object has 10 properties and 1 uses `transform`, the other 9 are still compiled. Only the `transform` property falls back to Zod.
 
@@ -823,7 +837,7 @@ Matching Zod on these would mean allocating a fresh object (or a `Reflect.ownKey
 
 _ops/s, higher is better. "—" = not supported by the library. Measured with `vitest bench` on Apple M4 Max (zod 4.3.6, zod v3 3.23.8, typia 12, ajv 8), best of two full runs; rows reproduce within ~5% between runs. The harness itself costs ~55 ns per iteration — the fastest rows sit at that floor — so it compresses the top of the range: gaps between the three AOT columns on the primitive rows are below the noise, not real._
 
-Performance scales with schema complexity. Nested objects and arrays see the biggest gains because zod-compiler eliminates per-node traversal overhead. Deeply nested schemas (the 243-leaf dashboard row) stay fast because oversized fast-check functions are split into smaller boolean helpers, each kept within V8's optimizing-compiler budget. `discriminatedUnion` dispatches instead of trying options in sequence the way Zod does, and each case validates only its variant's distinctive fields — the object type-guard and the discriminator are checked once before dispatch, never re-checked inside the matched case (a redundancy the engine only elides on unions small enough to inline, so large unions get a measured ~1.5x on the fast check). Dispatch is genuinely O(1) for string discriminators: a `switch` over string labels is only _written_ as a jump, V8 lowers it to sequential `===` comparisons (~0.5 ns per preceding case, so 52 ns of pure dispatch at 80 variants), so the discriminator goes through a `{value: ordinal}` table into a dense integer switch — measured 1.9x at 8 variants and 2.8x at 60, for ~1% more generated bytes. Unions of two variants, or with non-string discriminators, keep the plain switch. A **plain `z.union`** of objects that all pin a shared key to disjoint literals is auto-detected and lowered to the same switch dispatch — so an untagged union written without `discriminatedUnion` still validates in O(1) (15x faster than Zod here), as long as it has enough options to outweigh the switch's setup cost; below that it keeps the fully-inlined `||`-chain, whose options and per-option checks are ordered cheapest-first so a non-matching option is dropped without running its regexes. The invalid-input row is large because failed `safeParse` defers error materialization until `.error` is read. `transform`/`refine` callbacks compile whether or not they capture (3-19x): a zero-capture one is inlined from its source, a capturing one is called by reference rather than costing the schema its compiled path — the cross-field refine row measures 2.5M → 15.7M, and captured transforms went from matching Zod (1.0x) to 2.4x. Only `ctx`-taking and async callbacks still delegate.
+Performance scales with schema complexity. Nested objects and arrays see the biggest gains because zod-compiler eliminates per-node traversal overhead. Deeply nested schemas (the 243-leaf dashboard row) stay fast because oversized fast-check functions are split into smaller boolean helpers, each kept within V8's optimizing-compiler budget. `discriminatedUnion` dispatches instead of trying options in sequence the way Zod does, and each case validates only its variant's distinctive fields — the object type-guard and the discriminator are checked once before dispatch, never re-checked inside the matched case (a redundancy the engine only elides on unions small enough to inline, so large unions get a measured ~1.5x on the fast check). Dispatch is genuinely O(1) for string discriminators: a `switch` over string labels is only _written_ as a jump, V8 lowers it to sequential `===` comparisons (~0.5 ns per preceding case, so 52 ns of pure dispatch at 80 variants), so the discriminator goes through a `{value: ordinal}` table into a dense integer switch — measured 1.9x at 8 variants and 2.8x at 60, for ~1% more generated bytes. Unions of two variants, or with non-string discriminators, keep the plain switch. A **plain `z.union`** of objects that all pin a shared key to disjoint literals is auto-detected and lowered to the same switch dispatch — so an untagged union written without `discriminatedUnion` still validates in O(1) (15x faster than Zod here), as long as it has enough options to outweigh the switch's setup cost; below that it keeps the fully-inlined `||`-chain, whose options and per-option checks are ordered cheapest-first so a non-matching option is dropped without running its regexes. The invalid-input row is large because failed `safeParse` defers error materialization until `.error` is read. `transform`/`refine` callbacks compile whether or not they capture (3-19x): a zero-capture one is inlined from its source, a capturing one is called by reference rather than costing the schema its compiled path — the cross-field refine row measures 2.5M → 15.7M, and captured transforms went from matching Zod (1.0x) to 2.4x. `superRefine` compiles as well, called through a reference to Zod's own payload wrapper (9-46x, from a total fallback); only a `superRefine` with another check after it, raw `.check(fn)`, and `ctx`-taking or async transforms still delegate.
 
 `parse()` (throwing API) rides a zero-allocation fast path: medium object 2.4M → 10.2M ops/s (4.3x), large object (100 items) 18K → 1.4M ops/s (78x).
 

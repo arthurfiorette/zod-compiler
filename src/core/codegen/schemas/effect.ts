@@ -1,7 +1,17 @@
-import type { RefineEffectCheckIR, TransformEffectIR } from "../../types.js";
-import type { SlowGen } from "../context.js";
-import { emitEffectCallable, extendStaticPath, extendStaticPathIndex } from "../context.js";
+import type {
+  RefineEffectCheckIR,
+  SuperRefineEffectCheckIR,
+  TransformEffectIR,
+} from "../../types.js";
+import type { FastGen, SlowGen } from "../context.js";
+import {
+  emitEffectCallable,
+  emitRuntimeHelper,
+  extendStaticPath,
+  extendStaticPathIndex,
+} from "../context.js";
 import { emit } from "../emit.js";
+import { ZC_SR_DECL, ZC_SR_OK_DECL, ZC_SR_RUN_DECL } from "../issue-decls.js";
 
 /**
  * Generate code for a TransformEffectIR node.
@@ -52,4 +62,57 @@ export function refineCheck(check: RefineEffectCheckIR, expr: string, g: SlowGen
     if(!${emitEffectCallable(g.ctx, check)}(${expr})){
       ${g.issues}.push({code:"custom",path:${path}${messageProp},input:${expr}});
     }`;
+}
+
+/**
+ * Declare the shared invoker both superRefine helpers call. It is module-local
+ * rather than an imported helper (lean mode declares it in the runtime module
+ * beside them), so inline mode must place it in the preamble itself.
+ */
+function emitSuperRefineRunner(ctx: SlowGen["ctx"]): void {
+  if (ctx.mode !== "lean" && !ctx.preamble.includes(ZC_SR_RUN_DECL)) {
+    ctx.preamble.push(ZC_SR_RUN_DECL);
+  }
+}
+
+/**
+ * Fast-path test for a SuperRefineEffectCheckIR: a boolean term reporting that
+ * the callback added no issue and left the value alone (see ZC_SR_OK_DECL).
+ */
+export function superRefineFastTest(
+  check: SuperRefineEffectCheckIR,
+  expr: string,
+  g: FastGen,
+): string {
+  emitSuperRefineRunner(g.ctx);
+  const ok = emitRuntimeHelper(g.ctx, "__zcSrOk", ZC_SR_OK_DECL);
+  return `${ok}(${emitEffectCallable(g.ctx, check)},${expr})`;
+}
+
+/**
+ * Generate code for a SuperRefineEffectCheckIR: call the payload-taking
+ * callback with a synthesized `{ value, issues }` and merge what it collected.
+ * zod's own wrapper installs `addIssue` and normalizes the result, so the
+ * issues are zod's — the helper only reprojects them onto this node's path and
+ * strips the internal bookkeeping zod deletes before they become visible.
+ *
+ * The payload's `value` is writable public API, so it is written back to the
+ * output slot the way an overwrite effect is. This walk is always the eager one
+ * (the node reports as mutating, see hasMutation), so the write-back lands on
+ * every parse that reaches it — not only on failures.
+ */
+export function superRefineCheck(
+  check: SuperRefineEffectCheckIR,
+  expr: string,
+  g: SlowGen,
+): string {
+  emitSuperRefineRunner(g.ctx);
+  const helper = emitRuntimeHelper(g.ctx, "__zcSr", ZC_SR_DECL);
+  const fn = emitEffectCallable(g.ctx, check);
+  const p = g.temp("sp");
+  let code = `var ${p}=${helper}(${fn},${expr},${g.path},${g.issues});${g.output}=${p}.value;`;
+  // Inside a union option, an aborting issue must mark the option aborted so
+  // pruning matches zod (see ZC_SR_DECL); elsewhere the flag is unobserved.
+  if (g.aborted) code += `if(${p}.aborted){${g.aborted}=true;}`;
+  return code;
 }

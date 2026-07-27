@@ -125,6 +125,23 @@ export interface RefineEffectCheckIR {
 }
 
 /**
+ * A `superRefine` (or a raw `.check(payloadFn)`): a callback that receives zod's
+ * PAYLOAD and pushes issues onto it, rather than returning a boolean.
+ *
+ * Compiled by calling the callback through `__rf[N]` with a synthesized
+ * `{ value, issues }` payload — zod's own wrapper installs `addIssue` and
+ * normalizes what the user adds, so issue shapes are zod's by construction.
+ * Only emitted when the check is LAST on its node: an issue carrying
+ * `fatal`/`continue:false` aborts zod's remaining check chain, which compiled
+ * output (running every check) could not reproduce.
+ */
+export interface SuperRefineEffectCheckIR {
+  kind: "super_refine_effect";
+  /** `__rf[N]` index of the payload-taking callback. */
+  refIndex: number;
+}
+
+/**
  * Value-rewriting check compiled from a $ZodCheckOverwrite (.trim(), .toLowerCase(), ...).
  * Applied at its original position: `value = (source)(value)`. Never produces issues.
  */
@@ -135,7 +152,11 @@ export interface OverwriteEffectCheckIR {
 }
 
 /** A check entry that may be a compiled check or an inline effect. */
-export type CheckOrEffectIR = CheckIR | RefineEffectCheckIR | OverwriteEffectCheckIR;
+export type CheckOrEffectIR =
+  | CheckIR
+  | RefineEffectCheckIR
+  | SuperRefineEffectCheckIR
+  | OverwriteEffectCheckIR;
 
 // ─── Date Check IR ──────────────────────────────────────────────────────────
 
@@ -310,7 +331,7 @@ export interface ObjectIR {
    */
   stripUnknownKeys?: boolean;
   /** Object-level refine effects from z.object({...}).refine(fn) */
-  checks?: RefineEffectCheckIR[];
+  checks?: (RefineEffectCheckIR | SuperRefineEffectCheckIR)[];
   /**
    * Fallback-typed property keys whose zod schema is optional-out: when the
    * key is ABSENT from the input, their issues are suppressed (mirrors zod's

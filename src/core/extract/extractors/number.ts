@@ -1,5 +1,10 @@
 import type { CheckOrEffectIR, SchemaIR } from "../../types.js";
-import { extractChecks, refineRefRegistrar, resolveCheckMessage } from "../checks.js";
+import {
+  extractChecks,
+  payloadCheckRef,
+  refineRefRegistrar,
+  resolveCheckMessage,
+} from "../checks.js";
 import type { ExtractorContext, ZodDef } from "../types.js";
 
 /** Check kinds the number codegen knows how to emit. Anything else → fallback. */
@@ -9,6 +14,7 @@ const NUMBER_CHECK_KINDS = new Set([
   "multiple_of",
   "number_format",
   "refine_effect",
+  "super_refine_effect",
 ]);
 
 export function extractNumber(def: ZodDef, ctx: ExtractorContext): SchemaIR {
@@ -33,6 +39,7 @@ export function extractNumber(def: ZodDef, ctx: ExtractorContext): SchemaIR {
     const { checkIRs, hasFallback } = extractChecks(
       def.checks,
       refineRefRegistrar(ctx, def.checks),
+      (index) => payloadCheckRef(ctx, def.checks, index),
     );
     if (hasFallback) return ctx.fallback("refine");
     allChecks.push(...checkIRs);

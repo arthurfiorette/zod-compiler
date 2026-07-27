@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { extractNumber } from "#src/core/extract/extractors/number.js";
 import { extractSchema } from "#src/core/extract/index.js";
-import type { FallbackIR, NumberIR } from "#src/core/types.js";
+import type { NumberIR } from "#src/core/types.js";
 
 describe("extractSchema — number checks", () => {
   it("extracts min (inclusive) check", () => {
@@ -108,14 +108,15 @@ describe("extractNumber — branch coverage", () => {
     expect(refs[0]?.accessPath).toBe("._zod.def.checks[0]._zod.def.fn");
   });
 
-  it("still falls back when the refine takes zod's ctx argument", () => {
+  it("compiles a superRefine that is the last check, calling it by reference", () => {
     const schema = z.number().superRefine((v, ctx) => {
       if (v < 0) ctx.addIssue({ code: "custom" });
     });
     const refs: { schema: unknown; accessPath: string }[] = [];
-    const ir = extractSchema(schema, refs);
-    expect(ir.type).toBe("fallback");
-    expect((ir as FallbackIR).reason).toBe("refine");
+    const ir = extractSchema(schema, refs) as NumberIR;
+    expect(ir.type).toBe("number");
+    expect(ir.checks).toContainEqual({ kind: "super_refine_effect", refIndex: 0 });
+    expect(refs[0]?.accessPath).toBe("._zod.def.checks[0]._zod.check");
   });
 
   it("number_format path with coerce via direct call", () => {

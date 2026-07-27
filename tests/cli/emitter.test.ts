@@ -95,7 +95,7 @@ describe("generateCompiledFileContent()", () => {
     );
 
     expect(content).toContain(
-      'import { config as __zodCompilerConfig, ZodRealError as __zcZodError } from "zod"',
+      'import { config as __zodCompilerConfig, core as __zcCore, ZodRealError as __zcZodError } from "zod"',
     );
     // __zcMsg, __zcMkv, __zcFin are declared at file level (once per file)
     expect(content).toContain("var __zcMsg=__zodCompilerConfig().localeError;");

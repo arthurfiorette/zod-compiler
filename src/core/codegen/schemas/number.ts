@@ -4,7 +4,7 @@ import { checkPriority, emitEffectCallable, emitRuntimeHelper } from "../context
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
 import { ZC_FSR_DECL } from "../issue-decls.js";
-import { refineCheck } from "./effect.js";
+import { refineCheck, superRefineCheck, superRefineFastTest } from "./effect.js";
 
 export function slowNumber(ir: NumberIR, g: SlowGen): string {
   let code = "";
@@ -112,6 +112,9 @@ export function slowNumber(ir: NumberIR, g: SlowGen): string {
         case "refine_effect":
           code += refineCheck(check, g.input, g);
           break;
+        case "super_refine_effect":
+          code += superRefineCheck(check, g.input, g);
+          break;
       }
     }
     code += `}`;
@@ -195,6 +198,8 @@ export function fastNumber(ir: NumberIR, g: FastGen): string | null {
   for (const check of ir.checks) {
     if (check.kind === "refine_effect") {
       parts.push(`${emitEffectCallable(g.ctx, check)}(${x})`);
+    } else if (check.kind === "super_refine_effect") {
+      parts.push(superRefineFastTest(check, x, g));
     }
   }
 

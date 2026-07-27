@@ -11,7 +11,7 @@ import {
 import { emit } from "../emit.js";
 import { invalidType, unrecognizedKeys } from "../emit-issue.js";
 import { orderByRuntimeCost } from "../fast-size.js";
-import { refineCheck } from "./effect.js";
+import { refineCheck, superRefineCheck, superRefineFastTest } from "./effect.js";
 
 export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): string {
   let code = emit`
@@ -127,7 +127,12 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
   // property already failed (see refineMark).
   if (ir.checks && ir.checks.length > 0) {
     let refines = "";
-    for (const check of ir.checks) refines += refineCheck(check, objVar, g);
+    for (const check of ir.checks) {
+      refines +=
+        check.kind === "super_refine_effect"
+          ? superRefineCheck(check, objVar, g)
+          : refineCheck(check, objVar, g);
+    }
     code += `if(${g.issues}.length===${refineMark}){${refines}}`;
   }
 
@@ -190,6 +195,8 @@ function fastObjectBody(ir: ObjectIR, g: FastGen, skipKey?: string): string[] | 
     for (const check of ir.checks) {
       if (check.kind === "refine_effect") {
         parts.push(`${emitEffectCallable(g.ctx, check)}(${x})`);
+      } else if (check.kind === "super_refine_effect") {
+        parts.push(superRefineFastTest(check, x, g));
       }
     }
   }

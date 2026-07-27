@@ -4,7 +4,7 @@
  * wired, mirroring ZOD_MSG_DECLARATION) and compares against Zod itself.
  */
 import { expect } from "vitest";
-import { ZodRealError, z } from "zod";
+import { ZodRealError, z, core } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import type { ExtractOptions, RefEntry } from "#src/core/extract/index.js";
 import { extractSchema } from "#src/core/extract/index.js";
@@ -58,6 +58,7 @@ export function compileLikeProduction(
   const factory = new Function(
     "__zcMsg",
     "__zcZodError",
+    "__zcCore",
     "__zcFin",
     "__zcFinZ",
     "__rf",
@@ -65,7 +66,7 @@ export function compileLikeProduction(
     // assignment to an undeclared identifier must fail here, not in the bundle.
     `"use strict";${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${generated.code}\nreturn ${generated.functionDef};`,
   );
-  return factory(z.config().localeError, ZodRealError, localizedFin, finZ, rf) as (
+  return factory(z.config().localeError, ZodRealError, core, localizedFin, finZ, rf) as (
     input: unknown,
   ) => SafeParseResult<unknown>;
 }

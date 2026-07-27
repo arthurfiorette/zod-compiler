@@ -2,8 +2,8 @@ import type { CheckIR, CheckStringFormat, StringIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
 import {
   checkPriority,
-  emitEffectFn,
   emitEffectCallable,
+  emitEffectFn,
   emitRegexSourceString,
   escapeString,
 } from "../context.js";
@@ -14,7 +14,7 @@ import {
   lookupFastRegexSource,
   UUID_REGEX_SOURCE,
 } from "../well-known-regex.js";
-import { refineCheck } from "./effect.js";
+import { refineCheck, superRefineCheck, superRefineFastTest } from "./effect.js";
 
 /** `re.lastIndex=0;` reset statement for stateful (g/y-flagged) regexes. */
 function lastIndexReset(regexVar: string, flags: string | undefined): string {
@@ -122,6 +122,9 @@ export function slowString(ir: StringIR, g: SlowGen): string {
           break;
         case "refine_effect":
           code += refineCheck(check, g.input, g);
+          break;
+        case "super_refine_effect":
+          code += superRefineCheck(check, g.input, g);
           break;
         case "overwrite_effect":
           // $ZodCheckOverwrite: value = tx(value). Later checks read the
@@ -250,6 +253,8 @@ export function fastString(ir: StringIR, g: FastGen): string | null {
   for (const check of ir.checks) {
     if (check.kind === "refine_effect") {
       parts.push(`${emitEffectCallable(g.ctx, check)}(${x})`);
+    } else if (check.kind === "super_refine_effect") {
+      parts.push(superRefineFastTest(check, x, g));
     }
   }
 

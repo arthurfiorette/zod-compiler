@@ -560,6 +560,18 @@ export function extendStaticPathIndex(parentPath: string, index: number): string
 }
 
 /**
+ * A superRefine callback receives zod's payload, whose `value` is public,
+ * typed, writable API ($RefinementCtx extends ParsePayload) — so any node
+ * carrying one MAY rewrite its value and must be treated as mutating. Which
+ * callbacks actually do is undecidable here; the emitted fast check settles it
+ * at runtime by refusing when the value changed (see ZC_SR_OK_DECL), so a
+ * non-mutating callback still exits through the fast path.
+ */
+function hasSuperRefine(checks: readonly { kind: string }[] | undefined): boolean {
+  return checks !== undefined && checks.some((c) => c.kind === "super_refine_effect");
+}
+
+/**
  * Check if a SchemaIR tree produces output that is not the input itself —
  * either value-mutating operations (coerce, default, catch, overwrite) that
  * write back to the input expression, or a strip object that rebuilds a fresh
@@ -575,12 +587,14 @@ export function hasMutation(ir: SchemaIR): boolean {
       // effects (.trim(), .toLowerCase()) rewrite it.
       return (
         ir.coerce === true ||
+        hasSuperRefine(ir.checks) ||
         ir.checks.some(
           (c) =>
             c.kind === "overwrite_effect" || (c.kind === "string_format" && c.format === "url"),
         )
       );
     case "number":
+      return ir.coerce === true || hasSuperRefine(ir.checks);
     case "boolean":
     case "bigint":
     case "date":
@@ -597,9 +611,13 @@ export function hasMutation(ir: SchemaIR): boolean {
       // by-reference fast path, and intersections of strip objects delegate to
       // zod (see extractIntersection's hasMutation guard) — matching zod's
       // parse-both-sides-then-merge semantics instead of over-stripping.
-      return ir.stripUnknownKeys === true || Object.values(ir.properties).some(hasMutation);
+      return (
+        ir.stripUnknownKeys === true ||
+        hasSuperRefine(ir.checks) ||
+        Object.values(ir.properties).some((p) => hasMutation(p))
+      );
     case "array":
-      return hasMutation(ir.element);
+      return hasSuperRefine(ir.checks) || hasMutation(ir.element);
     case "tuple":
       return ir.items.some(hasMutation) || (ir.rest !== null && hasMutation(ir.rest));
     case "record":

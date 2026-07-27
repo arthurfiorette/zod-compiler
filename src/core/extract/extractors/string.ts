@@ -1,5 +1,5 @@
 import type { CheckOrEffectIR, SchemaIR } from "../../types.js";
-import { extractChecks, refineRefRegistrar } from "../checks.js";
+import { extractChecks, payloadCheckRef, refineRefRegistrar } from "../checks.js";
 import type { ExtractorContext, ZodCheckSchema, ZodDef } from "../types.js";
 
 /** Check kinds the string codegen knows how to emit. Anything else → fallback. */
@@ -12,6 +12,7 @@ const STRING_CHECK_KINDS = new Set([
   "ends_with",
   "string_format",
   "refine_effect",
+  "super_refine_effect",
   "overwrite_effect",
 ]);
 
@@ -36,6 +37,7 @@ export function extractString(def: ZodDef, ctx: ExtractorContext): SchemaIR {
     const { checkIRs, hasFallback } = extractChecks(
       def.checks,
       refineRefRegistrar(ctx, def.checks),
+      (index) => payloadCheckRef(ctx, def.checks, index),
     );
     if (hasFallback) return ctx.fallback("refine");
     allChecks.push(...checkIRs);

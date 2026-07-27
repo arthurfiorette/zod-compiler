@@ -1,5 +1,5 @@
 import type { CheckOrEffectIR, CheckStringFormat } from "../types.js";
-import { isReferenceablePredicate, tryCompileEffect } from "./effects.js";
+import { isPayloadCheck, isReferenceablePredicate, tryCompileEffect } from "./effects.js";
 import type { ExtractorContext, ZodCheckDef, ZodCheckSchema } from "./types.js";
 
 /**
@@ -21,6 +21,32 @@ export function refineRefRegistrar(
     refs.push({ schema: fn, accessPath: `${ctx.path}._zod.def.checks[${index}]._zod.def.fn` });
     return refs.length - 1;
   };
+}
+
+/**
+ * Register the payload-taking callback of check `index` (`superRefine`) as an
+ * `__rf[N]` reference, pointing at zod's own wrapper
+ * (`<schema>._zod.def.checks[i]._zod.check`).
+ *
+ * Only the LAST check on a node qualifies: an issue carrying
+ * `fatal`/`continue:false` aborts zod's remaining chain, and compiled output
+ * runs every check unconditionally — with nothing following, there is nothing
+ * left to abort, so the two agree.
+ */
+export function payloadCheckRef(
+  ctx: ExtractorContext,
+  checks: ZodCheckSchema[],
+  index: number,
+): number | undefined {
+  if (index !== checks.length - 1) return undefined;
+  const check = checks[index];
+  const refs = ctx.refs;
+  if (!refs || !check || !isPayloadCheck(check)) return undefined;
+  refs.push({
+    schema: (check._zod as { check: unknown }).check,
+    accessPath: `${ctx.path}._zod.def.checks[${index}]._zod.check`,
+  });
+  return refs.length - 1;
 }
 
 /**
@@ -80,6 +106,8 @@ export function extractChecks(
    * simply keeps the old fall-back-to-zod behavior.
    */
   refineRef?: (index: number) => number | undefined,
+  /** Registers a payload-taking callback (superRefine); see payloadCheckRef. */
+  payloadRefFor?: (index: number) => number | undefined,
 ): {
   checkIRs: CheckOrEffectIR[];
   hasFallback: boolean;
@@ -204,6 +232,18 @@ export function extractChecks(
         break;
       }
       case "custom": {
+        // superRefine / raw .check(): the callback collects issues from zod's
+        // payload rather than returning a verdict, so it is referenced and
+        // called with a synthesized payload (see SuperRefineEffectCheckIR).
+        if (isPayloadCheck(check)) {
+          const payloadRef = payloadRefFor?.(index);
+          if (payloadRef === undefined) {
+            hasFallback = true;
+            break;
+          }
+          checkIRs.push({ kind: "super_refine_effect", refIndex: payloadRef });
+          break;
+        }
         // `.refine(fn, { path })` reports the issue against a member of the
         // refined value; anything but plain string/number segments is a shape
         // the generated path expression cannot reproduce.
