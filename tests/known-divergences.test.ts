@@ -185,3 +185,49 @@ describe("known divergence — a catchall validates inherited keys but cannot re
     expect(ourData["inh"]).toBe("yes");
   });
 });
+
+/**
+ * A DECLARED `__proto__` key survives on the compiler's output but not on Zod's.
+ *
+ * Both engines validate the property identically (pinned as a parity regression
+ * in edge-cases.test.ts). They differ in what the SUCCESS payload carries: Zod
+ * rebuilds its output and assigns each parsed value with `out[key] = value`,
+ * which for `__proto__` re-enters the prototype setter and defines nothing — so
+ * Zod's own result silently loses the key it just validated. The compiler
+ * returns the input by reference, so the key is still there.
+ *
+ * This is the by-reference return of divergence 1 seen from the other side: the
+ * compiler is the one preserving data here. Under `stripUnknownKeys` it rebuilds
+ * the same way Zod does and the outputs match again.
+ */
+describe("known divergence — a declared __proto__ key survives our output, not zod's", () => {
+  const schema = z.object(
+    Object.fromEntries([
+      ["__proto__", z.string()],
+      ["b", z.string()],
+    ]) as Record<string, z.ZodType>,
+  );
+  const input = () => JSON.parse('{"__proto__":"s","b":"x"}') as Record<string, unknown>;
+
+  it.fails("output data matches zod", () => {
+    expectParity(schema, [input()]);
+  });
+
+  it("agrees on the verdict", () => {
+    const compiled = compileLikeProduction(schema, "protoVerdict");
+    expect(schema.safeParse(input()).success).toBe(true);
+    expect((compiled(input()) as { success: boolean }).success).toBe(true);
+    const bad = JSON.parse('{"__proto__":123,"b":"x"}') as Record<string, unknown>;
+    expect(schema.safeParse(bad).success).toBe(false);
+    expect((compiled(bad) as { success: boolean }).success).toBe(false);
+  });
+
+  it("zod drops the validated key from its output; the compiler keeps it", () => {
+    const compiled = compileLikeProduction(schema, "protoOutput");
+    const zodData = schema.parse(input()) as Record<string, unknown>;
+    const ourData = (compiled(input()) as { data: Record<string, unknown> }).data;
+    expect(Object.hasOwn(zodData, "__proto__")).toBe(false);
+    expect(Object.hasOwn(ourData, "__proto__")).toBe(true);
+    expect(ourData["__proto__"]).toBe("s");
+  });
+});

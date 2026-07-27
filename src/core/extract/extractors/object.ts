@@ -25,7 +25,13 @@ export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   const stripFlag =
     !def.catchall && ctx.options.stripUnknownKeys === true ? { stripUnknownKeys: true } : {};
 
-  const properties: Record<string, SchemaIR> = {};
+  // Null-prototype: on a normal object `properties["__proto__"] = ir` sets the
+  // prototype instead of defining a key, so a shape declaring `__proto__` (only
+  // reachable via a computed key or a dynamically built shape — an object
+  // literal's `__proto__:` is the same setter) silently lost that property.
+  // Every consumer reads this through Object.keys/values/entries, so dropping
+  // the prototype is invisible to them.
+  const properties: Record<string, SchemaIR> = Object.create(null) as Record<string, SchemaIR>;
   // Fallback props whose zod schema is optional-out: mirror zod's
   // handlePropertyResult, which suppresses issues for ABSENT keys (this is
   // how z.exactOptional() accepts missing keys while rejecting explicit

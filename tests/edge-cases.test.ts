@@ -8,9 +8,9 @@
  * by construction). These complement zod-feature-matrix's one-case-per-feature
  * coverage with adversarial inputs per feature.
  */
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { expectParity } from "./parity-harness.js";
+import { compileLikeProduction, expectParity } from "./parity-harness.js";
 
 describe("edge cases — coercion of exotic strings", () => {
   it("coerce.number: radix/format strings", () =>
@@ -618,4 +618,119 @@ describe("edge cases — wrapper chains, pipe+coerce, ISO options, zero boundari
     expectParity(z.array(z.number()).length(0), [[], [1]]);
     expectParity(z.number().multipleOf(0), [0, 1, 5]); // x % 0 is NaN — only 0 can pass in Zod
   });
+});
+
+/**
+ * A shape may legitimately declare `__proto__`. It cannot be written as a plain
+ * object-literal key (`{__proto__: x}` is the prototype setter, quoted form
+ * included), but a computed key or a dynamically built shape — generating a
+ * schema from DB columns or an OpenAPI document — produces one, and Zod stores
+ * and validates it like any other key.
+ *
+ * The IR used to collect properties into a normal object, so `properties[key] =
+ * ir` re-entered that same setter and dropped the property. What survived was a
+ * shape Zod validates and the compiler did not: an unsound ACCEPT for
+ * object/looseObject (the field went unchecked, and a required one could be
+ * missing entirely), and a false REJECT for strictObject (the declared key read
+ * as unrecognized). Inputs carry a real own `__proto__` only via JSON.parse,
+ * which is exactly how untrusted payloads arrive.
+ *
+ * These assert the VERDICT and the issues. Output data is compared only under
+ * `stripUnknownKeys`, where the compiler rebuilds the object as Zod does; the
+ * by-reference default differs for this key and is pinned in
+ * known-divergences.test.ts.
+ */
+describe("edge cases — a shape declaring __proto__", () => {
+  const shapeWith = (inner: z.ZodType): Record<string, z.ZodType> =>
+    Object.fromEntries([
+      ["__proto__", inner],
+      ["b", z.string()],
+    ]) as Record<string, z.ZodType>;
+
+  /** Own `__proto__` arrives only through JSON.parse — an object literal would set the prototype. */
+  const inputs = [
+    JSON.parse('{"__proto__":"s","b":"x"}'),
+    JSON.parse('{"__proto__":123,"b":"x"}'),
+    JSON.parse('{"__proto__":"s","b":1}'),
+    JSON.parse('{"b":"x"}'),
+    JSON.parse('{"__proto__":"s","b":"x","extra":1}'),
+    {},
+    { b: "x" },
+  ];
+
+  /** Verdict + issue parity, leaving the by-reference output difference aside. */
+  const expectVerdictParity = (schema: z.ZodType, cases: unknown[], name: string) => {
+    const compiled = compileLikeProduction(schema, name);
+    for (const input of cases) {
+      const zodResult = schema.safeParse(input);
+      const mine = compiled(input);
+      const label = `${name}: ${JSON.stringify(input)}`;
+      expect(mine.success, label).toBe(zodResult.success);
+      if (!mine.success && !zodResult.success) {
+        const codes = (r: { error?: { issues: readonly unknown[] } }) =>
+          (r.error?.issues ?? []).map((raw) => {
+            const issue = raw as { code: string; path: readonly (string | number)[] };
+            return { code: issue.code, path: issue.path };
+          });
+        expect(codes(mine), label).toEqual(codes(zodResult));
+      }
+    }
+  };
+
+  it("z.object validates the declared key", () =>
+    expectVerdictParity(z.object(shapeWith(z.string())), inputs, "protoObject"));
+  it("z.strictObject recognizes it rather than reporting it unknown", () =>
+    expectVerdictParity(z.strictObject(shapeWith(z.string())), inputs, "protoStrict"));
+  it("z.looseObject validates it", () =>
+    expectVerdictParity(z.looseObject(shapeWith(z.string())), inputs, "protoLoose"));
+  it("validates when nested", () =>
+    expectVerdictParity(
+      z.object({ outer: z.object(shapeWith(z.string())) }),
+      [
+        JSON.parse('{"outer":{"__proto__":"s","b":"x"}}'),
+        JSON.parse('{"outer":{"__proto__":123,"b":"x"}}'),
+        JSON.parse('{"outer":{"b":"x"}}'),
+      ],
+      "protoNested",
+    ));
+  it("carries its own checks and wrappers", () => {
+    expectVerdictParity(
+      z.object(shapeWith(z.string().min(3))),
+      [JSON.parse('{"__proto__":"abc","b":"x"}'), JSON.parse('{"__proto__":"ab","b":"x"}')],
+      "protoChecks",
+    );
+    expectVerdictParity(
+      z.object(shapeWith(z.string().optional())),
+      [
+        JSON.parse('{"__proto__":"s","b":"x"}'),
+        JSON.parse('{"b":"x"}'),
+        JSON.parse('{"__proto__":1,"b":"x"}'),
+      ],
+      "protoOptional",
+    );
+  });
+
+  // Strip mode rebuilds the output exactly as Zod does, so full parity —
+  // including the data Zod produces for this key — holds there.
+  it("full parity under stripUnknownKeys", () =>
+    expectParity(z.object(shapeWith(z.string())), inputs, "protoStrip", {
+      stripUnknownKeys: true,
+    }));
+
+  // Other Object.prototype names are ordinary string keys under plain
+  // assignment, but they share the "declared key shadows an inherited name"
+  // shape, so they are pinned alongside.
+  it.each(["constructor", "toString", "valueOf", "hasOwnProperty"])(
+    "z.strictObject with a declared %s key",
+    (key) =>
+      expectParity(
+        z.strictObject(
+          Object.fromEntries([
+            [key, z.string()],
+            ["b", z.string()],
+          ]) as Record<string, z.ZodType>,
+        ),
+        [JSON.parse(`{${JSON.stringify(key)}:"s","b":"x"}`), JSON.parse('{"b":"x"}')],
+      ),
+  );
 });
