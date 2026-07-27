@@ -46,15 +46,35 @@ describe("check (schema compilability)", () => {
     }
   });
 
-  it("captured-variable transform schema has fallback", async () => {
-    const schemas = await discoverSchemas(path.join(fixturesDir, "with-fallback.ts"));
+  it("a ctx-taking transform schema has a fallback", async () => {
+    const schemas = await discoverSchemas(path.join(fixturesDir, "with-ctx-transform.ts"));
     expect(schemas.length).toBe(1);
 
     for (const s of schemas) {
-      const ir = extractSchema(s.schema);
+      const ir = extractSchema(s.schema, []);
       const { fallbacks } = diagnoseSchema(ir);
       expect(fallbacks.length).toBeGreaterThan(0);
       expect(fallbacks.some((f) => f.reason.includes("transform"))).toBe(true);
+    }
+  });
+
+  it("diagnoses captured callbacks as COMPILED, matching what generate emits", async () => {
+    // Regression: `check` extracted without a ref table, so every captured
+    // refine/transform and every superRefine looked like a fallback — it
+    // reported 0% on schemas the compiler handles in full and told the user to
+    // rewrite them. The ref table is what makes a capturing callback
+    // compilable, so diagnosis has to collect one just like the pipeline does.
+    const captured = 3;
+    for (const schema of [
+      z.object({ a: z.number() }).refine((v) => v.a > captured),
+      z.object({ a: z.number(), b: z.string().transform((v) => v.length + captured) }),
+      z.object({ a: z.number() }).superRefine((v, ctx) => {
+        if (v.a < captured) ctx.addIssue({ code: "custom", message: "small" });
+      }),
+    ]) {
+      expect(diagnoseSchema(extractSchema(schema, [])).fallbacks).toHaveLength(0);
+      // ...and without the ref table there is nothing to reference, so it falls back.
+      expect(diagnoseSchema(extractSchema(schema)).fallbacks.length).toBeGreaterThan(0);
     }
   });
 
@@ -120,7 +140,7 @@ describe("runCheck", () => {
 
     try {
       await runCheck({
-        inputs: [path.join(fixturesDir, "with-fallback.ts")],
+        inputs: [path.join(fixturesDir, "with-ctx-transform.ts")],
         ...defaultOpts,
       });
       const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
@@ -261,14 +281,16 @@ describe("runCheck --fail-under", () => {
   });
 
   it("exits with 1 when coverage is below threshold", async () => {
-    // Use superRefine (non-compilable) to ensure fallback and coverage < 100%
+    // A ctx-taking transform genuinely delegates, so coverage stays < 100%.
+    // (superRefine used to serve here, but it compiles now.)
     mockDiscoverSchemas.mockResolvedValueOnce([
       {
         exportName: "testSchema",
         schema: z.object({
           name: z.string(),
-          slug: z.string().superRefine((val, ctx) => {
+          slug: z.string().transform((val, ctx) => {
             if (val.length < 1) ctx.addIssue({ code: "custom", message: "too short" });
+            return val;
           }),
         }),
       },
@@ -580,14 +602,16 @@ describe("runCheck --fail-under + --json", () => {
   });
 
   it("outputs JSON and exits with 1 when below threshold", async () => {
-    // Use superRefine (non-compilable) to ensure fallback and coverage < 100%
+    // A ctx-taking transform genuinely delegates, so coverage stays < 100%.
+    // (superRefine used to serve here, but it compiles now.)
     mockDiscoverSchemas.mockResolvedValueOnce([
       {
         exportName: "testSchema",
         schema: z.object({
           name: z.string(),
-          slug: z.string().superRefine((val, ctx) => {
+          slug: z.string().transform((val, ctx) => {
             if (val.length < 1) ctx.addIssue({ code: "custom", message: "too short" });
+            return val;
           }),
         }),
       },

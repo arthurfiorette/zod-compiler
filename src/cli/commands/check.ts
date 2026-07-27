@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import type { DiagnosticNode, DiagnosticResult } from "../../core/diagnostic.js";
 import { diagnoseSchema } from "../../core/diagnostic.js";
+import type { RefEntry } from "../../core/extract/index.js";
 import { extractSchema } from "../../core/extract/index.js";
 import type { DiscoveredSchema, SchemaIR } from "../../core/types.js";
 import { discoverSchemas } from "../../discovery.js";
@@ -141,7 +142,14 @@ export async function runCheck(options: CheckOptions): Promise<void> {
     for (const s of schemas) {
       let ir: SchemaIR;
       try {
-        ir = extractSchema(s.schema);
+        // Collect refs exactly as the compile pipeline does. A callback that
+        // captures is compiled by REFERENCE through an `__rf[]` entry, which
+        // only happens when a ref table is present — extracting without one
+        // reports every captured refine/transform and every superRefine as a
+        // fallback, so `check` claimed 0% on schemas `generate` compiles in
+        // full and told the user to rewrite code that was already fast.
+        const refEntries: RefEntry[] = [];
+        ir = extractSchema(s.schema, refEntries);
       } catch (e) {
         err(
           `${c.red}error${c.reset} Failed to extract "${s.exportName}" in ${relPath}: ${getErrorMessage(e)}`,
