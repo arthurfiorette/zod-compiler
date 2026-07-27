@@ -94,7 +94,7 @@
     }
   },
   "scripts": {
-    "benchmark": "vitest bench --config benchmarks/vitest.config.ts",
+    "benchmark": "pnpm build && vitest bench --config benchmarks/vitest.config.ts",
     "build": "rm -fr ./dist && tsc",
     "dev": "tsc --watch",
     "lint": "oxlint --type-aware && oxfmt --check && tsc --noEmit && knip",
