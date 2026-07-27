@@ -110,6 +110,7 @@ export function generateValidator(
   const fastPreambleLen = ctx.preamble.length;
   const fastRegexCache = new Map(ctx.regexCache);
   const fastEffectCache = ctx.effectFnCache && new Map(ctx.effectFnCache);
+  const fastValueCache = ctx.valueCache && new Map(ctx.valueCache);
   const fastRecName = ctx.recFastName;
   const fg = createFastGen("input", ctx);
   let fastExpr = generateFast(ir, fg);
@@ -134,6 +135,10 @@ export function generateValidator(
     ctx.regexCache = fastRegexCache;
     if (fastEffectCache === undefined) delete ctx.effectFnCache;
     else ctx.effectFnCache = fastEffectCache;
+    // Value declarations the abandoned walk emitted are truncated above, so
+    // their cache entries would name identifiers that no longer exist.
+    if (fastValueCache === undefined) delete ctx.valueCache;
+    else ctx.valueCache = fastValueCache;
     if (fastRecName === undefined) delete ctx.recFastName;
     else ctx.recFastName = fastRecName;
   }

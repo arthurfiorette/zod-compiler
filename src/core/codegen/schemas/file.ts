@@ -1,6 +1,6 @@
 import type { FileIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { escapeString } from "../context.js";
+import { emitSet, escapeString } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, invalidValue, tooBig, tooSmall } from "../emit-issue.js";
 
@@ -68,9 +68,7 @@ export function fastFile(ir: FileIR, g: FastGen): string | null {
           if (check.mime.length === 1) {
             parts.push(`${x}.type===${escapeString(check.mime[0] as string)}`);
           } else {
-            const setVar = g.temp("mimeSet");
-            g.ctx.preamble.push(`var ${setVar}=new Set(${JSON.stringify(check.mime)});`);
-            parts.push(`${setVar}.has(${x}.type)`);
+            parts.push(`${emitSet(g.ctx, "mime", check.mime)}.has(${x}.type)`);
           }
           break;
       }

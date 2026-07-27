@@ -1,6 +1,6 @@
 import type { EnumIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { ENUM_INLINE_THRESHOLD, escapeString } from "../context.js";
+import { emitSet, ENUM_INLINE_THRESHOLD, escapeString } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidValue } from "../emit-issue.js";
 
@@ -29,8 +29,7 @@ export function fastEnum(ir: EnumIR, g: FastGen): string {
     // Inline equality checks for small enums, wrapped in parens for precedence safety
     return `(${ir.values.map((v) => `${x}===${escapeString(v)}`).join("||")})`;
   }
-  // Use Set for larger enums
-  const setVar = g.temp("enumSet");
-  g.ctx.preamble.push(`var ${setVar}=new Set(${JSON.stringify(ir.values)});`);
-  return `${setVar}.has(${x})`;
+  // Use Set for larger enums. Routed through emitSet so the fast check and the
+  // slow walk share one declaration instead of emitting the value list twice.
+  return `${emitSet(g.ctx, "enum", ir.values)}.has(${x})`;
 }
