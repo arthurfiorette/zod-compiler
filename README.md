@@ -186,9 +186,8 @@ In auto mode hoisted schemas also **compile** — which rescues the schema that 
 ### Bundle Size & Cross-File Dedup
 
 Validators share a runtime helper layer imported from one module, so each helper appears once per
-bundle. Schemas in a file sharing a structurally identical sub-shape emit its error walk once, which
-scales with how much a file repeats: **19% raw / 10% gzipped** for two exports reusing one nested
-shape, **28% / 18%** for four exports reusing two.
+bundle. Schemas in a file sharing a structurally identical sub-shape emit its error walk once —
+**19-28% raw / 10-18% gzipped**, scaling with how much the file repeats.
 
 **Transpile-only esbuild builds** (no `--bundle`) never fire the bundler's resolve hooks, so the
 `virtual:` specifier would survive into `dist/` and fail at runtime. Set `codegenMode: "inline"` to emit
@@ -287,10 +286,13 @@ app.post("/users", zValidator("json", UserSchema), (c) => c.json(c.req.valid("js
 useForm({ resolver: zodResolver(SignupSchema) });
 ```
 
-The same applies to any [Standard Schema](https://standardschema.dev) consumer. `~standard.validate`
-is re-installed on top of the compiled path — Zod's own builds it around its internal parse, so
-leaving it alone would have handed these consumers plain Zod. Its `version`/`vendor` are unchanged,
-and an async refinement still resolves through Zod.
+The same applies to any [Standard Schema](https://standardschema.dev) consumer — `~standard.validate`
+routes through the compiled validator.
+
+Compilation installs methods on the schema object, so `.parse`, `.safeParse`, `.parseAsync`,
+`.safeParseAsync`, `.is` and `~standard.validate` are compiled. Zod's functional API
+(`z.safeParse(Schema, x)`) and a compiled schema composed into an uncompiled parent go through
+`_zod.run` instead and stay on plain Zod.
 
 ## Schema Diagnostics
 
@@ -374,16 +376,18 @@ see what compiled.
 ### Behavioral Differences from Zod
 
 Compiled validators match Zod on verdicts, output data and error messages, including issue ordering.
-Two things differ by design, both from the zero-allocation fast path:
+Three things differ by design:
 
-| Behavior                  | Zod                                | zod-compiler                                            |
-| ------------------------- | ---------------------------------- | ------------------------------------------------------- |
-| Record key iteration      | All own keys (`Reflect.ownKeys`)   | Own enumerable **string** keys only                     |
-| Container output identity | A fresh array / set / map / object | The input container, by reference (array holes survive) |
+| Behavior                  | Zod                                             | zod-compiler                                            |
+| ------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| Record key iteration      | All own keys (`Reflect.ownKeys`)                | Own enumerable **string** keys only                     |
+| Container output identity | A fresh array / set / map / object              | The input container, by reference (array holes survive) |
+| Per-call parse params     | `safeParse(x, { error, reportInput })` honoured | Ignored — messages bake at build time                   |
 
-A container whose contents need no rewriting is validated in place and handed back, where Zod always
-rebuilds it. `z.object()` is the exception — it strips unknown keys exactly as Zod does, so its output
-is always a fresh object.
+Schema-level `error` options are unaffected. For a per-call map, go through Zod:
+`z.safeParse(Schema, x, params)`.
+
+`z.object()` strips unknown keys exactly as Zod does, so its output is always a fresh object.
 
 ## Benchmark
 
@@ -441,9 +445,8 @@ pnpm benchmark   # run locally
 An eligible schema compiles to a **fast path** — one `&&` chain validating the whole input with zero
 allocations, reused by `.is()` and `parse()` — plus a **slow path** that collects errors, run only on
 failure and deferred until `.error` is read. A `z.object()` strips, so it instead compiles to a single
-pass that validates and rebuilds together, bailing on the first failure. That pass also covers the
-idioms that reshape a value — array size checks, `.refine()`, `.default()`, `.trim()`, `.transform()` —
-so one of them in a schema no longer costs it the whole single-pass parse.
+pass that validates and rebuilds together, bailing on the first failure — including the reshaping
+idioms (array size checks, `.refine()`, `.default()`, `.trim()`, `.transform()`).
 
 Regexes are pre-compiled with bounded repeats unrolled, checks run cheapest-first, discriminated unions
 dispatch through a jump table (plain tagged unions are auto-discriminated into it), and oversized check
