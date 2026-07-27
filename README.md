@@ -708,13 +708,13 @@ All standard Zod checks are supported: `min`, `max`, `length`, `email`, `url`, `
 
 These reach JavaScript that generated code cannot reproduce — an opaque callback, or control flow that depends on one:
 
-| Type                                                | Why                                                          | Alternative                                    |
-| --------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------- |
-| `transform` that is async or takes `ctx`            | A promise result, or zod's issue-collection protocol         | Use a plain single-argument callback           |
-| `superRefine` followed by another check             | An aborting issue truncates zod's remaining checks           | Put the `superRefine` last in the chain        |
-| `custom` / raw `.check(fn)`                         | Arbitrary validation logic against zod's raw payload         | Use `superRefine`, which compiles              |
-| `preprocess`                                        | Input preprocessing function                                 | Use `z.coerce` when possible                   |
-| `lazy` (unresolvable inner)                         | Getter throws / inner type can't be resolved at compile time | Ensure the lazy getter returns a static schema |
+| Type                                     | Why                                                          | Alternative                                    |
+| ---------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------- |
+| `transform` that is async or takes `ctx` | A promise result, or zod's issue-collection protocol         | Use a plain single-argument callback           |
+| `superRefine` followed by another check  | An aborting issue truncates zod's remaining checks           | Put the `superRefine` last in the chain        |
+| `custom` / raw `.check(fn)`              | Arbitrary validation logic against zod's raw payload         | Use `superRefine`, which compiles              |
+| `preprocess`                             | Input preprocessing function                                 | Use `z.coerce` when possible                   |
+| `lazy` (unresolvable inner)              | Getter throws / inner type can't be resolved at compile time | Ensure the lazy getter returns a static schema |
 
 **Zero-capture effects compile:** a `transform`/`refine` callback that takes a
 single argument and references only its own parameters, locals, and safe
