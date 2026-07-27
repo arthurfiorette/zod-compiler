@@ -287,8 +287,10 @@ app.post("/users", zValidator("json", UserSchema), (c) => c.json(c.req.valid("js
 useForm({ resolver: zodResolver(SignupSchema) });
 ```
 
-The same applies to any [Standard Schema](https://standardschema.dev) consumer — `~standard` is
-preserved and routes through the compiled validator.
+The same applies to any [Standard Schema](https://standardschema.dev) consumer. `~standard.validate`
+is re-installed on top of the compiled path — Zod's own builds it around its internal parse, so
+leaving it alone would have handed these consumers plain Zod. Its `version`/`vendor` are unchanged,
+and an async refinement still resolves through Zod.
 
 ## Schema Diagnostics
 

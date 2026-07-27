@@ -147,9 +147,30 @@ export const FINZ_DECL = "function __zcFinZ(z,i){return new __ZcFailZ(z,i);}";
  * partial fc can pass-through valid input but its `false` does not imply
  * rejection (a default/catch may still succeed), so it would be unsound as a
  * standalone guard.
+ *
+ * `~standard` is REPLACED, not merely preserved. Zod builds it lazily as
+ * `validate: (v) => safeParse(inst, v)` — the core FUNCTION, which goes straight
+ * to `inst._zod.run`. It never reads the schema's own `safeParse` property, so
+ * installing the compiled one leaves this route entirely uncompiled: measured
+ * 271.7 ns against the compiled 26.6 ns on the same schema, i.e. Standard Schema
+ * consumers (tRPC, Hono, TanStack) were getting plain Zod.
+ *
+ * Zod's own validate is captured first and kept as the throw path: it catches a
+ * synchronous throw and retries through `safeParseAsync`, which is how an async
+ * refinement resolves and how a throwing check surfaces as a rejected promise
+ * rather than a synchronous throw. The compiled validator cannot reproduce that
+ * (async schemas delegate to Zod anyway), so deferring to the original is both
+ * simpler and exact.
+ *
+ * Installed with defineProperty rather than assignment: Zod's lazy setter
+ * redefines the slot as non-writable, so a second `__zcMkv` on the same schema
+ * object — two exports aliasing one schema — would throw under ESM strict mode.
  */
 export const MK_VALIDATOR_DECL =
-  "function __zcMkv(fn,schema,fc,is){var w=schema||{};w.parse=fc?function(input){if(fc(input))return input;var r=fn(input);if(r.success)return r.data;throw r.error;}:function(input){var r=fn(input);if(r.success)return r.data;throw r.error;};w.safeParse=fn;w.safeParseAsync=function(input){return Promise.resolve(fn(input));};w.parseAsync=fc?function(input){if(fc(input))return Promise.resolve(input);var r=fn(input);if(r.success)return Promise.resolve(r.data);return Promise.reject(r.error);}:function(input){var r=fn(input);if(r.success)return Promise.resolve(r.data);return Promise.reject(r.error);};w.is=is||function(input){return fn(input).success;};return w;}";
+  "function __zcMkv(fn,schema,fc,is){var w=schema||{};w.parse=fc?function(input){if(fc(input))return input;var r=fn(input);if(r.success)return r.data;throw r.error;}:function(input){var r=fn(input);if(r.success)return r.data;throw r.error;};w.safeParse=fn;w.safeParseAsync=function(input){return Promise.resolve(fn(input));};w.parseAsync=fc?function(input){if(fc(input))return Promise.resolve(input);var r=fn(input);if(r.success)return Promise.resolve(r.data);return Promise.reject(r.error);}:function(input){var r=fn(input);if(r.success)return Promise.resolve(r.data);return Promise.reject(r.error);};w.is=is||function(input){return fn(input).success;};" +
+  'var s=w["~standard"],zv=s&&s.validate;' +
+  'Object.defineProperty(w,"~standard",{configurable:true,value:{version:1,vendor:(s&&s.vendor)||"zod",validate:function(input){var r;try{if(fc&&fc(input))return{value:input};r=fn(input);}catch(e){if(zv)return zv(input);throw e;}return r.success?{value:r.data}:{issues:r.error.issues};}}});' +
+  "return w;}";
 
 function extractFunctionName(functionDef: string): string {
   const match = /^function\s+(\w+)\s*\(/.exec(functionDef);
