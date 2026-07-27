@@ -1,6 +1,6 @@
 import type { ArrayIR, CheckIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { checkPriority, emitEffectFn, extendPath, hasMutation } from "../context.js";
+import { checkPriority, emitRefinePredicate, extendPath, hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
 import { refineCheck } from "./effect.js";
@@ -97,7 +97,7 @@ export function fastArray(ir: ArrayIR, g: FastGen): string | null {
   // Refine effect checks (appended last — run after cheap checks short-circuit)
   for (const check of ir.checks) {
     if (check.kind === "refine_effect") {
-      parts.push(`${emitEffectFn(g.ctx, check.source)}(${x})`);
+      parts.push(`${emitRefinePredicate(g.ctx, check)}(${x})`);
     }
   }
 

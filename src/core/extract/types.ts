@@ -14,6 +14,8 @@ export interface ZodCheckDef {
   prefix: string;
   suffix: string;
   fn: unknown;
+  /** `.refine(fn, { path })` — issue path suffix, relative to the refined value. */
+  path?: unknown;
   /** $ZodCheckOverwrite transform function (.trim(), .toLowerCase(), ...). */
   tx?: unknown;
   /** Runtime predicate gating check execution — forces fallback when present. */

@@ -46,6 +46,24 @@ const SAFE_GLOBALS = new Set([
 ]);
 
 /**
+ * Can this refine predicate be CALLED by reference from generated code?
+ *
+ * Weaker than {@link tryCompileEffect}: the callback keeps its own closure, so
+ * captures are fine — only shapes whose semantics the generated call could not
+ * reproduce are rejected. A second parameter means the zod `ctx` protocol
+ * (superRefine-style issue collection), and an async/generator function returns
+ * a promise where zod's synchronous parse raises $ZodAsyncError.
+ */
+export function isReferenceablePredicate(fn: unknown): boolean {
+  if (typeof fn !== "function") return false;
+  if (fn.length >= 2) return false;
+  const kind = fn.constructor?.name;
+  return (
+    kind !== "AsyncFunction" && kind !== "GeneratorFunction" && kind !== "AsyncGeneratorFunction"
+  );
+}
+
+/**
  * Try to compile a function into an inlineable source string.
  * Returns the function source if it's a zero-capture function (safe to inline),
  * or undefined if it cannot be compiled (async, has captures, or parse failure).

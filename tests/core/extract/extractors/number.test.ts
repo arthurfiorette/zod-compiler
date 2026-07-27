@@ -98,9 +98,20 @@ describe("extractNumber — branch coverage", () => {
     expect(ir.checks).toContainEqual({ kind: "greater_than", value: 0, inclusive: true });
   });
 
-  it("falls back for number with non-compilable refine", () => {
+  it("compiles a number whose refine captures, calling the predicate by reference", () => {
     const captured = "external";
     const schema = z.number().refine((v) => String(v) === captured);
+    const refs: { schema: unknown; accessPath: string }[] = [];
+    const ir = extractSchema(schema, refs) as NumberIR;
+    expect(ir.type).toBe("number");
+    expect(ir.checks).toContainEqual({ kind: "refine_effect", refIndex: 0 });
+    expect(refs[0]?.accessPath).toBe("._zod.def.checks[0]._zod.def.fn");
+  });
+
+  it("still falls back when the refine takes zod's ctx argument", () => {
+    const schema = z.number().superRefine((v, ctx) => {
+      if (v < 0) ctx.addIssue({ code: "custom" });
+    });
     const refs: { schema: unknown; accessPath: string }[] = [];
     const ir = extractSchema(schema, refs);
     expect(ir.type).toBe("fallback");

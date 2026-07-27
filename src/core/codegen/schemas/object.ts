@@ -1,7 +1,7 @@
 import type { ObjectIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
 import {
-  emitEffectFn,
+  emitRefinePredicate,
   escapeString,
   extendStaticPath,
   hasMutation,
@@ -30,6 +30,14 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
     // on the whole safeParse call for mutation-bearing schemas.
     code += needsClone ? `var ${objVar}={...${g.input}};` : `var ${objVar}=${g.input};`;
   }
+
+  // Object-level refines run only when the object itself parsed cleanly: zod
+  // parses the properties into the payload first and skips the check chain when
+  // that produced issues, so a bad property suppresses the refine entirely
+  // (unlike string/number/array, where a failed check still lets later refines
+  // run). Snapshot the issue count before the properties to reproduce it.
+  const refineMark = ir.checks && ir.checks.length > 0 ? g.temp("rm") : "";
+  if (refineMark) code += `var ${refineMark}=${g.issues}.length;`;
 
   const suppressAbsent = new Set(ir.suppressAbsentKeys ?? []);
   /** Strip only: per-property output slot + whether it is always in the result. */
@@ -115,11 +123,12 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
     code += `${g.output}=${objVar};`;
   }
 
-  // Object-level refine effects: z.object({...}).refine(fn)
-  if (ir.checks) {
-    for (const check of ir.checks) {
-      code += refineCheck(check, objVar, g);
-    }
+  // Object-level refine effects: z.object({...}).refine(fn), suppressed when a
+  // property already failed (see refineMark).
+  if (ir.checks && ir.checks.length > 0) {
+    let refines = "";
+    for (const check of ir.checks) refines += refineCheck(check, objVar, g);
+    code += `if(${g.issues}.length===${refineMark}){${refines}}`;
   }
 
   code += `}\n`;
@@ -180,7 +189,7 @@ function fastObjectBody(ir: ObjectIR, g: FastGen, skipKey?: string): string[] | 
   if (ir.checks) {
     for (const check of ir.checks) {
       if (check.kind === "refine_effect") {
-        parts.push(`${emitEffectFn(g.ctx, check.source)}(${x})`);
+        parts.push(`${emitRefinePredicate(g.ctx, check)}(${x})`);
       }
     }
   }

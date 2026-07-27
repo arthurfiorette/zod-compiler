@@ -1,5 +1,5 @@
 import type { CheckOrEffectIR, SchemaIR } from "../../types.js";
-import { extractChecks } from "../checks.js";
+import { extractChecks, refineRefRegistrar } from "../checks.js";
 import type { ExtractorContext, ZodCheckSchema, ZodDef } from "../types.js";
 
 /** Check kinds the string codegen knows how to emit. Anything else → fallback. */
@@ -33,7 +33,10 @@ export function extractString(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   // Appended checks (.min(), .refine(), .trim(), ... — also present on format
   // schemas like z.email().min(5), which previously lost them entirely).
   if (def.checks && def.checks.length > 0) {
-    const { checkIRs, hasFallback } = extractChecks(def.checks);
+    const { checkIRs, hasFallback } = extractChecks(
+      def.checks,
+      refineRefRegistrar(ctx, def.checks),
+    );
     if (hasFallback) return ctx.fallback("refine");
     allChecks.push(...checkIRs);
   }

@@ -1,0 +1,165 @@
+/**
+ * `.refine()` callbacks that CAPTURE outer variables.
+ *
+ * A zero-capture predicate is inlined from its source text. One that captures
+ * cannot be — but it can still be CALLED, through an `__rf[N]` reference to the
+ * user's own function object reached from the schema
+ * (`._zod.def.checks[i]._zod.def.fn`). Before that, any captured refine cost the
+ * schema its compiled path: a root-level one made the ENTIRE object delegate to
+ * zod (measured 246.7 ns vs 8.5 ns for the same schema compiled — a 29x cliff on
+ * the most common cross-field validation there is).
+ *
+ * Shapes whose semantics a plain call cannot reproduce still fall back: a second
+ * parameter is zod's `ctx` issue-collection protocol (superRefine), and an async
+ * or generator callback returns a promise where zod's sync parse raises.
+ */
+import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { extractSchema, type RefEntry } from "#src/core/extract/index.js";
+import type { FallbackIR, ObjectIR, SchemaIR } from "#src/core/types.js";
+import { expectParity } from "./parity-harness.js";
+
+const irOf = (schema: unknown): { ir: SchemaIR; refs: RefEntry[] } => {
+  const refs: RefEntry[] = [];
+  return { ir: extractSchema(schema, refs), refs };
+};
+
+const MIN_AGE = 18;
+const ALLOWED = ["example.com", "test.com"];
+
+describe("captured refine — compiles by reference instead of falling back", () => {
+  it("keeps a root object compiled when its refine captures", () => {
+    const schema = z.object({ age: z.number(), name: z.string() }).refine((d) => d.age >= MIN_AGE);
+    const { ir, refs } = irOf(schema);
+    expect(ir.type).toBe("object");
+    expect((ir as ObjectIR).checks?.[0]).toMatchObject({ kind: "refine_effect", refIndex: 0 });
+    expect(refs[0]?.accessPath).toBe("._zod.def.checks[0]._zod.def.fn");
+    expect(refs[0]?.schema).toBeTypeOf("function");
+  });
+
+  // Inputs are per-case: a shared list would trip the unrelated (documented)
+  // "unknown keys are not stripped" divergence on the narrower shapes.
+  it.each([
+    [
+      "object root",
+      z.object({ age: z.number() }).refine((d) => d.age >= MIN_AGE, "too young"),
+      [{ age: 30 }, { age: 5 }, { age: "x" }, {}, null, undefined],
+    ],
+    [
+      "object field",
+      z.object({ age: z.number().refine((n) => n >= MIN_AGE, "too young") }),
+      [{ age: 30 }, { age: 5 }, { age: "x" }, {}],
+    ],
+    [
+      "string",
+      z.string().refine((s) => ALLOWED.some((d) => s.endsWith(d)), "bad domain"),
+      ["user@example.com", "user@nope.org", "", 42],
+    ],
+    ["number", z.number().refine((n) => n >= MIN_AGE), [30, 5, "x", null]],
+    [
+      "array",
+      z.array(z.number()).refine((a) => a.length >= MIN_AGE / 9),
+      [[1, 2], [1], [1, "x"], []],
+    ],
+    [
+      "two captured refines",
+      z
+        .object({ age: z.number() })
+        .refine((d) => d.age > 0, "positive")
+        .refine((d) => d.age < MIN_AGE, "under age"),
+      [{ age: 5 }, { age: -1 }, { age: 100 }, { age: "x" }],
+    ],
+    [
+      "captured + zero-capture mixed",
+      z
+        .object({ age: z.number(), max: z.number() })
+        .refine((d) => d.age >= MIN_AGE)
+        .refine((d) => d.age <= d.max),
+      [
+        { age: 30, max: 99 },
+        { age: 5, max: 99 },
+        { age: 30, max: 1 },
+      ],
+    ],
+  ])("matches zod for %s", (_label, schema, inputs) => {
+    expectParity(schema as never, inputs as unknown[]);
+  });
+
+  it("still falls back for superRefine (needs zod's ctx)", () => {
+    const schema = z.object({ a: z.number() }).superRefine((d, ctx) => {
+      if (d.a < MIN_AGE) ctx.addIssue({ code: "custom", message: "young" });
+    });
+    const { ir } = irOf(schema);
+    expect(ir.type).toBe("fallback");
+    expect((ir as FallbackIR).reason).toBe("refine");
+  });
+
+  it("still falls back for an async refine", () => {
+    const { ir } = irOf(z.string().refine(async (s) => s.length > 0));
+    expect(ir.type).toBe("fallback");
+  });
+});
+
+/**
+ * Two issue-shape rules the inlined path got wrong before captured refines made
+ * the surface wide enough to notice. Both are pinned against zod itself.
+ */
+describe("refine issue shape", () => {
+  it("suppresses an object-level refine when a property already failed", () => {
+    // zod parses the properties into the payload first and skips the check
+    // chain when that produced issues — so the custom issue must NOT appear.
+    const schema = z.object({ a: z.number(), b: z.string() }).refine((d) => d.a > 100, "big");
+    expectParity(schema, [
+      { a: 1, b: 1 }, // property fails → refine suppressed
+      { a: 1, b: "x" }, // properties pass, refine fails → custom issue
+      { a: 200, b: "x" },
+      {},
+    ]);
+  });
+
+  it("still runs a string/number/array refine after a failed sibling check", () => {
+    // Unlike objects, the base value parsed fine here, so zod runs the whole
+    // check chain: both too_small AND custom are reported.
+    expectParity(
+      z
+        .string()
+        .min(5)
+        .refine((s) => s.startsWith("z")),
+      ["ab", "zab", "zabcde"],
+    );
+    expectParity(
+      z
+        .number()
+        .min(5)
+        .refine((n) => n % 2 === 0),
+      [3, 4, 6],
+    );
+    expectParity(
+      z
+        .array(z.number())
+        .min(3)
+        .refine((a) => a.length % 2 === 0),
+      [[1], [1, 2, 3, 4]],
+    );
+  });
+
+  it("reports a custom refine path against the configured member", () => {
+    expectParity(
+      z.object({ a: z.number(), b: z.number() }).refine((d) => d.a < d.b, {
+        message: "order",
+        path: ["b"],
+      }),
+      [
+        { a: 1, b: 2 },
+        { a: 3, b: 2 },
+      ],
+    );
+  });
+
+  it("falls back when the refine path has non-scalar segments", () => {
+    const schema = z.object({ a: z.number() }).refine((d) => d.a > 0, {
+      path: [Symbol("s") as unknown as string],
+    });
+    expect(irOf(schema).ir.type).toBe("fallback");
+  });
+});

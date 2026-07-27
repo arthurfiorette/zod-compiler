@@ -1,4 +1,11 @@
-import type { BigIntCheckIR, CheckIR, DateCheckIR, SchemaIR, SetCheckIR } from "../types.js";
+import type {
+  BigIntCheckIR,
+  CheckIR,
+  DateCheckIR,
+  RefineEffectCheckIR,
+  SchemaIR,
+  SetCheckIR,
+} from "../types.js";
 import type { SharedSchemaPlan } from "./dedupe.js";
 import {
   lookupFastRegexSource,
@@ -265,6 +272,24 @@ export function emitEffectFn(ctx: CodeGenContext, source: string): string {
   ctx.preamble.push(`var ${name}=(${source});`);
   ctx.effectFnCache.set(source, name);
   return name;
+}
+
+/**
+ * Callable expression for a refine predicate.
+ *
+ * A zero-capture callback is hosted from its source text; one that CAPTURES
+ * outer variables is called by reference through `__rf[N]` — the user's own
+ * function object, reached from the schema — instead of costing the schema its
+ * compiled path. The reference is aliased into a preamble binding rather than
+ * re-read per call, for the same reason call-invoked helpers are (a per-call
+ * array element load is not a foldable callee).
+ */
+export function emitRefinePredicate(ctx: CodeGenContext, check: RefineEffectCheckIR): string {
+  if (check.refIndex !== undefined) return emitConstant(ctx, "rfn", `__rf[${check.refIndex}]`);
+  if (check.source === undefined) {
+    throw new Error("refine_effect check has neither inlineable source nor a reference index");
+  }
+  return emitEffectFn(ctx, check.source);
 }
 
 /**

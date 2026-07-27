@@ -1,5 +1,5 @@
 import type { RefineEffectCheckIR, SchemaIR } from "../../types.js";
-import { extractChecks } from "../checks.js";
+import { extractChecks, refineRefRegistrar } from "../checks.js";
 import type { ExtractorContext, ZodDef } from "../types.js";
 
 export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
@@ -49,7 +49,10 @@ export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   const suppress = suppressAbsentKeys.length > 0 ? { suppressAbsentKeys } : {};
 
   if (def.checks && def.checks.length > 0) {
-    const { checkIRs, hasFallback } = extractChecks(def.checks);
+    const { checkIRs, hasFallback } = extractChecks(
+      def.checks,
+      refineRefRegistrar(ctx, def.checks),
+    );
     if (hasFallback) return ctx.fallback("refine");
     // Object codegen only supports refine effects; anything else (overwrite,
     // exotic .check() entries) must not be dropped.

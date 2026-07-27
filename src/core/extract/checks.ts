@@ -1,6 +1,27 @@
 import type { CheckOrEffectIR, CheckStringFormat } from "../types.js";
-import { tryCompileEffect } from "./effects.js";
-import type { ZodCheckDef, ZodCheckSchema } from "./types.js";
+import { isReferenceablePredicate, tryCompileEffect } from "./effects.js";
+import type { ExtractorContext, ZodCheckDef, ZodCheckSchema } from "./types.js";
+
+/**
+ * Build the `refineRef` registrar for {@link extractChecks} from an extractor's
+ * context: it appends a {@link RefEntry} pointing at the check's own predicate
+ * (`<schema>._zod.def.checks[i]._zod.def.fn`) so generated code can call the
+ * user's function object directly. Returns undefined — meaning "fall back as
+ * before" — when the extraction is not collecting refs.
+ */
+export function refineRefRegistrar(
+  ctx: ExtractorContext,
+  checks: ZodCheckSchema[],
+): ((index: number) => number | undefined) | undefined {
+  const refs = ctx.refs;
+  if (!refs) return undefined;
+  return (index) => {
+    const fn = checks[index]?._zod?.def?.fn;
+    if (!isReferenceablePredicate(fn)) return undefined;
+    refs.push({ schema: fn, accessPath: `${ctx.path}._zod.def.checks[${index}]._zod.def.fn` });
+    return refs.length - 1;
+  };
+}
 
 /**
  * String formats the codegen can validate without a regex pattern.
@@ -49,14 +70,24 @@ export function hasUncompilableModifiers(def: ZodCheckDef): boolean {
   return hasUserWhen(def) || def.abort === true;
 }
 
-export function extractChecks(checks: ZodCheckSchema[]): {
+export function extractChecks(
+  checks: ZodCheckSchema[],
+  /**
+   * Registers the predicate of the check at `index` as an `__rf[N]` reference
+   * and returns N, or undefined when references are unavailable (no refs array)
+   * or the callback's shape cannot be called directly. Supplied by extractors
+   * that know their schema's access path; omitted by callers that do not, which
+   * simply keeps the old fall-back-to-zod behavior.
+   */
+  refineRef?: (index: number) => number | undefined,
+): {
   checkIRs: CheckOrEffectIR[];
   hasFallback: boolean;
 } {
   const checkIRs: CheckOrEffectIR[] = [];
   let hasFallback = false;
 
-  for (const check of checks) {
+  for (const [index, check] of checks.entries()) {
     const def = check._zod?.def;
     if (!def) continue;
 
@@ -173,9 +204,27 @@ export function extractChecks(checks: ZodCheckSchema[]): {
         break;
       }
       case "custom": {
+        // `.refine(fn, { path })` reports the issue against a member of the
+        // refined value; anything but plain string/number segments is a shape
+        // the generated path expression cannot reproduce.
+        const customPath = Array.isArray(def.path) ? def.path : undefined;
+        if (customPath?.some((p) => typeof p !== "string" && typeof p !== "number")) {
+          hasFallback = true;
+          break;
+        }
+        const pathIR = customPath && customPath.length > 0 ? { path: customPath } : {};
         const source = tryCompileEffect(def.fn);
         if (source) {
-          checkIRs.push({ kind: "refine_effect", source, ...message });
+          checkIRs.push({ kind: "refine_effect", source, ...pathIR, ...message });
+          break;
+        }
+        // Not inlineable (the predicate captures outer variables). Call the
+        // user's own function object through a schema reference instead of
+        // delegating: a captured `.refine()` at the root otherwise costs the
+        // whole schema its compiled path.
+        const refIndex = refineRef?.(index);
+        if (refIndex !== undefined) {
+          checkIRs.push({ kind: "refine_effect", refIndex, ...pathIR, ...message });
         } else {
           hasFallback = true;
         }

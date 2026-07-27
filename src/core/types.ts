@@ -99,10 +99,29 @@ export type CheckIR =
 
 export interface RefineEffectCheckIR {
   kind: "refine_effect";
-  /** fn.toString() result, e.g. "v => v.includes('@')" */
-  source: string;
+  /**
+   * fn.toString() result, e.g. "v => v.includes('@')". Set when the predicate
+   * is zero-capture and can be inlined into the generated code. Mutually
+   * exclusive with {@link refIndex}.
+   */
+  source?: string;
+  /**
+   * `__rf[N]` index of the predicate, used when the callback CAPTURES outer
+   * variables and so cannot be inlined. The generated code calls the user's
+   * original function object through the schema reference instead of
+   * delegating the whole schema to zod — a captured `.refine()` on a root
+   * object otherwise costs the entire compilation (measured 246.7 ns vs
+   * 10.4 ns for the same schema with an inlinable predicate).
+   */
+  refIndex?: number;
   /** Custom error message from .refine(fn, "message") or .refine(fn, { message }) */
   message?: string;
+  /**
+   * Issue path suffix from `.refine(fn, { path: [...] })`, appended to the
+   * node's own path — zod reports the failure against that member rather than
+   * the refined value itself.
+   */
+  path?: (string | number)[];
 }
 
 /**

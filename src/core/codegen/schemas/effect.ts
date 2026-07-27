@@ -1,6 +1,11 @@
 import type { RefineEffectCheckIR, TransformEffectIR } from "../../types.js";
 import type { SlowGen } from "../context.js";
-import { emitEffectFn } from "../context.js";
+import {
+  emitEffectFn,
+  emitRefinePredicate,
+  extendStaticPath,
+  extendStaticPathIndex,
+} from "../context.js";
 import { emit } from "../emit.js";
 
 /**
@@ -39,8 +44,17 @@ export function refineCheck(check: RefineEffectCheckIR, expr: string, g: SlowGen
   // message baked in, __zcFin applies the locale default ("Invalid input").
   const messageProp =
     check.message === undefined ? "" : `,message:${JSON.stringify(check.message)}`;
+  // `.refine(fn, { path })` reports against a member of the refined value, so
+  // the configured segments extend this node's path.
+  const path = (check.path ?? []).reduce<string>(
+    (acc, segment) =>
+      typeof segment === "number"
+        ? extendStaticPathIndex(acc, segment)
+        : extendStaticPath(acc, segment),
+    g.path,
+  );
   return emit`
-    if(!${emitEffectFn(g.ctx, check.source)}(${expr})){
-      ${g.issues}.push({code:"custom",path:${g.path}${messageProp},input:${expr}});
+    if(!${emitRefinePredicate(g.ctx, check)}(${expr})){
+      ${g.issues}.push({code:"custom",path:${path}${messageProp},input:${expr}});
     }`;
 }

@@ -1,5 +1,5 @@
 import type { CheckOrEffectIR, SchemaIR } from "../../types.js";
-import { extractChecks, resolveCheckMessage } from "../checks.js";
+import { extractChecks, refineRefRegistrar, resolveCheckMessage } from "../checks.js";
 import type { ExtractorContext, ZodDef } from "../types.js";
 
 /** Check kinds the number codegen knows how to emit. Anything else → fallback. */
@@ -30,7 +30,10 @@ export function extractNumber(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   // Appended checks (.min(), .refine(), ... — also present on format schemas
   // like z.int().refine(fn), which previously lost them entirely).
   if (def.checks && def.checks.length > 0) {
-    const { checkIRs, hasFallback } = extractChecks(def.checks);
+    const { checkIRs, hasFallback } = extractChecks(
+      def.checks,
+      refineRefRegistrar(ctx, def.checks),
+    );
     if (hasFallback) return ctx.fallback("refine");
     allChecks.push(...checkIRs);
   }

@@ -47,9 +47,22 @@ describe("extractObject", () => {
     expect(ir.type).toBe("fallback");
   });
 
-  it("falls back for object with non-compilable refine", () => {
+  it("compiles an object whose refine captures, calling the predicate by reference", () => {
     const captured = "external";
     const schema = z.object({ x: z.string() }).refine((v) => v.x === captured);
+    const refs: { schema: unknown; accessPath: string }[] = [];
+    const ir = extractSchema(schema, refs) as ObjectIR;
+    expect(ir.type).toBe("object");
+    expect(ir.checks?.[0]).toEqual({ kind: "refine_effect", refIndex: 0 });
+    // The ref points at the user's own predicate, reachable from the schema.
+    expect(refs[0]?.accessPath).toBe("._zod.def.checks[0]._zod.def.fn");
+    expect(refs[0]?.schema).toBeTypeOf("function");
+  });
+
+  it("still falls back when the refine takes zod's ctx argument", () => {
+    const schema = z.object({ x: z.string() }).superRefine((v, ctx) => {
+      if (v.x === "") ctx.addIssue({ code: "custom" });
+    });
     const refs: { schema: unknown; accessPath: string }[] = [];
     const ir = extractSchema(schema, refs);
     expect(ir.type).toBe("fallback");

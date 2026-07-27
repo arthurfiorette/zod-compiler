@@ -1,6 +1,6 @@
 import type { CheckIR, NumberIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { checkPriority, emitEffectFn, emitRuntimeHelper } from "../context.js";
+import { checkPriority, emitRefinePredicate, emitRuntimeHelper } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
 import { ZC_FSR_DECL } from "../issue-decls.js";
@@ -194,7 +194,7 @@ export function fastNumber(ir: NumberIR, g: FastGen): string | null {
   // Refine effect checks (appended last — run after cheap checks short-circuit)
   for (const check of ir.checks) {
     if (check.kind === "refine_effect") {
-      parts.push(`${emitEffectFn(g.ctx, check.source)}(${x})`);
+      parts.push(`${emitRefinePredicate(g.ctx, check)}(${x})`);
     }
   }
 

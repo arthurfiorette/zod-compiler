@@ -1,6 +1,12 @@
 import type { CheckIR, CheckStringFormat, StringIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { checkPriority, emitEffectFn, emitRegexSourceString, escapeString } from "../context.js";
+import {
+  checkPriority,
+  emitEffectFn,
+  emitRefinePredicate,
+  emitRegexSourceString,
+  escapeString,
+} from "../context.js";
 import { emit } from "../emit.js";
 import { invalidFormat, invalidType, tooBig, tooSmall } from "../emit-issue.js";
 import {
@@ -243,7 +249,7 @@ export function fastString(ir: StringIR, g: FastGen): string | null {
   // Refine effect checks (appended last — run after cheap checks short-circuit)
   for (const check of ir.checks) {
     if (check.kind === "refine_effect") {
-      parts.push(`${emitEffectFn(g.ctx, check.source)}(${x})`);
+      parts.push(`${emitRefinePredicate(g.ctx, check)}(${x})`);
     }
   }
 
