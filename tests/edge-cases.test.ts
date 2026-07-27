@@ -510,3 +510,112 @@ describe("edge cases — literal with NaN / Infinity / -Infinity", () => {
       { v: 1 },
     ]));
 });
+
+// A mutating element schema (coerce / zero-capture transform / stringbool /
+// default) forces the container to REBUILD from the validated elements instead
+// of returning the input by reference — the output must carry every converted
+// value at the right position/key. Earlier suites cover this only for
+// `.trim()` inside Set/Map (zod-parity); array/record/tuple element conversion
+// (and dedup/order interactions in Set/Map) exercise distinct rebuild codegen.
+describe("edge cases — mutating element schemas rebuild the collection", () => {
+  it("array of coerced numbers yields the converted array", () =>
+    expectParity(z.array(z.coerce.number()), [["1", "2", "3"], ["1", "x"], [], ["1", true, null]]));
+  it("array of zero-capture transforms maps each element", () =>
+    expectParity(z.array(z.string().transform((s) => s.length)), [
+      ["a", "bb", "ccc"],
+      ["a", 1],
+    ]));
+  it("array of stringbool converts each element", () =>
+    expectParity(z.array(z.stringbool()), [
+      ["true", "false", "on", "off"],
+      ["true", "maybe"],
+    ]));
+  it("record of coerced numbers converts each value, keeps keys", () =>
+    expectParity(z.record(z.string(), z.coerce.number()), [{ a: "1", b: "2" }, { a: "x" }]));
+  it("record of zero-capture transforms maps each value", () =>
+    expectParity(
+      z.record(
+        z.string(),
+        z.string().transform((s) => s.toUpperCase()),
+      ),
+      [{ a: "x", b: "y" }],
+    ));
+  it("tuple with coerced and transformed slots", () =>
+    expectParity(z.tuple([z.coerce.number(), z.coerce.boolean()]), [
+      ["5", "yes"],
+      ["x", ""],
+    ]));
+  it("tuple mixing a transform slot with a plain slot", () =>
+    expectParity(z.tuple([z.string().transform((s) => s.length), z.number()]), [
+      ["ab", 1],
+      ["ab", "x"],
+    ]));
+  it("set of coerced numbers dedups AFTER conversion", () =>
+    // "1" and 1 both coerce to 1 — the resulting Set must collapse them, matching
+    // Zod's post-conversion dedup (distinct from the trimmed-string case above).
+    expectParity(z.set(z.coerce.number()), [new Set<unknown>(["1", 1, "2"]), new Set(["x"])]));
+  it("map with coerced keys and values", () =>
+    expectParity(z.map(z.coerce.string(), z.coerce.number()), [
+      new Map<unknown, unknown>([
+        [1, "2"],
+        [3, "4"],
+      ]),
+    ]));
+  it("array of objects each carrying a field default", () =>
+    expectParity(z.array(z.object({ n: z.string().default("d"), m: z.number() })), [
+      [{ m: 1 }, { n: "x", m: 2 }],
+    ]));
+});
+
+// Container-level `.catch()` / `.default()` wrap a whole array/object/record.
+// The matrix covers primitive catch/default; a container substitute value (and
+// the present-but-invalid → substitute path) is a distinct codegen branch.
+describe("edge cases — container-level catch and default", () => {
+  it("array().catch substitutes on any failure", () =>
+    expectParity(z.array(z.number()).catch([]), [[1, 2], [1, "x"], "nope", undefined]));
+  it("object().catch substitutes the whole object", () =>
+    expectParity(z.object({ a: z.string() }).catch({ a: "fallback" }), [
+      { a: "x" },
+      { a: 1 },
+      "nope",
+    ]));
+  it("array().default fills a missing input", () =>
+    expectParity(z.array(z.number()).default([]), [undefined, [1, 2], [1, "x"]]));
+  it("object().default fills a missing input but still validates a present one", () =>
+    expectParity(z.object({ a: z.string() }).default({ a: "d" }), [
+      undefined,
+      { a: "x" },
+      { a: 1 },
+    ]));
+  it("record().default fills a missing input", () =>
+    expectParity(z.record(z.string(), z.number()).default({}), [undefined, { a: 1 }, { a: "x" }]));
+});
+
+// Wrapper chains, pipe+coercion, ISO format options, and zero-boundary checks —
+// each compiles a path the one-case-per-feature matrix does not reach.
+describe("edge cases — wrapper chains, pipe+coerce, ISO options, zero boundaries", () => {
+  it("deeply chained optional/nullable wrappers", () => {
+    expectParity(z.string().optional().nullable().optional(), [undefined, null, "x", 1]);
+    expectParity(z.array(z.string()).optional().default([]), [undefined, ["a"], "x"]);
+    expectParity(z.number().catch(0).optional().nullable(), [undefined, null, 5, "x"]);
+  });
+  it("coercion piped into a checked schema", () => {
+    expectParity(z.coerce.number().pipe(z.number().int()), ["5", "5.5", "x"]);
+    expectParity(z.string().pipe(z.coerce.number()), ["5", "x", 5]);
+  });
+  it("ISO format constructor options", () => {
+    expectParity(z.iso.time({ precision: 3 }), ["12:30:00.123", "12:30:00", "12:30:00.1"]);
+    expectParity(z.iso.datetime({ local: true }), ["2024-01-01T12:30:00", "2024-01-01T12:30:00Z"]);
+    expectParity(z.iso.datetime({ offset: true }), [
+      "2024-01-01T12:30:00+02:00",
+      "2024-01-01T12:30:00Z",
+      "2024-01-01T12:30:00",
+    ]);
+  });
+  it("zero-boundary length/size/multipleOf checks", () => {
+    expectParity(z.string().min(0), ["", "x"]);
+    expectParity(z.string().length(0), ["", "x"]);
+    expectParity(z.array(z.number()).length(0), [[], [1]]);
+    expectParity(z.number().multipleOf(0), [0, 1, 5]); // x % 0 is NaN — only 0 can pass in Zod
+  });
+});

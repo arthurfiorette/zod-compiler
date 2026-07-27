@@ -335,3 +335,96 @@ describe("schema dedupe", () => {
     expect(shared.usedHelpers).toContain("__zcIT");
   });
 });
+
+/**
+ * Structural-key near-misses: two shapes identical EXCEPT one discriminating
+ * detail must NOT merge. `keyOf` (dedupe.ts) serializes every IR field — each
+ * check's bound, `inclusive` flag, regex source+flags, literal value, baked
+ * message, and the presence/optionality of every property — so two shapes that
+ * validate differently get different keys. The pre-existing coverage pinned
+ * only ONE near-miss (non-finite bounds, which JSON.stringify collapses to
+ * "null"); a `keyOf` that dropped any of these other fields would silently make
+ * one export validate with the other's rules. Each pair embeds its shape twice
+ * (so it is a sharing candidate) and feeds an input that A accepts but B does
+ * not — a wrong merge makes one export diverge from zod.
+ */
+describe("schema dedupe — near-miss keys must not merge", () => {
+  /** Build A1 = {p:A,q:A} and B1 = {p:B,q:B}, assert each matches zod for `wrap`. */
+  function assertDistinct(A: z.ZodType, B: z.ZodType, sample: unknown) {
+    const A1 = z.object({ p: A, q: A });
+    const B1 = z.object({ p: B, q: B });
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A1", schema: A1 },
+        { exportName: "B1", schema: B1 },
+      ],
+      { mode: "inline" },
+    );
+    const wrap = { p: sample, q: sample };
+    expect(shape(build(pick(schemas, "A1"), shared.code)(wrap))).toBe(shape(A1.safeParse(wrap)));
+    expect(shape(build(pick(schemas, "B1"), shared.code)(wrap))).toBe(shape(B1.safeParse(wrap)));
+  }
+
+  // Each pair is a 3-field object (weight ≥ 4 → a real sharing candidate) that
+  // differs in exactly one check/structure detail; `sample` passes A, fails B.
+  it.each([
+    [
+      "min vs max bound",
+      z.object({ n: z.number().min(5), x: z.string(), y: z.string() }),
+      z.object({ n: z.number().max(5), x: z.string(), y: z.string() }),
+      { n: 10, x: "a", y: "b" },
+    ],
+    [
+      "inclusive vs exclusive (gte vs gt)",
+      z.object({ n: z.number().gte(5), x: z.string(), y: z.string() }),
+      z.object({ n: z.number().gt(5), x: z.string(), y: z.string() }),
+      { n: 5, x: "a", y: "b" },
+    ],
+    [
+      "regex flags (case-insensitive vs not)",
+      z.object({ s: z.string().regex(/^a$/), x: z.string(), y: z.string() }),
+      z.object({ s: z.string().regex(/^a$/i), x: z.string(), y: z.string() }),
+      { s: "A", x: "a", y: "b" },
+    ],
+    [
+      "literal value differs",
+      z.object({ k: z.literal("a"), x: z.string(), y: z.string() }),
+      z.object({ k: z.literal("b"), x: z.string(), y: z.string() }),
+      { k: "a", x: "a", y: "b" },
+    ],
+    [
+      "optional vs required field",
+      z.object({ a: z.string(), b: z.string(), c: z.string().optional() }),
+      z.object({ a: z.string(), b: z.string(), c: z.string() }),
+      { a: "x", b: "y" },
+    ],
+    [
+      "string min length differs",
+      z.object({ s: z.string().min(2), x: z.string(), y: z.string() }),
+      z.object({ s: z.string().min(3), x: z.string(), y: z.string() }),
+      { s: "ab", x: "a", y: "b" },
+    ],
+  ] as [string, z.ZodType, z.ZodType, unknown][])("keeps distinct: %s", (_name, A, B, sample) =>
+    assertDistinct(A, B, sample),
+  );
+
+  it("two shapes differing only in a baked custom message stay distinct", () => {
+    // Same predicate, different message: identical code+path on failure, so the
+    // ONLY observable difference is `issue.message`. `keyOf` must include the
+    // baked message or the two merge and one export reports the other's text.
+    const A = z.object({ n: z.number().min(5, "alpha"), x: z.string(), y: z.string() });
+    const B = z.object({ n: z.number().min(5, "beta"), x: z.string(), y: z.string() });
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A1", schema: z.object({ p: A, q: A }) },
+        { exportName: "B1", schema: z.object({ p: B, q: B }) },
+      ],
+      { mode: "inline" },
+    );
+    const wrap = { p: { n: 1, x: "a", y: "b" }, q: { n: 1, x: "a", y: "b" } };
+    const firstMsg = (r: { error?: { issues: { message?: string }[] } }) =>
+      r.error?.issues[0]?.message;
+    expect(firstMsg(build(pick(schemas, "A1"), shared.code)(wrap))).toBe("alpha");
+    expect(firstMsg(build(pick(schemas, "B1"), shared.code)(wrap))).toBe("beta");
+  });
+});
