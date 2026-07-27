@@ -9,6 +9,8 @@
  * exposes additional well-known formats and we want bundle-wide dedup.
  */
 
+import { unrollRepeats } from "./regex-unroll.js";
+
 /** Zod v4's email regex source (string.ts uses this directly when format === "email"). */
 export const EMAIL_REGEX_SOURCE = String.raw`^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$`;
 
@@ -94,13 +96,35 @@ export function lookupWellKnownRegex(source: string): string | null {
 }
 
 /**
- * Look up the faster behavior-equivalent test pattern for a regex source.
- * Returns null when no rewrite is registered (the pattern is used verbatim).
- * Callers must only apply the rewrite to flag-less regexes and must keep
- * reporting the ORIGINAL source in issues.
+ * Look up the hand-written behavior-equivalent test pattern for a regex source.
+ * Returns null when no rewrite is registered in {@link WELL_KNOWN_REGEXES}.
+ *
+ * This is the TABLE lookup only. Codegen calls {@link fastTestSource}, which
+ * layers automatic repeat unrolling on top and also covers user-supplied
+ * patterns that are in no table.
  */
 export function lookupFastRegexSource(source: string): string | null {
   return SOURCE_TO_TEST_SOURCE.get(source) ?? null;
+}
+
+/**
+ * The pattern a generated `.test()` should actually run for `source`, or null
+ * when `source` is already the best form.
+ *
+ * Two behavior-preserving rewrites compose here: the hand-written table entry
+ * above (currently just email), then {@link unrollRepeats}, which turns bounded
+ * repeats of single-character atoms into explicit repetition — worth 1.3-3.4x
+ * on the string formats everyday schemas use (uuid, guid, ulid, nanoid, xid,
+ * ksuid, base64, e164, iso.date). Unrolling runs on the table rewrite when
+ * there is one, so the two stack.
+ *
+ * Callers must apply this only to flag-less regexes (the flagged form would
+ * need its flags carried into the reported pattern too) and must keep
+ * reporting the ORIGINAL source in issues — see `emitRegexSourceString`.
+ */
+export function fastTestSource(source: string): string | null {
+  const tableRewrite = SOURCE_TO_TEST_SOURCE.get(source) ?? null;
+  return unrollRepeats(tableRewrite ?? source) ?? tableRewrite;
 }
 
 /**
@@ -112,5 +136,5 @@ export function lookupFastRegexSource(source: string): string | null {
 export function wellKnownRegexSourceName(source: string): string | null {
   const name = SOURCE_TO_NAME.get(source);
   if (name === undefined) return null;
-  return SOURCE_TO_TEST_SOURCE.has(source) ? `${name}Src` : null;
+  return fastTestSource(source) !== null ? `${name}Src` : null;
 }

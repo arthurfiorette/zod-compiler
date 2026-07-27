@@ -1,7 +1,7 @@
 import type { BigIntCheckIR, CheckIR, DateCheckIR, SchemaIR, SetCheckIR } from "../types.js";
 import type { SharedSchemaPlan } from "./dedupe.js";
 import {
-  lookupFastRegexSource,
+  fastTestSource,
   lookupWellKnownRegex,
   wellKnownRegexSourceName,
 } from "./well-known-regex.js";
@@ -187,6 +187,62 @@ export type SlowGenerator<T extends SchemaIR = SchemaIR> = (ir: T, g: SlowGen) =
  */
 export interface FastScope {
   used: number;
+  /**
+   * `var` temps that the function this scope is assembling must declare, in
+   * allocation order. Populated by {@link FastGen.local}; every site that
+   * materializes a function body from a fresh scope emits
+   * {@link declareFastTemps} at the top of that body.
+   *
+   * Function-scoped (never module-scoped) is load-bearing: a recursive
+   * validator re-enters itself while an outer frame still holds a live temp,
+   * and each invocation needs its own binding.
+   */
+  temps: string[];
+}
+
+/** `var a,b;` declaration for a scope's temps, or "" when it allocated none. */
+export function declareFastTemps(scope: FastScope): string {
+  return scope.temps.length > 0 ? `var ${scope.temps.join(",")};` : "";
+}
+
+/**
+ * Fast check for a wrapper that compares its input against a sentinel and
+ * otherwise delegates to an inner schema — `optional` (`===undefined`),
+ * `nullable` (`===null`) and `default` (`!==undefined`).
+ *
+ * Written naively these read the input TWICE: once for the sentinel test and
+ * again inside the inner check (which may itself read it several more times —
+ * `typeof x==="string"&&x.length>=3&&x.length<=20`). V8's load elimination
+ * removes the repeats only while the access is monomorphic; on the polymorphic
+ * and megamorphic call sites real payloads produce (an array of objects with
+ * differing key order, anything out of `JSON.parse`) every repeat is a fresh
+ * megamorphic lookup. Binding the value to a local once is worth 1.1-1.7x on
+ * the whole object check when the optional key is present, and is neutral when
+ * it is absent.
+ *
+ * Only hoisted when the input is a property access; a bare local (an array
+ * element variable, a record value) is already a single load, so it keeps the
+ * shorter form and byte-identical output.
+ */
+export function fastSentinelWrapper(
+  g: FastGen,
+  innerIR: SchemaIR,
+  sentinel: string,
+  joiner: "&&" | "||",
+): string | null {
+  if (!isPropertyAccess(g.input)) {
+    const inner = g.visit(innerIR);
+    return inner === null ? null : `(${g.input}${sentinel}${joiner}(${inner}))`;
+  }
+  const value = g.local("w");
+  const inner = g.visit(innerIR, { input: value });
+  if (inner === null) return null;
+  return `((${value}=${g.input})${sentinel}${joiner}(${inner}))`;
+}
+
+/** True for an expression that performs a property load (`x["a"]`, `x.a`, `x[0][1]`). */
+function isPropertyAccess(expr: string): boolean {
+  return expr.includes("[") || expr.includes(".");
 }
 
 /** Context object for fast-path (boolean expression) generator functions. */
@@ -230,6 +286,14 @@ export interface FastGen {
 
   /** Generate a unique temp variable name. */
   temp(prefix: string): string;
+
+  /**
+   * Allocate a unique name AND record it on this scope so the enclosing
+   * emitted function declares it as a `var` (see {@link FastScope.temps}).
+   * Use for a value bound inside an expression — `(t=x["k"])===undefined` —
+   * where `temp()` alone would leave the name undeclared.
+   */
+  local(prefix: string): string;
 
   /** Add a regex to preamble and return the variable name. */
   regex(prefix: string, pattern: string, flags?: string): string;
@@ -338,10 +402,10 @@ export function emitRegex(
   if (cached) return cached;
   const name = `__re_${prefix}_${ctx.counter++}`;
   const flagsArg = flags ? `,${escapeString(flags)}` : "";
-  // Flag-less well-known patterns may carry a faster behavior-equivalent
-  // rewrite; the regex OBJECT uses it while issue sites keep reporting the
-  // original pattern (see slowString).
-  const testSource = flags ? null : lookupFastRegexSource(pattern);
+  // Flag-less patterns may carry a faster behavior-equivalent rewrite (a
+  // well-known table entry, repeat unrolling, or both); the regex OBJECT uses
+  // it while issue sites keep reporting the original pattern (see slowString).
+  const testSource = flags ? null : fastTestSource(pattern);
   ctx.preamble.push(`var ${name}=new RegExp(${escapeString(testSource ?? pattern)}${flagsArg});`);
   ctx.regexCache.set(cacheKey, name);
   return name;
@@ -398,36 +462,34 @@ export function emitSet(ctx: CodeGenContext, prefix: string, values: readonly un
 }
 
 /**
- * An object literal cannot carry an own `__proto__` key: `{"__proto__":1}`
- * sets nothing and defines nothing, so the membership lookup would silently
- * miss that key. Such shapes keep the Set form.
- */
-function literalSafeKeys(keys: readonly string[]): boolean {
-  return !keys.includes("__proto__");
-}
-
-/**
- * Declare a `{key:1,...}` membership table in the preamble and return its
- * variable name; membership is `NAME[k]===1`.
+ * Shape-key count at or below which the unknown-key pass compares with an
+ * inline `===` chain rather than a hashed lookup.
  *
- * Chosen over `new Set(...).has(k)` for key-membership tests: V8 serves the
- * keyed load from the megamorphic stub cache (~0.9 ns, flat in table size),
- * while `Set.prototype.has` costs ~4 ns per call however small the set —
- * measured 3.7x (8 keys) to 4.5x (32 keys) faster over a strict object's
- * for-in pass. `===1` (not truthiness) is what keeps inherited keys out:
- * `toString`, `constructor`, `__proto__` and friends all resolve to something
- * that is never the number 1, so they read as unknown exactly as they should.
+ * This is deliberately NOT {@link ENUM_INLINE_THRESHOLD}: the two look alike but
+ * are different workloads. An enum compares schema literals against arbitrary
+ * INPUT strings, which may be long, share prefixes, and are not necessarily
+ * internalized — so a hashed set earns its keep quickly. A shape-key test
+ * compares them against keys arriving from `for-in`, i.e. the object's own
+ * internalized key strings, so every arm of the chain is a pointer compare that
+ * V8 predicts perfectly, while `table[k]` / `set.has(k)` pays a string hash and
+ * probe per key.
+ *
+ * Measured over a strict object's for-in pass (JSON-parsed input, 8 rotated
+ * shapes), `===` chain vs the previous `{k:1}` table: 3.7x at 6 keys, 3.8x at
+ * 10, 3.1x at 20, 3.1x at 48 — the chain still leads at 64 (283 ns vs 690) and
+ * only loses past ~96, where `Set.has` (not the table, which never wins at any
+ * size) takes over. 64 sits below that crossover and above any realistic shape.
  */
-function emitKeyLookup(ctx: CodeGenContext, prefix: string, keys: readonly string[]): string {
-  const entries = keys.map((k) => `${escapeString(k)}:1`).join(",");
-  return emitConstant(ctx, `ko_${prefix}`, `{${entries}}`);
-}
+export const KEY_MEMBERSHIP_INLINE_THRESHOLD = 64;
 
 /**
  * Boolean membership test for one key variable against a fixed key list.
- * Short lists inline an `===` chain (keys arriving from for-in are
- * internalized, so each arm is a pointer compare); longer ones consult a
- * preamble membership table. Empty list recognizes nothing.
+ * Empty list recognizes nothing.
+ *
+ * `Set.has` is the large-shape fallback rather than a `{key:1}` object table:
+ * the table is also `__proto__`-hostile (an own `__proto__` key cannot be set
+ * by an object literal, so that key would silently read as unknown), which the
+ * Set has no trouble with.
  */
 export function keyMembershipTest(
   ctx: CodeGenContext,
@@ -435,11 +497,10 @@ export function keyMembershipTest(
   keyVar: string,
 ): string {
   if (keys.length === 0) return "false";
-  if (keys.length <= ENUM_INLINE_THRESHOLD) {
+  if (keys.length <= KEY_MEMBERSHIP_INLINE_THRESHOLD) {
     return keys.map((k) => `${keyVar}===${escapeString(k)}`).join("||");
   }
-  if (!literalSafeKeys(keys)) return `${emitSet(ctx, "ks", keys)}.has(${keyVar})`;
-  return `${emitKeyLookup(ctx, "ks", keys)}[${keyVar}]===1`;
+  return `${emitSet(ctx, "ks", keys)}.has(${keyVar})`;
 }
 
 /**

@@ -9,11 +9,7 @@ import {
 } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidFormat, invalidType, tooBig, tooSmall } from "../emit-issue.js";
-import {
-  EMAIL_REGEX_SOURCE,
-  lookupFastRegexSource,
-  UUID_REGEX_SOURCE,
-} from "../well-known-regex.js";
+import { EMAIL_REGEX_SOURCE, fastTestSource, UUID_REGEX_SOURCE } from "../well-known-regex.js";
 import { refineCheck, superRefineCheck, superRefineFastTest } from "./effect.js";
 
 /** `re.lastIndex=0;` reset statement for stateful (g/y-flagged) regexes. */
@@ -161,7 +157,7 @@ export function slowString(ir: StringIR, g: SlowGen): string {
           // regex's toString() would leak the rewrite into the issue. Reference
           // the shared original-pattern string instead (pattern came from
           // RegExp.source, so it matches zod's `.toString()` byte-for-byte).
-          const rewritten = !check.patternFlags && lookupFastRegexSource(pattern) !== null;
+          const rewritten = !check.patternFlags && fastTestSource(pattern) !== null;
           const patternExpr = rewritten
             ? emitRegexSourceString(g.ctx, pattern)
             : `${regexVar}.toString()`;

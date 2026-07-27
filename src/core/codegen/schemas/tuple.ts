@@ -1,6 +1,6 @@
 import type { SchemaIR, TupleIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { extendPath, extendStaticPathIndex, hasMutation } from "../context.js";
+import { declareFastTemps, extendPath, extendStaticPathIndex, hasMutation } from "../context.js";
 import { orderByRuntimeCost } from "../fast-size.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
@@ -109,12 +109,13 @@ export function fastTuple(ir: TupleIR, g: FastGen): string | null {
   // independently. (Fixed items above stay inline in the caller's && chain.)
   if (ir.rest !== null) {
     const rv = g.temp("tr");
-    const restCheck = g.scoped(rv).visit(ir.rest);
+    const restGen = g.scoped(rv);
+    const restCheck = restGen.visit(ir.rest);
     if (restCheck === null) return null;
     if (restCheck !== "true") {
       const helperName = g.temp("te");
       g.ctx.preamble.push(
-        `function ${helperName}(a,s){for(var ${rv},i=s;i<a.length;i++){${rv}=a[i];if(!(${restCheck})){return false;}}return true;}`,
+        `function ${helperName}(a,s){${declareFastTemps(restGen.scope)}for(var ${rv},i=s;i<a.length;i++){${rv}=a[i];if(!(${restCheck})){return false;}}return true;}`,
       );
       parts.push(`${helperName}(${x},${ir.items.length})`);
     }

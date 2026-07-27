@@ -1,6 +1,6 @@
 import type { SchemaIR, SetIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { checkPriority, extendPath, hasMutation } from "../context.js";
+import { checkPriority, declareFastTemps, extendPath, hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
 
@@ -87,12 +87,13 @@ export function fastSet(ir: SetIR, g: FastGen): string | null {
   // Element validation via preamble helper (Set has no .every()).
   // Fresh scope: the helper is its own function, size-gated independently.
   const elemVar = g.temp("sv");
-  const elemCheck = g.scoped(elemVar).visit(ir.valueType);
+  const elemGen = g.scoped(elemVar);
+  const elemCheck = elemGen.visit(ir.valueType);
   if (elemCheck === null) return null;
   if (elemCheck !== "true") {
     const helperName = g.temp("se");
     g.ctx.preamble.push(
-      `function ${helperName}(s){for(var ${elemVar} of s){if(!(${elemCheck})){return false;}}return true;}`,
+      `function ${helperName}(s){${declareFastTemps(elemGen.scope)}for(var ${elemVar} of s){if(!(${elemCheck})){return false;}}return true;}`,
     );
     parts.push(`${helperName}(${x})`);
   }

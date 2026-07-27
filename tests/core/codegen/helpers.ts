@@ -1,5 +1,6 @@
 import { ZodRealError } from "zod";
 import type { CodeGenContext } from "#src/core/codegen/context.js";
+import { declareFastTemps } from "#src/core/codegen/context.js";
 import { createFastGen, generateFast } from "#src/core/codegen/fast-path.js";
 import { generateValidator } from "#src/core/codegen/index.js";
 import { FAIL_CLASS_DECL, FIN_DECL, FIN_DEFERRED_DECL } from "#src/core/iife.js";
@@ -81,6 +82,13 @@ export function compileFastCheck(ir: SchemaIR): ((input: unknown) => boolean) | 
   if (expr === null) return null;
   if (expr === "true") return () => true;
   if (expr === "false") return () => false;
-  const code = [STRICT, ...ctx.preamble, `return function(input){return ${expr};}`].join("\n");
+  // Mirrors generateValidator: the function hosting the expression declares the
+  // scope's temps. STRICT is what makes a missed declaration fail loudly here
+  // (an implicit global otherwise), so keep both together.
+  const code = [
+    STRICT,
+    ...ctx.preamble,
+    `return function(input){${declareFastTemps(g.scope)}return ${expr};}`,
+  ].join("\n");
   return new Function(code)() as (input: unknown) => boolean;
 }

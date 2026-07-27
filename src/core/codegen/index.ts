@@ -1,6 +1,6 @@
 import type { SchemaIR } from "../types.js";
 import type { CodeGenContext, CodeGenResult, CodegenMode, RecTargetGen } from "./context.js";
-import { emitRfDelegate, hasMutation } from "./context.js";
+import { declareFastTemps, emitRfDelegate, hasMutation } from "./context.js";
 import type { SharedSchemaPlan } from "./dedupe.js";
 import { createFastGen, generateFast } from "./fast-path.js";
 import { createSlowGen, generateSlow } from "./slow-path.js";
@@ -122,12 +122,15 @@ export function generateValidator(
     // rollback below then restores clean state for the slow-only path.
     for (const t of ctx.recTargets.values()) {
       if (t.isRoot) continue;
-      const body = generateFast(t.inner as SchemaIR, createFastGen("input", ctx, false));
+      const targetGen = createFastGen("input", ctx, false);
+      const body = generateFast(t.inner as SchemaIR, targetGen);
       if (body === null) {
         fastExpr = null;
         break;
       }
-      ctx.preamble.push(`function ${t.fastName}(input){return ${body};}`);
+      ctx.preamble.push(
+        `function ${t.fastName}(input){${declareFastTemps(targetGen.scope)}return ${body};}`,
+      );
     }
   }
   if (fastExpr === null) {
@@ -152,7 +155,9 @@ export function generateValidator(
   let fastFnName: string | null = null;
   if (fastExpr !== null && fastExpr !== "true") {
     fastFnName = ctx.recFastName ?? `__fc_${ctx.counter++}`;
-    ctx.preamble.push(`function ${fastFnName}(input){return ${fastExpr};}`);
+    ctx.preamble.push(
+      `function ${fastFnName}(input){${declareFastTemps(fg.scope)}return ${fastExpr};}`,
+    );
     fastExpr = `${fastFnName}(input)`;
   }
 

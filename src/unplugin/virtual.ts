@@ -13,7 +13,7 @@
  */
 
 import { ISSUE_DECLS, RUNTIME_HELPER_DECLS, ZC_SR_RUN_DECL } from "../core/codegen/issue-decls.js";
-import { WELL_KNOWN_REGEXES } from "../core/codegen/well-known-regex.js";
+import { fastTestSource, WELL_KNOWN_REGEXES } from "../core/codegen/well-known-regex.js";
 import {
   FAIL_CLASS_DECL,
   FAILZ_CLASS_DECL,
@@ -56,11 +56,15 @@ function buildRuntimeSource(): string {
     ...Object.values(RUNTIME_HELPER_DECLS).map((decl) => `export ${decl}`),
   ];
   for (const r of WELL_KNOWN_REGEXES) {
-    // testSource is a behavior-equivalent faster pattern used for the runtime
-    // regex; issue sites reference the paired `<name>Src` string so reported
-    // patterns stay byte-identical to zod's (single bundle-wide copy of each).
-    parts.push(`export const ${r.name}=new RegExp(${JSON.stringify(r.testSource ?? r.source)});`);
-    if (r.testSource !== undefined) {
+    // fastTestSource is a behavior-equivalent faster pattern used for the
+    // runtime regex (table rewrite and/or repeat unrolling); issue sites
+    // reference the paired `<name>Src` string so reported patterns stay
+    // byte-identical to zod's (single bundle-wide copy of each). It is the same
+    // function emitRegex consults, so the virtual module and inline mode can
+    // never disagree about which pattern a format actually runs.
+    const testSource = fastTestSource(r.source);
+    parts.push(`export const ${r.name}=new RegExp(${JSON.stringify(testSource ?? r.source)});`);
+    if (testSource !== null) {
       parts.push(`export const ${r.name}Src=${JSON.stringify(`/${r.source}/`)};`);
     }
   }
@@ -109,6 +113,6 @@ export const ALL_HELPER_NAMES: readonly string[] = [
   ...Object.keys(ISSUE_DECLS),
   ...Object.keys(RUNTIME_HELPER_DECLS),
   ...WELL_KNOWN_REGEXES.flatMap((r) =>
-    r.testSource !== undefined ? [r.name, `${r.name}Src`] : [r.name],
+    fastTestSource(r.source) !== null ? [r.name, `${r.name}Src`] : [r.name],
   ),
 ];

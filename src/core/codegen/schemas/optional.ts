@@ -1,5 +1,6 @@
 import type { OptionalIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
+import { fastSentinelWrapper } from "../context.js";
 import { emit } from "../emit.js";
 
 /**
@@ -34,12 +35,10 @@ export function slowOptional(ir: SchemaIR & { type: "optional" }, g: SlowGen): s
 }
 
 export function fastOptional(ir: OptionalIR, g: FastGen): string | null {
-  const inner = g.visit(ir.inner);
-  if (inner === null) return null;
   // Same rule as the slow path: an inner default needs undefined to reach it, so
   // drop the `===undefined` shortcut (which would let safeParse return the raw
   // undefined before the eager slow path applies the default). The inner
   // fast-default expr already returns false on undefined, routing to the slow path.
-  if (innerAppliesDefaultOnUndefined(ir.inner)) return inner;
-  return `(${g.input}===undefined||(${inner}))`;
+  if (innerAppliesDefaultOnUndefined(ir.inner)) return g.visit(ir.inner);
+  return fastSentinelWrapper(g, ir.inner, "===undefined", "||");
 }

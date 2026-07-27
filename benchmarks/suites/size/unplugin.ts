@@ -25,7 +25,13 @@ interface BundleResult {
   raw: number;
   gzip: number;
   /** Number of occurrences of each well-known dedup probe in the bundled chunk. */
-  probes: { emailRegex: number; emailSrcString: number; uuidRegex: number; mkvFactory: number };
+  probes: {
+    emailRegex: number;
+    emailSrcString: number;
+    mkvFactory: number;
+    uuidRegex: number;
+    uuidSrcString: number;
+  };
 }
 
 async function bundle(plugins: ZodCompilerPlugin[]): Promise<BundleResult> {
@@ -65,7 +71,12 @@ async function bundle(plugins: ZodCompilerPlugin[]): Promise<BundleResult> {
       // lookaheads); __zcReEmailSrc carries zod's original pattern for issues.
       emailRegex: count(code, "(?:[A-Za-z0-9_'+"),
       emailSrcString: count(code, "(?!.*"),
-      uuidRegex: count(code, "[1-8][0-9a-fA-F]"),
+      // __zcReUuid is built with counted repeats unrolled into explicit
+      // repetition, so only it has a character class sitting directly before
+      // `-[1-8]`; __zcReUuidSrc keeps zod's original `{8}` for issue reporting.
+      // Each must still appear exactly once no matter how many files use uuid.
+      uuidRegex: count(code, "]-[1-8]"),
+      uuidSrcString: count(code, "[0-9a-fA-F]{8}"),
       // property name inside __zcMkv — survives minification, unique to it
       // (zod is external, and generated schema code never references it)
       mkvFactory: count(code, "safeParseAsync"),
@@ -102,6 +113,7 @@ async function main() {
     optimized.probes.emailRegex === 1 &&
     optimized.probes.emailSrcString === 1 &&
     optimized.probes.uuidRegex === 1 &&
+    optimized.probes.uuidSrcString === 1 &&
     optimized.probes.mkvFactory === 1;
 
   // oxlint-disable-next-line no-console -- report output
@@ -116,7 +128,11 @@ async function main() {
   );
   // oxlint-disable-next-line no-console -- report output
   console.log(
-    `  __zcReUuid     (regex source):   ${optimized.probes.uuidRegex}  ${optimized.probes.uuidRegex === 1 ? "OK" : "FAIL"}`,
+    `  __zcReUuid     (fast regex):     ${optimized.probes.uuidRegex}  ${optimized.probes.uuidRegex === 1 ? "OK" : "FAIL"}`,
+  );
+  // oxlint-disable-next-line no-console -- report output
+  console.log(
+    `  __zcReUuidSrc  (issue pattern):  ${optimized.probes.uuidSrcString}  ${optimized.probes.uuidSrcString === 1 ? "OK" : "FAIL"}`,
   );
   // oxlint-disable-next-line no-console -- report output
   console.log(

@@ -1,6 +1,12 @@
 import type { ArrayIR, CheckIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { checkPriority, emitEffectCallable, extendPath, hasMutation } from "../context.js";
+import {
+  checkPriority,
+  declareFastTemps,
+  emitEffectCallable,
+  extendPath,
+  hasMutation,
+} from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
 import { refineCheck, superRefineCheck, superRefineFastTest } from "./effect.js";
@@ -87,12 +93,13 @@ export function fastArray(ir: ArrayIR, g: FastGen): string | null {
   // Element validation via preamble helper (avoids .every() closure allocation).
   // Fresh scope: the helper is its own function, size-gated independently.
   const elemVar = g.temp("ae");
-  const elemCheck = g.scoped(elemVar).visit(ir.element);
+  const elemGen = g.scoped(elemVar);
+  const elemCheck = elemGen.visit(ir.element);
   if (elemCheck === null) return null;
   if (elemCheck !== "true") {
     const helperName = g.temp("af");
     g.ctx.preamble.push(
-      `function ${helperName}(a){for(var ${elemVar},i=0;i<a.length;i++){${elemVar}=a[i];if(!(${elemCheck})){return false;}}return true;}`,
+      `function ${helperName}(a){${declareFastTemps(elemGen.scope)}for(var ${elemVar},i=0;i<a.length;i++){${elemVar}=a[i];if(!(${elemCheck})){return false;}}return true;}`,
     );
     parts.push(`${helperName}(${x})`);
   }

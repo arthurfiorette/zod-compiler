@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CodeGenContext } from "#src/core/codegen/context.js";
+import { KEY_MEMBERSHIP_INLINE_THRESHOLD } from "#src/core/codegen/context.js";
 import { createFastGen, generateFast } from "#src/core/codegen/fast-path.js";
 import { createSlowGen, generateSlow } from "#src/core/codegen/slow-path.js";
 import { generateValidator } from "#src/core/codegen/index.js";
@@ -148,7 +149,26 @@ describe("constant declarations deduplicate by value", () => {
     expect(countSets(code)).toBe(2);
   });
 
-  it("emits one key table for a strict shape, not one per path", () => {
+  it("emits one key Set for a wide strict shape, not one per path", () => {
+    // A strict shape's key membership test is reached from BOTH the fast check
+    // and the slow walk, so its shared constant must be declared once. Shapes at
+    // or under KEY_MEMBERSHIP_INLINE_THRESHOLD inline an `===` chain and declare
+    // no constant at all (measured ~3x faster there), so this uses a shape past
+    // the threshold — the only case that still emits one.
+    const code = generate({
+      properties: Object.fromEntries(
+        Array.from({ length: KEY_MEMBERSHIP_INLINE_THRESHOLD + 1 }, (_, i) => [
+          `f${i}`,
+          { checks: [], type: "string" } as SchemaIR,
+        ]),
+      ),
+      strict: true,
+      type: "object",
+    });
+    expect(countSets(code)).toBe(1);
+  });
+
+  it("inlines the key test for a shape at the threshold, declaring no constant", () => {
     const code = generate({
       properties: Object.fromEntries(
         ["id", "name", "email", "role", "active", "createdAt"].map((k) => [
@@ -159,7 +179,8 @@ describe("constant declarations deduplicate by value", () => {
       strict: true,
       type: "object",
     });
-    expect(code.split('{"id":1,').length - 1).toBe(1);
+    expect(countSets(code)).toBe(0);
+    expect(code).toContain('==="id"');
   });
 });
 

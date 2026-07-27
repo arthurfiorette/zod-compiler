@@ -829,7 +829,7 @@ Matching Zod on these would mean allocating a fresh object (or a `Reflect.ownKey
 | discriminatedUnion (3 variants)                 | 3.5M   | 4.2M   | **16.0M**        | 15.9M | 7.9M  | 3.9x      |
 | discriminatedUnion (8 variants, rotating)       | 2.7M   | 3.5M   | **10.1M**        | —     | —     | 2.9x      |
 | plain union of 8 tagged objects (auto-discrim.) | 374K   | 678K   | **10.0M**        | —     | —     | **15x**   |
-| strict object (DB row)                          | 1.8M   | 3.2M   | **8.1M**         | —     | —     | 2.5x      |
+| strict object (DB row)                          | 1.9M   | 3.2M   | **11.2M**        | —     | —     | 3.5x      |
 | medium object (valid)                           | 1.9M   | 2.4M   | **9.9M**         | 11.5M | 7.6M  | 4.1x      |
 | medium object (invalid)                         | 553K   | 80K    | **15.1M**        | 3.0M  | 7.8M  | **188x**  |
 | large object (10 items)                         | 122K   | 166K   | **7.9M**         | 6.1M  | 1.2M  | **48x**   |
@@ -839,7 +839,7 @@ Matching Zod on these would mean allocating a fresh object (or a `Reflect.ownKey
 | nested recursion (7 nodes)                      | 394K   | 1.0M   | **12.1M**        | 11.1M | 3.0M  | **12x**   |
 | nested recursion (121 nodes)                    | 25K    | 66K    | **2.1M**         | 1.7M  | 219K  | **32x**   |
 | deeply nested object (243 leaves)               | 11K    | 20K    | **1.2M**         | 1.1M  | 129K  | **59x**   |
-| event log (combined)                            | 389K   | 645K   | **6.4M**         | —     | —     | 9.9x      |
+| event log (combined)                            | 381K   | 604K   | **7.2M**         | —     | —     | 12.0x     |
 | object with transform (zero-capture)            | 1.2M   | 2.0M   | **6.3M**         | —     | —     | 3.1x      |
 | array 10 × transform (zero-capture)             | 126K   | 208K   | **3.3M**         | —     | —     | **16x**   |
 | array 50 × transform (zero-capture)             | 26K    | 45K    | **839K**         | —     | —     | **19x**   |

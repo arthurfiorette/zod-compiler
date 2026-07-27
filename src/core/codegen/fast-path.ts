@@ -9,7 +9,7 @@
 
 import type { SchemaIR } from "../types.js";
 import type { CodeGenContext, FastGen, FastGenerator, FastScope } from "./context.js";
-import { emitRegex, emitTemp } from "./context.js";
+import { declareFastTemps, emitRegex, emitTemp } from "./context.js";
 import {
   CALL_COST,
   EXTRACT_CAP,
@@ -120,7 +120,7 @@ export function createFastGen(
   inputExpr: string,
   ctx: CodeGenContext,
   extractable = false,
-  scope: FastScope = { used: 0 },
+  scope: FastScope = { temps: [], used: 0 },
   discSkipKey?: string,
 ): FastGen {
   return {
@@ -139,8 +139,13 @@ export function createFastGen(
         createFastGen(overrides?.input ?? inputExpr, ctx, true, scope, overrides?.discSkipKey),
       );
     },
-    scoped: (input) => createFastGen(input, ctx, true, { used: 0 }),
+    scoped: (input) => createFastGen(input, ctx, true, { temps: [], used: 0 }),
     temp: (prefix) => emitTemp(ctx, prefix),
+    local(prefix) {
+      const name = emitTemp(ctx, prefix);
+      scope.temps.push(name);
+      return name;
+    },
     regex: (prefix, pattern, flags) => emitRegex(ctx, prefix, pattern, flags),
   };
 }
@@ -182,13 +187,13 @@ export function generateFast(ir: SchemaIR, g: FastGen): string | null {
       // stay extractable, so an oversized helper splits further recursively.
       // Carry discSkipKey so an extracted discriminated-union option still drops
       // its redundant guard inside the hoisted helper.
-      const inner = generateFast(
-        ir,
-        createFastGen(param, g.ctx, false, { used: 0 }, g.discSkipKey),
-      );
+      const innerGen = createFastGen(param, g.ctx, false, { temps: [], used: 0 }, g.discSkipKey);
+      const inner = generateFast(ir, innerGen);
       if (inner === null) return null; // ineligible sub-schema disables the whole fast path
       const fnName = emitTemp(g.ctx, "fo");
-      g.ctx.preamble.push(`function ${fnName}(${param}){return ${inner};}`);
+      g.ctx.preamble.push(
+        `function ${fnName}(${param}){${declareFastTemps(innerGen.scope)}return ${inner};}`,
+      );
       g.scope.used += CALL_COST;
       return `${fnName}(${g.input})`;
     }

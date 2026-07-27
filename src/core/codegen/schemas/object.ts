@@ -1,6 +1,7 @@
 import type { ObjectIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
 import {
+  declareFastTemps,
   emitEffectCallable,
   escapeString,
   extendPath,
@@ -235,13 +236,14 @@ function fastObjectBody(ir: ObjectIR, g: FastGen, skipKey?: string): string[] | 
   if (ir.catchall) {
     const kv = g.temp("cak");
     const vv = g.temp("cav");
-    const valCheck = g.scoped(vv).visit(ir.catchall, { input: vv });
+    const catchallGen = g.scoped(vv);
+    const valCheck = catchallGen.visit(ir.catchall, { input: vv });
     if (valCheck === null) return null;
     if (valCheck !== "true") {
       const fnName = g.temp("co");
       const test = keyMembershipTest(g.ctx, Object.keys(ir.properties), kv);
       g.ctx.preamble.push(
-        `function ${fnName}(o){var ${kv},${vv};for(${kv} in o){if(!(${test})){${vv}=o[${kv}];if(!(${valCheck}))return false;}}return true;}`,
+        `function ${fnName}(o){${declareFastTemps(catchallGen.scope)}var ${kv},${vv};for(${kv} in o){if(!(${test})){${vv}=o[${kv}];if(!(${valCheck}))return false;}}return true;}`,
       );
       parts.push(`${fnName}(${x})`);
     }

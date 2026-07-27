@@ -1,6 +1,6 @@
 import type { RecordIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { emitRuntimeHelper, extendPath, hasMutation } from "../context.js";
+import { declareFastTemps, emitRuntimeHelper, extendPath, hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType } from "../emit-issue.js";
 import { ZC_HOP_DECL } from "../issue-decls.js";
@@ -79,7 +79,7 @@ export function fastRecord(ir: RecordIR, g: FastGen): string | null {
     // __zcHop.call inlines, making the guard ~free vs an unguarded for-in.
     const hop = emitRuntimeHelper(g.ctx, "__zcHop", ZC_HOP_DECL);
     g.ctx.preamble.push(
-      `function ${helperName}(o){var ${kv},${vv};for(${kv} in o){if(${hop}.call(o,${kv})){${valAssign}if(!(${conditions.join("&&")})){return false;}}}return true;}`,
+      `function ${helperName}(o){${declareFastTemps(body.scope)}var ${kv},${vv};for(${kv} in o){if(${hop}.call(o,${kv})){${valAssign}if(!(${conditions.join("&&")})){return false;}}}return true;}`,
     );
     parts.push(`${helperName}(${x})`);
   }

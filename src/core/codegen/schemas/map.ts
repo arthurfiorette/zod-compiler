@@ -1,6 +1,6 @@
 import type { MapIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { extendPath, hasMutation } from "../context.js";
+import { declareFastTemps, extendPath, hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType } from "../emit-issue.js";
 
@@ -47,7 +47,7 @@ export function fastMap(ir: MapIR, g: FastGen): string | null {
     const combined = [keyCheck, valCheck].filter((c) => c !== "true").join("&&");
     const helperName = g.temp("mh");
     g.ctx.preamble.push(
-      `function ${helperName}(m){for(var ${entryVar} of m){if(!(${combined})){return false;}}return true;}`,
+      `function ${helperName}(m){${declareFastTemps(body.scope)}for(var ${entryVar} of m){if(!(${combined})){return false;}}return true;}`,
     );
     parts.push(`${helperName}(${x})`);
   }

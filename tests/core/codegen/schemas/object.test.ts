@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { KEY_MEMBERSHIP_INLINE_THRESHOLD } from "#src/core/codegen/context.js";
 import { generateValidator } from "#src/core/codegen/index.js";
 import type { ObjectIR } from "#src/core/types.js";
 import { compileFastCheck, compileIR } from "../helpers.js";
@@ -218,7 +219,7 @@ describe("strict objects (unknown-key rejection)", () => {
     ]);
   });
 
-  it("slow path: >5 keys uses the membership table", () => {
+  it("slow path: a wide shape accepts its exact keys and rejects an extra", () => {
     const wide: ObjectIR = {
       type: "object",
       strict: true,
@@ -233,12 +234,13 @@ describe("strict objects (unknown-key rejection)", () => {
   });
 
   /**
-   * The >5-key membership test is an object literal consulted as
-   * `TABLE[k]===1` (measured 3.7-4.5x faster than `Set.has` over a for-in
-   * pass). `===1` is what keeps Object.prototype's own names out: they resolve
-   * to functions/accessors, never to the number 1.
+   * The unknown-key pass compares each for-in key against the shape's keys with
+   * an inline `===` chain (a Set past KEY_MEMBERSHIP_INLINE_THRESHOLD). Both
+   * forms test string identity, so `Object.prototype`'s own names — `toString`,
+   * `constructor`, `valueOf` — are unrecognized exactly like any other undeclared
+   * key, and a DECLARED key of the same name is recognized.
    */
-  describe("membership table (>5 keys)", () => {
+  describe("unknown-key membership", () => {
     const wideIR = (keys: readonly string[]): ObjectIR => ({
       type: "object",
       strict: true,
@@ -267,11 +269,49 @@ describe("strict objects (unknown-key rejection)", () => {
       expect(compileIR(wideIR(keys))(valueFor(keys)).success).toBe(true);
     });
 
-    it("recognizes a DECLARED __proto__ key (object literals cannot hold one)", () => {
+    // The unknown-key pass switches from an inline `===` chain to a Set past
+    // KEY_MEMBERSHIP_INLINE_THRESHOLD. Both forms must recognize exactly the
+    // same key set, so the shapes either side of the boundary are pinned here —
+    // a threshold change can move which form is emitted, never the verdict.
+    describe.each([
+      ["below the threshold", KEY_MEMBERSHIP_INLINE_THRESHOLD - 1, false],
+      ["at the threshold", KEY_MEMBERSHIP_INLINE_THRESHOLD, false],
+      ["above the threshold", KEY_MEMBERSHIP_INLINE_THRESHOLD + 1, true],
+    ])("strict shape %s (%i keys)", (_label, count, expectSet) => {
+      const keys = Array.from({ length: count }, (_, i) => `f${i}`);
+
+      it(`emits the ${expectSet ? "Set" : "inline chain"} form`, () => {
+        const code = generateValidator(wideIR(keys), "boundary").code;
+        expect(code.includes("new Set(")).toBe(expectSet);
+      });
+
+      it("accepts the exact shape and rejects one extra key", () => {
+        const fast = compileFastCheck(wideIR(keys));
+        const exact = valueFor(keys);
+        expect(fast?.(exact)).toBe(true);
+        expect(compileIR(wideIR(keys))(exact).success).toBe(true);
+
+        const extra = { ...exact, surprise: "v" };
+        expect(fast?.(extra)).toBe(false);
+        expect(compileIR(wideIR(keys))(extra).success).toBe(false);
+      });
+
+      it("rejects an inherited enumerable key", () => {
+        const child = Object.create({ inherited: "v" }) as Record<string, string>;
+        for (const k of keys) child[k] = "v";
+        expect(compileFastCheck(wideIR(keys))?.(child)).toBe(false);
+        expect(compileIR(wideIR(keys))(child).success).toBe(false);
+      });
+    });
+
+    it("recognizes a DECLARED __proto__ key", () => {
       const keys = ["__proto__", "b", "c", "d", "e", "f"];
-      // The literal form would silently drop this key, so the Set form is kept.
+      // `k==="__proto__"` is an ordinary string compare, so the inline chain
+      // handles this shape directly — where a `{key:1}` lookup table could not
+      // hold the key at all (an object literal's `__proto__` sets the prototype
+      // instead of defining a property) and had to fall back to a Set.
       const generated = generateValidator(wideIR(keys), "protoKey");
-      expect(generated.code).toContain("new Set(");
+      expect(generated.code).toContain('==="__proto__"');
       const input = JSON.parse(
         `{"__proto__":"v","b":"v","c":"v","d":"v","e":"v","f":"v"}`,
       ) as Record<string, string>;

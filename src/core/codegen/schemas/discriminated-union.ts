@@ -1,6 +1,13 @@
 import type { DiscriminatedUnionIR, ObjectIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { emitConstant, escapeString, extendPath, hasMutation, literalToJs } from "../context.js";
+import {
+  declareFastTemps,
+  emitConstant,
+  escapeString,
+  extendPath,
+  hasMutation,
+  literalToJs,
+} from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType } from "../emit-issue.js";
 
@@ -92,7 +99,7 @@ export function emitFastDiscriminatedSwitch(
       caseStrs.push(`case ${literalToJs(value)}:return ${check};`);
     }
     g.ctx.preamble.push(
-      `function ${helperName}(${helperParam}){switch(${helperParam}[${discKey}]){${caseStrs.join("")}default:return false;}}`,
+      `function ${helperName}(${helperParam}){${declareFastTemps(body.scope)}switch(${helperParam}[${discKey}]){${caseStrs.join("")}default:return false;}}`,
     );
   } else {
     // Dispatch through a string→ordinal table, then switch on the ordinal. V8
@@ -115,7 +122,7 @@ export function emitFastDiscriminatedSwitch(
     const tableVar = emitConstant(g.ctx, "dt", table.initializer);
     const t = g.temp("dv");
     g.ctx.preamble.push(
-      `function ${helperName}(${helperParam}){var ${t}=${helperParam}[${discKey}];` +
+      `function ${helperName}(${helperParam}){${declareFastTemps(body.scope)}var ${t}=${helperParam}[${discKey}];` +
         `switch(typeof ${t}==="string"?${tableVar}[${t}]:0){${caseStrs.join("")}default:return false;}}`,
     );
   }
