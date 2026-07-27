@@ -480,6 +480,21 @@ export function literalToJs(v: string | number | boolean | null | bigint | undef
 }
 
 /**
+ * Helpers that generated code invokes through `Function.prototype.call`, and
+ * which therefore must be aliased into a module-local binding in lean mode.
+ *
+ * V8 folds a local `const` callee into a constant and inlines straight through
+ * `x.call(...)`; an IMPORTED binding is a cell it will not fold, so the same
+ * expression stays a generic property load plus a generic call — measured 4.5x
+ * (5 keys) to 6.5x (20 keys) slower on the record fast path, 35.9 ns vs 7.2 ns
+ * for a 5-key record. Aliasing the import into the IIFE recovers all of it
+ * (7.4 ns). A DIRECT call to an imported function (`__zcFsr(v,s)`) is not
+ * penalized — measured identical — and neither is an imported RegExp receiver,
+ * so only the `.call` sites are listed here.
+ */
+const CALL_INVOKED_HELPERS: ReadonlySet<string> = new Set(["__zcHop"]);
+
+/**
  * Reference a shared runtime helper (e.g. __zcFsr) from generated code.
  * Lean mode: registers it for the `virtual:zod-compiler/runtime` import.
  * Inline mode: declares it once in the per-IIFE preamble.
@@ -487,6 +502,7 @@ export function literalToJs(v: string | number | boolean | null | bigint | undef
 export function emitRuntimeHelper(ctx: CodeGenContext, name: string, decl: string): string {
   if (ctx.mode === "lean") {
     ctx.usedHelpers.add(name);
+    if (CALL_INVOKED_HELPERS.has(name)) return emitConstant(ctx, "lh", name);
   } else if (!ctx.preamble.includes(decl)) {
     ctx.preamble.push(decl);
   }
