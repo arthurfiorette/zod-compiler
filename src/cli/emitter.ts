@@ -53,7 +53,14 @@ export function generateCompiledFileContent(
 
   const exports = schemas.map((schema) => {
     const needsImport = zodCompat || schema.refEntries.length > 0;
-    const schemaExpr = needsImport ? `(__src_${schema.exportName} as any).schema` : "";
+    // `compile()` returns the schema augmented with a non-enumerable `schema`
+    // self-reference; auto-discovery (the default) instead finds plain exported
+    // Zod schemas, which have no such property. Both shapes must resolve, so
+    // fall through to the export itself — reading `.schema` alone yields
+    // undefined there, which silently cost __zcMkv the real schema to augment
+    // and hard-crashed every `__rf[]` base at module load.
+    const src = `__src_${schema.exportName}`;
+    const schemaExpr = needsImport ? `((${src} as any).schema ?? ${src})` : "";
     return `export const ${schema.exportName} = ${generateIIFE(schemaExpr, schema, { zodCompat })};`;
   });
 

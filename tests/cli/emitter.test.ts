@@ -22,10 +22,35 @@ describe("generateCompiledFileContent()", () => {
     expect(content).toContain("function safeParse_test(input)");
     // Uses __zcMkv factory for Zod compatibility (installs methods on the source schema)
     expect(content).toMatch(
-      /__zcMkv\(safeParse_test,\(__src_validateTest as any\)\.schema,(?:__fc_\d+|null),(?:__fc_\d+|null)\)/,
+      /__zcMkv\(safeParse_test,\(\(__src_validateTest as any\)\.schema \?\? __src_validateTest\),(?:__fc_\d+|null),(?:__fc_\d+|null)\)/,
     );
     // Imports source schema (needed for zodCompat)
     expect(content).toContain('import { validateTest as __src_validateTest } from "./test"');
+  });
+
+  it("resolves __rf[] bases on a plain exported schema, not only a compile() facade", () => {
+    // Auto-discovery (the default) exports raw Zod schemas, which have no
+    // `.schema` self-reference — reading it alone made every ref base
+    // `undefined._zod`, a TypeError thrown while the module was still loading.
+    const result: CodeGenResult = {
+      code: "/* zod-compiler */",
+      functionDef: "function safeParse_test(input){\nreturn{success:true,data:input};\n}",
+      refCount: 1,
+      usedHelpers: new Set(),
+    };
+    const content = generateCompiledFileContent(
+      [
+        {
+          exportName: "validateTest",
+          codegenResult: result,
+          refEntries: [{ schema: {}, accessPath: "._zod.def.checks[0]._zod.def.fn" }],
+        },
+      ],
+      "./test.ts",
+    );
+    expect(content).toContain(
+      "var __rf=[((__src_validateTest as any).schema ?? __src_validateTest)._zod.def.checks[0]._zod.def.fn];",
+    );
   });
 
   it("generates multiple schemas in one file", () => {
