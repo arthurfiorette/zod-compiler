@@ -185,14 +185,41 @@ describe("compact mode — codegen shape", () => {
   });
 
   it.each([
-    ["default", z.object({ n: z.number().default(1) })],
     ["catch", z.number().catch(0)],
-    ["transform", z.string().transform((s) => s)],
     ["coerce", z.coerce.number()],
   ])("a %s schema keeps the compiled path (no delegation)", (_label, schema) => {
     const { result, source } = compactCodegen(schema);
     expect(result.rootDelegateRefIndex).toBeUndefined();
     expect(source).not.toContain("__zcFinZ(");
+  });
+
+  it.each([
+    ["default", z.object({ n: z.number().default(1) }), 1],
+    ["transform", z.string().transform((s) => s), 0],
+    ["overwrite", z.object({ q: z.string().trim() }), 0],
+  ])(
+    "a %s schema keeps its build pass and delegates the cold path",
+    (_label, schema, delegateIndex) => {
+      // These mutations are modelled by the build pass, so they get the same
+      // bargain a stripping object does: the pass still runs (it produces the
+      // payload), and only the compiled issue walk is handed to the retained zod
+      // schema. `delegateIndex` is non-zero when the schema already holds refs of
+      // its own — a default's value reference occupies index 0.
+      const { result, source } = compactCodegen(schema);
+      expect(result.rootDelegateRefIndex).toBe(delegateIndex);
+      expect(source).toMatch(/=__vb_\d+\(input\);/);
+      expect(source).toContain("__zcFinZ(");
+      expect(source).not.toContain("__sw_");
+    },
+  );
+
+  it("withholds `.is()` from a build-path schema that substitutes a default", () => {
+    // The fast check demands a present value (its contract is `data === input`,
+    // and a substituted default is not the input), so it is not an exact
+    // acceptance predicate and must not be installed as `.is()`.
+    expect(compactCodegen(z.object({ n: z.number().default(1) })).result.isFnName).toBeNull();
+    // Stripping alone reshapes the payload, never the verdict — predicate kept.
+    expect(compactCodegen(z.object({ n: z.number() })).result.isFnName).not.toBeNull();
   });
 });
 
@@ -317,23 +344,22 @@ describe("compact mode — interactions", () => {
     const { schemas: results } = compileSchemas(
       [
         { exportName: "Pure", schema: z.object({ name: z.string().min(1) }) },
-        { exportName: "WithDefault", schema: z.object({ n: z.number().default(0) }) },
+        { exportName: "WithCoerce", schema: z.object({ n: z.coerce.number() }) },
       ],
       { mode: "lean", compact: true },
     );
-    const [pure, withDefault] = results;
-    if (pure === undefined || withDefault === undefined) throw new Error("expected two results");
+    const [pure, withCoerce] = results;
+    if (pure === undefined || withCoerce === undefined) throw new Error("expected two results");
 
     // Pure validator → delegates: root self-ref appended, slow walk dropped.
     expect(pure.codegenResult.rootDelegateRefIndex).toBe(0);
     expect(pure.refEntries).toHaveLength(1);
     expect(pure.codegenResult.functionDef).toContain("__zcFinZ");
 
-    // Mutation validator (default) → compiled path, no compact delegation.
-    // (It may still carry its own `__rf` entry for the default value — that's
-    // unrelated to compact; the signal is the absence of root delegation.)
-    expect(withDefault.codegenResult.rootDelegateRefIndex).toBeUndefined();
-    expect(withDefault.codegenResult.functionDef).not.toContain("__zcFinZ");
+    // Mutation validator (coerce rewrites the value, which the build pass does
+    // not model) → compiled path, no compact delegation.
+    expect(withCoerce.codegenResult.rootDelegateRefIndex).toBeUndefined();
+    expect(withCoerce.codegenResult.functionDef).not.toContain("__zcFinZ");
   });
 
   it("delegates a stripping object's cold path while keeping its build pass", () => {

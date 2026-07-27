@@ -6,7 +6,12 @@ export function extractDefault(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   if (ctx.refs) {
     const refIndex = ctx.refs.length;
     ctx.refs.push({ schema: ctx.schema, accessPath: ctx.path });
-    return { type: "default", inner, refIndex };
+    return {
+      type: "default",
+      inner,
+      refIndex,
+      ...(def.defaultValue !== undefined && { alwaysDefined: true }),
+    };
   }
 
   // Without fallback tracking, default values cannot be safely referenced at runtime.

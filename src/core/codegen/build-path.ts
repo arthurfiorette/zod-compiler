@@ -20,27 +20,41 @@
  *   slow walk       21.6 ns         30.4 ns           197.5 ns
  *   build path      18.1 ns          7.7 ns             9.8 ns
  *
- * The generator is deliberately partial. A subtree that rebuilds nothing is
- * validated with its existing Fast Path expression and passed through by
- * reference, so only genuinely rebuilding containers need code here; anything
- * else returns null and keeps the eager walk. Callers must also confirm
- * {@link mutatesBeyondStrip} is false — coerce/default/transform/superRefine
- * rewrite values, which this pass does not model.
+ * A subtree that rebuilds nothing is validated with its existing Fast Path
+ * expression and passed through by reference, so only nodes that genuinely
+ * produce a new value need code here; anything else returns null and keeps the
+ * eager walk.
+ *
+ * Coverage is what decides whether this pass is reached at all, because it is
+ * all-or-nothing per schema: ONE unmodelled node anywhere in the tree costs the
+ * whole schema its single-pass parse. Modelled, beyond the stripping containers
+ * this started with: array size checks and `.refine()`, object-level `.refine()`,
+ * `.default()` substitution, ordered string rewrites (`.trim()`,
+ * `.toLowerCase()`), and sync `.transform()`. Still declined, via
+ * {@link mutatesBeyondStrip} — coerce, `.catch()` (its callback wants the inner
+ * schema's issue list, which this pass never builds), `z.url()`, and
+ * `superRefine`.
  */
 
-import type { ObjectIR, SchemaIR } from "../types.js";
+import type { ObjectIR, RefineEffectCheckIR, SchemaIR } from "../types.js";
 import type { CodeGenContext, FastScope } from "./context.js";
 import {
   declareFastTemps,
+  emitEffectCallable,
+  emitEffectFn,
   emitRuntimeHelper,
   emitTemp,
   escapeString,
   keyMembershipTest,
+  outputAlwaysDefined,
   rejectsUndefined,
 } from "./context.js";
 import { createFastGen, generateFast } from "./fast-path.js";
 import { EXTRACT_CAP, estimateFastCost, MIN_EXTRACT, predictedInlineSize } from "./fast-size.js";
 import { ZC_HOP_DECL } from "./issue-decls.js";
+import { defaultValueExpr, needsPostInnerDefault } from "./schemas/default.js";
+import { innerAppliesDefaultOnUndefined } from "./schemas/optional.js";
+import { fastStringCheck } from "./schemas/string.js";
 
 /** Statements that leave the built value in `value`, or `return <FAIL>` on failure. */
 interface Built {
@@ -98,6 +112,17 @@ function rebuildSet(root: SchemaIR): ReadonlySet<SchemaIR> {
       const target = node.type === "recursiveRef" ? targets.get(node.refId ?? 0) : undefined;
       const rebuild =
         (node.type === "object" && node.stripUnknownKeys === true) ||
+        // `.default()` substitutes its own value for `undefined`, so its output
+        // is not its input even when the inner schema passes through — it must
+        // never be handed to `passthrough`, whose fast check would reject the
+        // absent value outright.
+        node.type === "default" ||
+        // An overwrite effect (`.trim()`, `.toLowerCase()`) rewrites the string,
+        // so the node's output is a new value: it has to be BUILT rather than
+        // validated in place (see buildString).
+        (node.type === "string" && node.checks.some((c) => c.kind === "overwrite_effect")) ||
+        // `.transform(fn)` replaces the value with the callback's result.
+        node.type === "effect" ||
         (target !== undefined && rebuilds.has(target)) ||
         children(node).some((child) => rebuilds.has(child));
       if (rebuild) {
@@ -115,11 +140,10 @@ export function rebuildsOutput(ir: SchemaIR): boolean {
 }
 
 /**
- * True when the subtree mutates for any reason OTHER than stripping — coerce,
- * `.default()`, `.catch()`, `.transform()`, `.trim()`, `superRefine`. Those
- * rewrite values rather than merely reshaping objects, so the build pass (which
- * only ever copies validated values) cannot reproduce them and the schema keeps
- * the eager walk.
+ * True when the subtree mutates for any reason the build pass cannot reproduce —
+ * coerce, `.catch()`, `z.url()`, `superRefine`. Those rewrite values in ways this
+ * pass (which validates, substitutes declared defaults, applies ordered string
+ * rewrites and copies) does not model, so the schema keeps the eager walk.
  */
 function mutatesBeyondStrip(ir: SchemaIR): boolean {
   return mutatesHere(ir) || children(ir).some(mutatesBeyondStrip);
@@ -133,13 +157,12 @@ function mutatesBeyondStrip(ir: SchemaIR): boolean {
 function mutatesHere(ir: SchemaIR): boolean {
   switch (ir.type) {
     case "string":
+      // Overwrite effects are absent: `buildString` applies them in order. A
+      // `z.url()` check still is not — it trims, normalizes and needs try/catch.
       return (
         ir.coerce === true ||
         superRefines(ir.checks) ||
-        ir.checks.some(
-          (c) =>
-            c.kind === "overwrite_effect" || (c.kind === "string_format" && c.format === "url"),
-        )
+        ir.checks.some((c) => c.kind === "string_format" && c.format === "url")
       );
     case "number":
       return ir.coerce === true || superRefines(ir.checks);
@@ -147,9 +170,14 @@ function mutatesHere(ir: SchemaIR): boolean {
     case "bigint":
     case "date":
       return ir.coerce === true;
-    case "default":
+    // `default` and `effect` are absent: substituting a constant for `undefined`
+    // and applying a sync transform are both modelled (see buildDefault /
+    // buildEffect), and their inners are reached through `children`.
+    //
+    // `catch` is NOT: its catchValue callback receives a ctx carrying the inner
+    // schema's collected issues, and this pass produces a sentinel instead of an
+    // issue list — there is nothing to hand it.
     case "catch":
-    case "effect":
     case "fallback":
     case "stringBool":
       return true;
@@ -294,9 +322,22 @@ function buildInline(ir: SchemaIR, input: string, g: BuildGen): Built | null {
     case "record":
       return buildRecord(ir, input, g);
     case "optional":
-      return buildSentinel(ir.inner, input, g, "===undefined", "undefined");
+      // A default further down the chain consumes undefined into a value, so
+      // the `undefined → undefined` shortcut must not fire — same rule (and
+      // same helper) the slow and fast paths already apply.
+      return innerAppliesDefaultOnUndefined(ir.inner)
+        ? build(ir.inner, input, g)
+        : buildSentinel(ir.inner, input, g, "===undefined", "undefined");
     case "nullable":
+      // `null` short-circuits unconditionally in zod, whatever the inner is;
+      // undefined flows through, so an inner default still fires.
       return buildSentinel(ir.inner, input, g, "===null", "null");
+    case "default":
+      return buildDefault(ir, input, g);
+    case "string":
+      return buildString(ir, input, g);
+    case "effect":
+      return buildEffect(ir, input, g);
     case "readonly":
       return build(ir.inner, input, g);
     case "union":
@@ -416,8 +457,12 @@ function passthrough(ir: SchemaIR, input: string, g: BuildGen): Built | null {
 function buildObject(ir: ObjectIR, input: string, g: BuildGen): Built | null {
   if (ir.catchall !== undefined) return null;
   if (ir.stripUnknownKeys !== true && ir.strict !== true) return null;
-  if (ir.checks !== undefined && ir.checks.length > 0) return null;
   if (ir.suppressAbsentKeys !== undefined && ir.suppressAbsentKeys.length > 0) return null;
+  // Object-level `.refine()` runs on the assembled output (below). superRefine
+  // rewrites the payload, which this pass does not model — mutatesBeyondStrip
+  // already rejects it, so this is a belt-and-braces narrowing of the type.
+  const refines = ir.checks ?? [];
+  if (refines.some((check) => check.kind !== "refine_effect")) return null;
 
   let code = `if(typeof ${input}!=="object"||${input}===null||Array.isArray(${input}))return ${g.fail};`;
 
@@ -434,7 +479,7 @@ function buildObject(ir: ObjectIR, input: string, g: BuildGen): Built | null {
     const propBuilt = build(propIR, slot, g);
     if (propBuilt === null) return null;
     code += propBuilt.code;
-    slots.push({ always: rejectsUndefined(propIR), keyStr, value: propBuilt.value });
+    slots.push({ always: outputAlwaysDefined(propIR), keyStr, value: propBuilt.value });
   }
 
   // Same assembly the eager strip walk uses: the longest LEADING run of
@@ -458,21 +503,59 @@ function buildObject(ir: ObjectIR, input: string, g: BuildGen): Built | null {
       : `if(${slot.value}!==undefined||(${slot.keyStr} in ${input})){${out}[${slot.keyStr}]=${slot.value};}`;
   }
   code += `${out}={${literal.join(",")}};${appends}`;
+  // Zod parses the properties into the payload first and skips the check chain
+  // when that produced issues, so a bad property suppresses the refine — which
+  // this pass gets for free, having already returned FAIL at that property.
+  for (const check of refines) {
+    code += `if(!${emitEffectCallable(g.ctx, check as RefineEffectCheckIR)}(${out}))return ${g.fail};`;
+  }
   return { code, value: out };
 }
 
 function buildArray(ir: SchemaIR & { type: "array" }, input: string, g: BuildGen): Built | null {
-  if (ir.checks.length > 0) return null;
+  // Length checks are pure predicates over `input.length`, so they hoist ahead
+  // of the element loop: a size mismatch bails before a single element is
+  // validated. Zod reports the per-element issue first when both fail, but the
+  // build pass produces no issues — only the sentinel — and the deferred walk
+  // that does produce them keeps zod's order.
+  let sizes = "";
+  const refines: RefineEffectCheckIR[] = [];
+  for (const check of ir.checks) {
+    switch (check.kind) {
+      case "min_length":
+        sizes += `if(${input}.length<${check.minimum})return ${g.fail};`;
+        break;
+      case "max_length":
+        sizes += `if(${input}.length>${check.maximum})return ${g.fail};`;
+        break;
+      case "length_equals":
+        sizes += `if(${input}.length!==${check.length})return ${g.fail};`;
+        break;
+      case "refine_effect":
+        refines.push(check);
+        break;
+      default:
+        // super_refine (rewrites the value) or a check kind not modelled here.
+        return null;
+    }
+  }
+
   const out = local(g, "ba");
   const index = local(g, "bi");
   const elem = local(g, "be");
   const inner = build(ir.element, elem, g);
   if (inner === null) return null;
-  const code =
+  let code =
     `if(!Array.isArray(${input}))return ${g.fail};` +
+    sizes +
     `${out}=new Array(${input}.length);` +
     `for(${index}=0;${index}<${input}.length;${index}++){` +
     `${elem}=${input}[${index}];${inner.code}${out}[${index}]=${inner.value};}`;
+  // `.refine()` sees the parsed payload, which for a rebuilding element is the
+  // freshly assembled array — the same value zod hands its checks.
+  for (const check of refines) {
+    code += `if(!${emitEffectCallable(g.ctx, check)}(${out}))return ${g.fail};`;
+  }
   return { code, value: out };
 }
 
@@ -514,6 +597,98 @@ function buildRecord(ir: SchemaIR & { type: "record" }, input: string, g: BuildG
     `for(${keyVar} in ${input}){if(${hop}.call(${input},${keyVar})){` +
     `${valVar}=${input}[${keyVar}];${inner.code}${out}[${keyVar}]=${inner.value};}}`;
   return { code, value: out };
+}
+
+/**
+ * `.transform(fn)`: validate the inner schema, then hand its parsed value to the
+ * callback. Zod's transform is a pipe whose `in` failing aborts the whole thing,
+ * which is exactly what returning FAIL from the inner build does — so the
+ * callback runs only on a clean parse, as `slowEffect` guarantees with its issue
+ * count.
+ *
+ * The IR reaches here only for a synchronous single-argument callback: a
+ * `ctx`-taking or async transform is extracted as a `fallback` instead
+ * (see extractPipe), so there is no parse context to reproduce.
+ */
+function buildEffect(ir: SchemaIR & { type: "effect" }, input: string, g: BuildGen): Built | null {
+  const inner = build(ir.inner, input, g);
+  if (inner === null) return null;
+  const out = local(g, "bx");
+  return {
+    code: `${inner.code}${out}=${emitEffectCallable(g.ctx, ir)}(${inner.value});`,
+    value: out,
+  };
+}
+
+/**
+ * A string carrying an overwrite effect (`.trim()`, `.toLowerCase()`, ...): the
+ * checks are emitted one statement at a time in DECLARATION order, interleaved
+ * with the rewrites, because a rewrite is visible to every check after it —
+ * `z.string().trim().min(1)` rejects `"  "` where `z.string().min(1).trim()`
+ * accepts it. That ordering is exactly why the fast path, which sorts checks
+ * cheapest-first and returns the input unchanged, has to decline these.
+ *
+ * Only reached for a rewriting string; a check-only one never enters the rebuild
+ * set and is validated in place by `passthrough`.
+ */
+function buildString(ir: SchemaIR & { type: "string" }, input: string, g: BuildGen): Built | null {
+  if (ir.coerce === true) return null;
+  const value = local(g, "bs");
+  let code = `if(typeof ${input}!=="string")return ${g.fail};${value}=${input};`;
+  for (const check of ir.checks) {
+    switch (check.kind) {
+      case "overwrite_effect":
+        code += `${value}=${emitEffectFn(g.ctx, check.source)}(${value});`;
+        break;
+      case "refine_effect":
+        code += `if(!${emitEffectCallable(g.ctx, check)}(${value}))return ${g.fail};`;
+        break;
+      case "super_refine_effect":
+        // Rewrites through zod's payload; mutatesBeyondStrip already rejects it.
+        return null;
+      default: {
+        const expr = fastStringCheck(check, value, g.ctx);
+        if (expr === null) return null; // z.url(), unknown format
+        code += `if(!(${expr}))return ${g.fail};`;
+      }
+    }
+  }
+  return { code, value };
+}
+
+/**
+ * `.default(v)`: `undefined` yields the declared value without running the
+ * inner schema, anything else parses normally — the same two branches
+ * `slowDefault` emits, reading the value off the retained schema so a
+ * reference-typed default keeps zod's identity (one shared object, not a copy).
+ *
+ * The substituted value is not validated, so it makes the fast path a PARTIAL
+ * predicate (`fc(undefined)` is false where the schema accepts) — which is why
+ * this records {@link CodeGenContext.buildSubstitutesValue}, on which
+ * `generateValidator` withholds `.is()`.
+ */
+function buildDefault(
+  ir: SchemaIR & { type: "default" },
+  input: string,
+  g: BuildGen,
+): Built | null {
+  const inner = build(ir.inner, input, g);
+  if (inner === null) return null;
+  // Every `default` node is in the rebuild set, so it is always BUILT and never
+  // passed through — which makes this flag an exact record of whether the
+  // finished pass substitutes a value.
+  g.ctx.buildSubstitutesValue = true;
+  const out = local(g, "bq");
+  const value = defaultValueExpr(ir);
+  // Zod re-applies the default when the inner returns undefined for a defined
+  // input; only emitted when the inner can actually do that.
+  const reapply = needsPostInnerDefault(ir) ? `if(${out}===undefined){${out}=${value};}` : "";
+  return {
+    code:
+      `if(${input}===undefined){${out}=${value};}` +
+      `else{${inner.code}${out}=${inner.value};${reapply}}`,
+    value: out,
+  };
 }
 
 /** `optional` / `nullable` around a rebuilding inner: pass the sentinel through. */

@@ -84,10 +84,23 @@ function describeInput(input: unknown): string {
   }
 }
 
+/** `code@path` for one issue, with the segments rendered so symbols survive. */
+function issueSignature(issue: { code?: string; path?: unknown[] }): string {
+  const path = (issue.path ?? []).map((seg) => (typeof seg === "symbol" ? String(seg) : seg));
+  return `${issue.code}@${JSON.stringify(path, (_k, v) => (typeof v === "bigint" ? `${v}n` : v))}`;
+}
+
 /**
- * Assert compiled accept/reject, output data, and first message match Zod for
- * every input. Schemas that throw synchronously (async refinements, function
+ * Assert compiled accept/reject, output data, and the whole ISSUE LIST match Zod
+ * for every input. Schemas that throw synchronously (async refinements, function
  * schemas) must throw identically on both sides.
+ *
+ * The issue list is compared as `code@path` per issue, in order, plus the first
+ * message. Comparing only that first message — as this harness once did — is
+ * blind to a dropped issue, an extra one, and to every path segment: three
+ * shipped bugs (set elements getting an invented index, map entries addressed by
+ * position instead of by key, an outer refine suppressed by a field's own failed
+ * check) all passed a green suite because nothing here looked at paths.
  */
 export function expectParity(
   schema: ZodLikeSchema,
@@ -133,6 +146,13 @@ export function expectParity(
       }
     }
     if (!zodResult.success && !compiledResult.success) {
+      const zodIssues = (zodResult.error?.issues ?? []) as { code?: string; path?: unknown[] }[];
+      const compiledIssues = compiledResult.error.issues as { code?: string; path?: unknown[] }[];
+      expect(
+        compiledIssues.map(issueSignature),
+        `issue codes+paths for ${describeInput(input)}`,
+      ).toStrictEqual(zodIssues.map(issueSignature));
+
       const zodMessage = zodResult.error?.issues[0]?.message;
       const compiledMessage = (compiledResult.error.issues[0] as { message?: string })?.message;
       expect(compiledMessage, `message for ${describeInput(input)}`).toBe(zodMessage);

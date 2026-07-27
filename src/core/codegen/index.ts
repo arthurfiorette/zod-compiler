@@ -168,6 +168,13 @@ export function generateValidator(
   // this emits nothing for the mutation-free schemas the compact branch takes.
   const buildFnName = generateBuild(ir, ctx);
 
+  // `.is()` for a build-path schema is the fast expression — stripping reshapes
+  // the payload, never the verdict. A substituted `.default()` breaks that: the
+  // fast check demands a present value where the schema accepts its absence, so
+  // the predicate is partial and `.is()` falls back to safeParse().success
+  // (which runs the build pass, so it is no slower than the eager walk was).
+  const buildIsFnName = ctx.buildSubstitutesValue === true ? null : fastFnName;
+
   const baseRefCount = options?.refCount ?? 0;
 
   // Compact mode: a mutation-free schema with a TOTAL fast path needs no
@@ -233,7 +240,7 @@ export function generateValidator(
       usedHelpers: ctx.usedHelpers,
       fastFnName: null,
       fastTotal: false,
-      isFnName: fastFnName,
+      isFnName: buildIsFnName,
       rootDelegateRefIndex: baseRefCount,
     };
   }
@@ -309,7 +316,7 @@ export function generateValidator(
       // `fastTotal` qualifies `fastFnName`, which is null here; the predicate
       // travels in `isFnName` instead.
       fastTotal: false,
-      isFnName: fastFnName,
+      isFnName: buildIsFnName,
     };
   }
 

@@ -109,6 +109,16 @@ export interface CodeGenContext {
   buildFailName?: string;
   /** Hosted build-function name per recursion target refId, so back-edges resolve. */
   buildRecNames?: Map<number, string>;
+  /**
+   * Set by the build path when it emitted a `.default()` substitution. Such a
+   * schema ACCEPTS an input its fast expression rejects — `fastDefault` demands a
+   * present value, since the fast path's contract is `data === input` and a
+   * substituted default is not the input — so the expression is no longer an
+   * exact acceptance predicate and must not be installed as `.is()`. Stripping,
+   * by contrast, reshapes only the payload, which is why a build-path schema
+   * otherwise still hands its predicate over.
+   */
+  buildSubstitutesValue?: boolean;
   /** Memo for estimateFastCost (size-gated fast-check extraction). Lazily created. */
   fastSizeCache?: WeakMap<SchemaIR, number>;
   /** Memo for estimateRuntimeCost (cheapest-first check ordering). Lazily created. */
@@ -719,13 +729,29 @@ export function hasMutation(ir: SchemaIR): boolean {
 }
 
 /**
- * Does this schema reject `undefined` outright — i.e. does a SUCCESSFUL parse
- * guarantee a defined output value?
+ * Is a defaulted property's key guaranteed to appear in the stripped output?
  *
- * Used by the strip rebuild to decide whether a property can go straight into
- * the output object literal or needs zod's presence test around it (see
- * slowObject). Conservative: anything that might accept, produce, or default to
- * `undefined` answers false, which only costs that key its literal slot.
+ * Distinct from {@link rejectsUndefined}, which asks whether `undefined` is
+ * REJECTED — a `.default()` accepts it and yet still produces a defined value, so
+ * only this question earns the key a slot in the output object literal. The two
+ * answers coincide everywhere else.
+ *
+ * Sound for both branches of a default: the substituted value is defined
+ * (`alwaysDefined`, checked against the schema at extraction time), and the inner
+ * branch runs only when `input[key] !== undefined`, which implies `key in input`
+ * — so zod's presence test keeps the key whatever the inner produced.
+ */
+export function outputAlwaysDefined(ir: SchemaIR): boolean {
+  return ir.type === "default" ? ir.alwaysDefined === true : rejectsUndefined(ir);
+}
+
+/**
+ * Does this schema reject `undefined` outright?
+ *
+ * Read as "can this slot be ABSENT from the input" by the tuple build, whose
+ * output length depends on it — zod marks a defaulted or optional item
+ * `optin: "optional"` and accepts a shorter array. Conservative: anything that
+ * might accept, produce, or default to `undefined` answers false.
  */
 export function rejectsUndefined(ir: SchemaIR): boolean {
   switch (ir.type) {

@@ -3,6 +3,7 @@ import type { FastGen, SlowGen } from "../context.js";
 import { hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { orderByRuntimeCost } from "../fast-size.js";
+import { abortingCodeTest } from "../issue-decls.js";
 import { detectUnionDiscriminator, emitFastDiscriminatedSwitch } from "./discriminated-union.js";
 
 export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string {
@@ -91,7 +92,7 @@ export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string 
         if(!${abVar}){
           for(var ${ojVar}=0;${ojVar}<${errorsVar}[${oiVar}].length;${ojVar}++){
             var ${ocVar}=${errorsVar}[${oiVar}][${ojVar}].code;
-            if(${ocVar}==="invalid_type"||${ocVar}==="invalid_value"||${ocVar}==="invalid_union"||${ocVar}==="unrecognized_keys"||${ocVar}==="invalid_key"||${ocVar}==="invalid_element"){${abVar}=true;break;}
+            if(${abortingCodeTest(ocVar)}){${abVar}=true;break;}
           }
         }
         if(!${abVar}){${naVar}.push(${errorsVar}[${oiVar}]);}

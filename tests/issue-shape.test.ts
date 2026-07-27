@@ -1,0 +1,312 @@
+/**
+ * Where an issue is reported, and what a nested one looks like.
+ *
+ * Three shipped bugs lived here, all invisible to a green suite because
+ * `expectParity` compared only the first message and never a path:
+ *
+ *   set    an invented `[index]` segment. Zod's handleSetResult pushes element
+ *          issues UNPREFIXED — a Set has no positional addressing — so they
+ *          report at the set's own path.
+ *   map    `[index, "key"]` / `[index, "value"]`. Zod addresses an entry BY ITS
+ *          KEY when that key is a property-key type, and otherwise wraps the
+ *          issues in `invalid_key` / `invalid_element`. The branch is chosen on
+ *          the key's RUNTIME type, not the key schema's.
+ *   number a `.int()` failure reports `invalid_type` — non-continuable — so zod
+ *          skips every check after it. An ungated chain volunteered extra
+ *          too_small/too_big/not_multiple_of issues alongside it.
+ *
+ * And one shape bug found alongside them: issues nested inside an
+ * `invalid_key` / `invalid_element` wrapper never reach the top-level
+ * finalization loop, so zod finalizes them where it builds the wrapper. The
+ * record walk nested them raw, leaking absolute paths and the raw `input`.
+ */
+import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { generateValidator } from "#src/core/codegen/index.js";
+import type { RefEntry } from "#src/core/extract/index.js";
+import { extractSchema } from "#src/core/extract/index.js";
+import { compileLikeProduction, expectParity } from "./parity-harness.js";
+
+/** The emitted preamble + validator body, for asserting on generated shape. */
+function slowWalkOf(schema: unknown): string {
+  const refEntries: RefEntry[] = [];
+  const ir = extractSchema(schema, refEntries);
+  const result = generateValidator(ir, "g", { refCount: refEntries.length });
+  return `${result.code}\n${result.functionDef}`;
+}
+
+/** Compiled issues reduced to what these cases are about, forcing the deferred walk. */
+function issuesOf(schema: unknown, input: unknown, name: string): unknown[] {
+  const result = compileLikeProduction(schema, name)(input);
+  if (result.success) return [];
+  return (result.error.issues as Record<string, unknown>[]).map((issue) => {
+    const out: Record<string, unknown> = { code: issue["code"], path: issue["path"] };
+    if (issue["key"] !== undefined) out["key"] = issue["key"];
+    if (issue["origin"] !== undefined) out["origin"] = issue["origin"];
+    if (issue["issues"] !== undefined) {
+      out["issues"] = (issue["issues"] as Record<string, unknown>[]).map((nested) => ({
+        code: nested["code"],
+        path: nested["path"],
+        message: nested["message"],
+        hasInput: "input" in nested && nested["input"] !== undefined,
+      }));
+    }
+    return out;
+  });
+}
+
+describe("issue shape — set elements report at the set's own path", () => {
+  it("carries no index segment", () => {
+    expect(issuesOf(z.set(z.string()), new Set([5]), "s1")).toStrictEqual([
+      { code: "invalid_type", path: [] },
+    ]);
+    expectParity(z.set(z.string()), [new Set([5])], "s1p");
+  });
+
+  it("reports two bad elements at the same path", () => {
+    // Zod's real output: no index means the two issues are indistinguishable by
+    // path. Inventing indices to disambiguate them pointed at nothing zod does.
+    expect(issuesOf(z.set(z.string()), new Set(["a", 5, 6]), "s2")).toStrictEqual([
+      { code: "invalid_type", path: [] },
+      { code: "invalid_type", path: [] },
+    ]);
+  });
+
+  it("keeps the element's own relative path below the set", () => {
+    expect(issuesOf(z.set(z.object({ a: z.string() })), new Set([{ a: 1 }]), "s3")).toStrictEqual([
+      { code: "invalid_type", path: ["a"] },
+    ]);
+  });
+
+  it("roots the element path at the set's position in the parent", () => {
+    expect(issuesOf(z.object({ s: z.set(z.string()) }), { s: new Set([5]) }, "s4")).toStrictEqual([
+      { code: "invalid_type", path: ["s"] },
+    ]);
+    expectParity(z.object({ s: z.set(z.string()) }), [{ s: new Set([5]) }], "s4p");
+  });
+
+  it("still reports a size check at the set's path", () => {
+    expectParity(z.set(z.string()).min(2, "size"), [new Set([5]), new Set(["a"])], "s5");
+  });
+});
+
+describe("issue shape — map entries are addressed by key", () => {
+  it("prefixes key and value issues with a string key", () => {
+    expect(issuesOf(z.map(z.string(), z.number()), new Map([["a", "x"]]), "m1")).toStrictEqual([
+      { code: "invalid_type", path: ["a"] },
+    ]);
+    expect(
+      issuesOf(z.map(z.string().min(3, "k"), z.number()), new Map([["x", "y"]]), "m2"),
+    ).toStrictEqual([
+      { code: "too_small", origin: "string", path: ["x"] },
+      { code: "invalid_type", path: ["x"] },
+    ]);
+  });
+
+  it("uses the key's RUNTIME type, not the key schema's", () => {
+    // A number key under z.map(z.string(), …) is still a property-key type, so
+    // it addresses the entry even though it fails the key schema.
+    expect(issuesOf(z.map(z.string(), z.number()), new Map([[5, 1]]) as never, "m3")).toStrictEqual(
+      [{ code: "invalid_type", path: [5] }],
+    );
+    // And a string key under z.map(z.boolean(), …) likewise.
+    expect(
+      issuesOf(z.map(z.boolean(), z.string()), new Map([["x", "a"]]) as never, "m4"),
+    ).toStrictEqual([{ code: "invalid_type", path: ["x"] }]);
+  });
+
+  it("wraps a non-property-key entry's key issues in invalid_key", () => {
+    expect(
+      issuesOf(
+        z.map(z.object({ a: z.string() }), z.string()),
+        new Map([[{ a: 1 }, "v"]]) as never,
+        "m5",
+      ),
+    ).toStrictEqual([
+      {
+        code: "invalid_key",
+        origin: "map",
+        path: [],
+        issues: [
+          {
+            code: "invalid_type",
+            path: ["a"],
+            message: "Invalid input: expected string, received number",
+            hasInput: false,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("wraps a non-property-key entry's value issues in invalid_element with the key", () => {
+    expect(
+      issuesOf(z.map(z.boolean(), z.string()), new Map([[true, 5]]) as never, "m6"),
+    ).toStrictEqual([
+      {
+        code: "invalid_element",
+        origin: "map",
+        key: true,
+        path: [],
+        issues: [
+          {
+            code: "invalid_type",
+            path: [],
+            message: "Invalid input: expected string, received number",
+            hasInput: false,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("roots entry paths at the map's position in the parent", () => {
+    expect(
+      issuesOf(z.object({ m: z.map(z.string(), z.number()) }), { m: new Map([["a", "x"]]) }, "m7"),
+    ).toStrictEqual([{ code: "invalid_type", path: ["m", "a"] }]);
+  });
+
+  it("addresses the RIGHT entry in a multi-entry map", () => {
+    expect(
+      issuesOf(
+        z.map(z.string(), z.number()),
+        new Map([
+          ["a", 1],
+          ["b", "x"],
+          ["c", 2],
+        ]) as never,
+        "m8",
+      ),
+    ).toStrictEqual([{ code: "invalid_type", path: ["b"] }]);
+  });
+
+  it.each([
+    ["symbol key", z.map(z.symbol(), z.string()), new Map([[Symbol("s"), 5]])],
+    ["bigint key", z.map(z.bigint(), z.string()), new Map([[1n, 5]])],
+    ["date key", z.map(z.date(), z.string()), new Map([[new Date(0), 5]])],
+    ["object key", z.map(z.object({ k: z.string() }), z.string()), new Map([[{ k: "v" }, 5]])],
+    ["number key", z.map(z.number(), z.string()), new Map([[1, 5]])],
+  ])("matches zod for a %s", (_label, schema, input) => {
+    expectParity(schema as never, [input], "mk");
+  });
+
+  it("applies a mutating key schema and still reports against the ORIGINAL key", () => {
+    expectParity(z.map(z.string().trim(), z.number()), [new Map([[" a ", 1]])], "m9");
+    expectParity(z.map(z.string().trim().min(3, "k"), z.number()), [new Map([[" a ", 1]])], "m10");
+  });
+});
+
+describe("issue shape — a failed integer format stops the rest of the chain", () => {
+  it("reports the int failure alone", () => {
+    expect(issuesOf(z.number().int("f").min(5, "a"), 1.5, "f1")).toStrictEqual([
+      { code: "invalid_type", path: [] },
+    ]);
+    expectParity(z.number().int("f").min(5, "a"), [1.5, 1, 7], "f1p");
+  });
+
+  it.each([
+    [
+      "int + min + max + multipleOf",
+      z.number().int("f").min(5, "a").max(1, "b").multipleOf(3, "c"),
+    ],
+    [
+      "int + refine",
+      z
+        .number()
+        .int("f")
+        .refine(() => false, "r"),
+    ],
+    ["uint32 + min", z.uint32("f").min(5, "a")],
+    ["int32 + min", z.int32("f").min(5, "a")],
+  ])("%s", (_label, schema) => {
+    expectParity(schema as never, [1.5, 1, 3], "f2");
+  });
+
+  it("leaves the chain alone when the format check passes", () => {
+    // An integer outside the safe range reports CONTINUABLE too_small/too_big,
+    // so later checks still run — the guard is `Number.isInteger`, not "did the
+    // format check fail".
+    expectParity(z.number().int("f").min(5, "a"), [1, 7], "f3");
+    expectParity(z.int32("f").min(5, "a"), [3e9, 1], "f4");
+  });
+
+  it("does not gate checks BEFORE the format check", () => {
+    // min runs first and its too_small is continuable, so the int failure that
+    // follows is still reported.
+    expectParity(z.number().min(5, "a").int("f"), [1.5], "f5");
+    expectParity(z.number().multipleOf(3, "m").int("f"), [4.5], "f6");
+  });
+
+  it("emits the guard only when checks follow the format check", () => {
+    // The guard costs bytes and a Number.isInteger call, so it is opened lazily:
+    // present when something follows the int check, absent when nothing does.
+    expect(slowWalkOf(z.number().int("f").min(5, "a"))).toContain("Number.isInteger");
+    expect(slowWalkOf(z.number().min(5, "a").int("f"))).not.toContain(`if(Number.isInteger(_d)){`);
+    expect(slowWalkOf(z.number().min(5, "a"))).not.toContain("Number.isInteger");
+    expectParity(z.number().min(5, "a").int("f"), [1.5, 7], "f7");
+  });
+
+  it("float formats never gate — they cannot report invalid_type", () => {
+    expectParity(z.float32("f").min(5, "a"), [1, 1e39], "f8");
+  });
+});
+
+describe("issue shape — nested issues inside a wrapper are finalized", () => {
+  it("gives a record's invalid_key relative paths, a message, and no input", () => {
+    expect(issuesOf(z.record(z.string().min(3, "k"), z.number()), { xy: 1 }, "r1")).toStrictEqual([
+      {
+        code: "invalid_key",
+        origin: "record",
+        path: ["xy"],
+        issues: [{ code: "too_small", path: [], message: "k", hasInput: false }],
+      },
+    ]);
+    expectParity(z.record(z.string().min(3, "k"), z.number()), [{ xy: 1 }, { xyz: 1 }], "r1p");
+  });
+
+  it("applies the locale default to a nested issue with no baked message", () => {
+    const [issue] = issuesOf(z.record(z.uuid(), z.number()), { nope: 1 }, "r2") as [
+      { issues: { message?: string }[] },
+    ];
+    expect(issue.issues[0]?.message).toBe("Invalid UUID");
+  });
+
+  it("keeps a nested object key's own relative path", () => {
+    expectParity(
+      z.map(z.object({ a: z.string() }), z.string()),
+      [new Map([[{ a: 1 }, "v"]]) as never],
+      "r3",
+    );
+  });
+});
+
+describe("issue shape — containers nested in each other", () => {
+  it.each([
+    ["array of sets", z.array(z.set(z.string())), [[new Set([5])]]],
+    ["set of sets", z.set(z.set(z.string())), [new Set([new Set([5])])]],
+    ["map of sets", z.map(z.string(), z.set(z.string())), [new Map([["k", new Set([5])]])]],
+    ["set of maps", z.set(z.map(z.string(), z.number())), [new Set([new Map([["a", "x"]])])]],
+    [
+      "map of maps",
+      z.map(z.string(), z.map(z.string(), z.number())),
+      [new Map([["o", new Map([["i", "x"]])]])],
+    ],
+    ["record of sets", z.record(z.string(), z.set(z.string())), [{ r: new Set([5]) }]],
+    [
+      "tuple of both",
+      z.tuple([z.set(z.string()), z.map(z.string(), z.number())]),
+      [[new Set([5]), new Map([["a", "x"]])]],
+    ],
+    ["union with a set", z.union([z.set(z.string()), z.number()]), [new Set([5]), true]],
+    ["optional set", z.set(z.string()).optional(), [new Set([5])]],
+    ["set with a refine", z.set(z.string()).refine((s) => s.size > 1, "small"), [new Set([5])]],
+    [
+      "int inside a map value",
+      z.map(z.string(), z.number().int("f").min(5, "a")),
+      [new Map([["k", 1.5]])],
+    ],
+    ["int inside a set", z.set(z.number().int("f").min(5, "a")), [new Set([1.5])]],
+  ])("%s", (_label, schema, inputs) => {
+    expectParity(schema as never, inputs as unknown[], "nest");
+  });
+});

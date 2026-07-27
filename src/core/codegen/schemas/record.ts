@@ -3,7 +3,7 @@ import type { FastGen, SlowGen } from "../context.js";
 import { declareFastTemps, emitRuntimeHelper, extendPath, hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType } from "../emit-issue.js";
-import { ZC_HOP_DECL } from "../issue-decls.js";
+import { ZC_FZ_DECL, ZC_HOP_DECL } from "../issue-decls.js";
 
 export function slowRecord(ir: SchemaIR & { type: "record" }, g: SlowGen): string {
   let code = emit`
@@ -28,13 +28,20 @@ export function slowRecord(ir: SchemaIR & { type: "record" }, g: SlowGen): strin
   // same speedup the fast path does.
   const hop = emitRuntimeHelper(g.ctx, "__zcHop", ZC_HOP_DECL);
 
+  // The key is validated at a RELATIVE path and its issues are finalized before
+  // being nested, mirroring zod: `issues: keyResult.issues.map(finalizeIssue)`
+  // over a payload zod ran fresh. Nested issues never reach the top-level
+  // finalization loop (it walks only the outer array), so an unfinalized nest
+  // leaked absolute paths and the raw `input` into the reported error.
+  const fz = emitRuntimeHelper(g.ctx, "__zcFz", ZC_FZ_DECL);
+
   code += emit`
     for(var ${keyVar} in ${g.input}){
       if(!${hop}.call(${g.input},${keyVar}))continue;
       var ${keyIssuesVar}=[];
-      ${g.visit(ir.keyType, { input: keyVar, output: keyVar, path: keyPath, issues: keyIssuesVar })}
+      ${g.visit(ir.keyType, { input: keyVar, output: keyVar, path: "[]", issues: keyIssuesVar })}
       if(${keyIssuesVar}.length>0){
-        ${g.issues}.push({code:"invalid_key",origin:"record"${g.typeMsg === undefined ? "" : `,message:${JSON.stringify(g.typeMsg)}`},path:${keyPath},issues:${keyIssuesVar}});
+        ${g.issues}.push({code:"invalid_key",origin:"record"${g.typeMsg === undefined ? "" : `,message:${JSON.stringify(g.typeMsg)}`},input:${keyVar},path:${keyPath},issues:${fz}(${keyIssuesVar})});
       }else{
         ${g.visit(ir.valueType, { input: valExpr, output: valExpr, path: keyPath })}
       }

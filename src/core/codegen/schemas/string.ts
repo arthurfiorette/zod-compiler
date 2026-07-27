@@ -1,9 +1,10 @@
 import type { CheckIR, CheckStringFormat, StringIR } from "../../types.js";
-import type { FastGen, SlowGen } from "../context.js";
+import type { CodeGenContext, FastGen, SlowGen } from "../context.js";
 import {
   checkPriority,
   emitEffectCallable,
   emitEffectFn,
+  emitRegex,
   emitRegexSourceString,
   escapeString,
 } from "../context.js";
@@ -176,6 +177,64 @@ export function slowString(ir: StringIR, g: SlowGen): string {
   return `${code}\n`;
 }
 
+/**
+ * Boolean expression testing ONE compiled string check against `x`, or null when
+ * the check is not expressible as a pure predicate (`z.url()`, which trims and
+ * normalizes, and an unknown format with no pattern).
+ *
+ * Shared by the fast path — which sorts the checks cheapest-first and joins them
+ * with `&&` — and by the build path, which emits them one statement at a time in
+ * DECLARATION order so an interleaved `.trim()` rewrite is visible to the checks
+ * that follow it (see buildString).
+ */
+export function fastStringCheck(check: CheckIR, x: string, ctx: CodeGenContext): string | null {
+  switch (check.kind) {
+    case "min_length":
+      return `${x}.length>=${check.minimum}`;
+    case "max_length":
+      return `${x}.length<=${check.maximum}`;
+    case "length_equals":
+      return `${x}.length===${check.length}`;
+    case "includes":
+      return check.position !== undefined
+        ? `${x}.includes(${escapeString(check.includes)},${check.position})`
+        : `${x}.includes(${escapeString(check.includes)})`;
+    case "starts_with":
+      return `${x}.startsWith(${escapeString(check.prefix)})`;
+    case "ends_with":
+      return `${x}.endsWith(${escapeString(check.suffix)})`;
+    case "string_format": {
+      // URL validation mutates (trims) and uses try/catch — not a predicate.
+      if (check.format === "url") return null;
+      let pattern: string;
+      let prefix: string;
+      if (check.format === "email") {
+        prefix = "email";
+        pattern = check.pattern ?? EMAIL_REGEX_SOURCE;
+      } else if (check.format === "uuid") {
+        prefix = "uuid";
+        pattern = check.pattern ?? UUID_REGEX_SOURCE;
+      } else if (check.pattern) {
+        prefix = "re";
+        pattern = check.pattern;
+      } else {
+        // Unknown format without pattern — can't generate a check
+        return null;
+      }
+      const v = emitRegex(ctx, prefix, pattern, check.patternFlags);
+      // Stateful (g/y) regexes need lastIndex reset; comma expression keeps
+      // this usable inside the boolean chain.
+      return check.patternFlags && /[gy]/.test(check.patternFlags)
+        ? `((${v}.lastIndex=0),${v}.test(${x}))`
+        : `${v}.test(${x})`;
+    }
+    default:
+      // A check kind this generator does not model (number/bigint/date/set
+      // shapes never reach here from a string node).
+      return null;
+  }
+}
+
 export function fastString(ir: StringIR, g: FastGen): string | null {
   if (ir.coerce) return null;
   // Overwrite effects rewrite the value — the fast path returns input
@@ -189,60 +248,9 @@ export function fastString(ir: StringIR, g: FastGen): string | null {
   );
 
   for (const check of checks.sort(checkPriority)) {
-    switch (check.kind) {
-      case "min_length":
-        parts.push(`${x}.length>=${check.minimum}`);
-        break;
-      case "max_length":
-        parts.push(`${x}.length<=${check.maximum}`);
-        break;
-      case "length_equals":
-        parts.push(`${x}.length===${check.length}`);
-        break;
-      case "includes":
-        parts.push(
-          check.position !== undefined
-            ? `${x}.includes(${escapeString(check.includes)},${check.position})`
-            : `${x}.includes(${escapeString(check.includes)})`,
-        );
-        break;
-      case "starts_with":
-        parts.push(`${x}.startsWith(${escapeString(check.prefix)})`);
-        break;
-      case "ends_with":
-        parts.push(`${x}.endsWith(${escapeString(check.suffix)})`);
-        break;
-      case "string_format": {
-        if (check.format === "url") {
-          // URL validation mutates (trims) and uses try/catch — ineligible
-          return null;
-        }
-        let pattern: string;
-        let prefix: string;
-        if (check.format === "email") {
-          prefix = "email";
-          pattern = check.pattern ?? EMAIL_REGEX_SOURCE;
-        } else if (check.format === "uuid") {
-          prefix = "uuid";
-          pattern = check.pattern ?? UUID_REGEX_SOURCE;
-        } else if (check.pattern) {
-          prefix = "re";
-          pattern = check.pattern;
-        } else {
-          // Unknown format without pattern — can't generate fast check
-          return null;
-        }
-        const v = g.regex(prefix, pattern, check.patternFlags);
-        // Stateful (g/y) regexes need lastIndex reset; comma expression keeps
-        // this usable inside the boolean chain.
-        parts.push(
-          check.patternFlags && /[gy]/.test(check.patternFlags)
-            ? `((${v}.lastIndex=0),${v}.test(${x}))`
-            : `${v}.test(${x})`,
-        );
-        break;
-      }
-    }
+    const expr = fastStringCheck(check, x, g.ctx);
+    if (expr === null) return null;
+    parts.push(expr);
   }
 
   // Refine effect checks (appended last — run after cheap checks short-circuit)

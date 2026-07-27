@@ -1,6 +1,6 @@
 import type { SchemaIR, SetIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { checkPriority, declareFastTemps, extendPath, hasMutation } from "../context.js";
+import { checkPriority, declareFastTemps, hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
 
@@ -17,17 +17,20 @@ export function slowSet(ir: SchemaIR & { type: "set" }, g: SlowGen): string {
   // rebuild into a fresh Set so the mutated values land in the output.
   const mutates = hasMutation(ir.valueType);
   const iterVar = g.temp("set_v");
-  const idxVar = g.temp("set_i");
   const rebuiltVar = mutates ? g.temp("set_n") : "";
   if (mutates) {
     code += `var ${rebuiltVar}=new Set();`;
   }
+  // The element's path is the SET's own path, with no index segment: a Set has
+  // no stable positional addressing, so zod's handleSetResult pushes each
+  // element's issues into the set's payload UNPREFIXED (unlike an array, whose
+  // handleArrayResult prefixes the index). Two bad elements therefore report at
+  // the same path — that is zod's output, and an index we invented instead made
+  // every set-element issue point somewhere zod never points.
   code += emit`
-    var ${idxVar}=0;
     for(var ${iterVar} of ${g.input}){
-      ${g.visit(ir.valueType, { input: iterVar, output: iterVar, path: extendPath(g.path, idxVar) })}
+      ${g.visit(ir.valueType, { input: iterVar, output: iterVar, path: g.path })}
       ${mutates ? `${rebuiltVar}.add(${iterVar});` : ""}
-      ${idxVar}++;
     }
     ${mutates ? `${g.output}=${rebuiltVar};` : ""}`;
 

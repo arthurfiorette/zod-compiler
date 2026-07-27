@@ -12,7 +12,7 @@ import { emit } from "../emit.js";
  * a value; `catch`, object-field defaults, and plain types do not, so the optional
  * legitimately short-circuits there. Peel optional/nullable wrappers to decide.
  */
-function innerAppliesDefaultOnUndefined(ir: SchemaIR): boolean {
+export function innerAppliesDefaultOnUndefined(ir: SchemaIR): boolean {
   let cur = ir;
   while (cur.type === "optional" || cur.type === "nullable") cur = cur.inner;
   return cur.type === "default";

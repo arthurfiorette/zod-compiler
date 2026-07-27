@@ -3,15 +3,17 @@ import type { FastGen, SlowGen } from "../context.js";
 import {
   declareFastTemps,
   emitEffectCallable,
+  emitRuntimeHelper,
   escapeString,
   extendPath,
   extendStaticPath,
   hasMutation,
   keyMembershipTest,
-  rejectsUndefined,
+  outputAlwaysDefined,
 } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, unrecognizedKeys } from "../emit-issue.js";
+import { ZC_AB_DECL } from "../issue-decls.js";
 import { orderByRuntimeCost } from "../fast-size.js";
 import { refineCheck, superRefineCheck, superRefineFastTest } from "./effect.js";
 
@@ -36,11 +38,15 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
     code += needsClone ? `var ${objVar}={...${g.input}};` : `var ${objVar}=${g.input};`;
   }
 
-  // Object-level refines run only when the object itself parsed cleanly: zod
-  // parses the properties into the payload first and skips the check chain when
-  // that produced issues, so a bad property suppresses the refine entirely
-  // (unlike string/number/array, where a failed check still lets later refines
-  // run). Snapshot the issue count before the properties to reproduce it.
+  // Object-level refines are gated on zod's ABORT rule, not on "did anything
+  // fail": zod parses the properties (plus the strict/catchall passes) into the
+  // payload and then skips its check chain only when `util.aborted` holds — i.e.
+  // when one of those issues is non-continuable. A property that failed its own
+  // `min`/format check reports a CONTINUABLE issue, so the outer refine still
+  // runs and both messages surface; a property that failed to parse at all
+  // (`invalid_type`, an unrecognized key, a bad record key) aborts and
+  // suppresses it. Snapshot the issue count before the properties so the scan
+  // covers exactly this node's own parse, as zod's fresh sub-payload does.
   const refineMark = ir.checks && ir.checks.length > 0 ? g.temp("rm") : "";
   if (refineMark) code += `var ${refineMark}=${g.issues}.length;`;
 
@@ -59,7 +65,7 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
     const propExpr = strip ? g.temp("sv") : `${objVar}[${keyStr}]`;
     if (strip) {
       code += `var ${propExpr}=${g.input}[${keyStr}];`;
-      slots.push({ always: rejectsUndefined(propIR), keyStr, value: propExpr });
+      slots.push({ always: outputAlwaysDefined(propIR), keyStr, value: propExpr });
     }
     const propCode = g.visit(propIR, { input: propExpr, output: propExpr, path: propPath });
     if (suppressAbsent.has(key)) {
@@ -162,8 +168,10 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
     code += `${g.output}=${objVar};`;
   }
 
-  // Object-level refine effects: z.object({...}).refine(fn), suppressed when a
-  // property already failed (see refineMark).
+  // Object-level refine effects: z.object({...}).refine(fn), suppressed when the
+  // parse phase aborted (see refineMark). One gate covers every effect: each of
+  // them can only add a continuable `custom` issue, so zod's per-check
+  // re-evaluation of `isAborted` can never flip between them.
   if (ir.checks && ir.checks.length > 0) {
     let refines = "";
     for (const check of ir.checks) {
@@ -172,7 +180,8 @@ export function slowObject(ir: SchemaIR & { type: "object" }, g: SlowGen): strin
           ? superRefineCheck(check, objVar, g)
           : refineCheck(check, objVar, g);
     }
-    code += `if(${g.issues}.length===${refineMark}){${refines}}`;
+    const aborted = emitRuntimeHelper(g.ctx, "__zcAb", ZC_AB_DECL);
+    code += `if(!${aborted}(${g.issues},${refineMark})){${refines}}`;
   }
 
   code += `}\n`;

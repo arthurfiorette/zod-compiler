@@ -72,11 +72,12 @@ describe("slow-path — union", () => {
     expect(safeParse(null).success).toBe(false);
   });
 
-  it("failed branch with default does not leak output mutation to next branch", () => {
-    // z.union([z.string().default("x").min(5), z.undefined()])
-    // Input: undefined
-    // Branch 1: default writes output="x", then min(5) fails ("x".length < 5)
-    // Branch 2: z.undefined() should succeed with data=undefined, not "x"
+  it("a branch default fires on undefined without validating the substituted value", () => {
+    // z.union([z.string().min(5).default("x"), z.undefined()]) with input undefined.
+    // Zod's $ZodDefault short-circuits: the declared value replaces undefined and
+    // the inner type never runs, so min(5) is NOT applied to "x" — branch 1
+    // succeeds and the union takes it. Verified against zod itself, which returns
+    // { success: true, data: "x" }.
     const ir: UnionIR = {
       type: "union",
       options: [
@@ -91,7 +92,25 @@ describe("slow-path — union", () => {
     const safeParse = compileIR(ir, "test", [{ _zod: { def: { defaultValue: "x" } } }]);
     const result = safeParse(undefined);
     expect(result.success).toBe(true);
-    expect(result.data).toBe(undefined);
+    expect(result.data).toBe("x");
+  });
+
+  it("a failed branch's output mutation does not leak into the next branch", () => {
+    // z.union([z.string().min(5), z.number().default(7)]) with input "ab".
+    // Branch 1 fails min(5). Branch 2 is reached with the ORIGINAL input, not
+    // branch 1's scratch output, so it rejects "ab" as a non-number rather than
+    // succeeding on a value branch 1 left behind.
+    const ir: UnionIR = {
+      type: "union",
+      options: [
+        { type: "string", checks: [{ kind: "min_length", minimum: 5 }] },
+        { type: "default", inner: { type: "number", checks: [] }, refIndex: 0 },
+      ],
+    };
+    const safeParse = compileIR(ir, "test", [{ _zod: { def: { defaultValue: 7 } } }]);
+    expect(safeParse("ab").success).toBe(false);
+    expect(safeParse(undefined)).toEqual({ success: true, data: 7 });
+    expect(safeParse("abcdef")).toEqual({ success: true, data: "abcdef" });
   });
 
   // M1: unionErrors should contain per-branch error details

@@ -4,11 +4,13 @@ import {
   checkPriority,
   declareFastTemps,
   emitEffectCallable,
+  emitRuntimeHelper,
   extendPath,
   hasMutation,
 } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
+import { ZC_AB_DECL } from "../issue-decls.js";
 import { refineCheck, superRefineCheck, superRefineFastTest } from "./effect.js";
 
 export function slowArray(ir: SchemaIR & { type: "array" }, g: SlowGen): string {
@@ -27,6 +29,19 @@ export function slowArray(ir: SchemaIR & { type: "array" }, g: SlowGen): string 
   // is surfaced before too_small/too_big. Emitting the checks first would
   // reverse that order (the slow path collects all issues with no
   // short-circuit, so insertion order IS issue order).
+
+  // Snapshot before the elements, for the same reason slowObject does: the
+  // array's refine effects are gated on zod's abort rule over the issues THIS
+  // node's parse produced. Size checks are exempt — zod's length checks declare
+  // a `when` predicate, which bypasses the abort gate, so
+  // `z.array(z.string()).min(2)` still reports too_small next to a bad element's
+  // invalid_type.
+  const hasRefine = ir.checks.some(
+    (c) => c.kind === "refine_effect" || c.kind === "super_refine_effect",
+  );
+  const refineMark = hasRefine ? g.temp("rm") : "";
+  if (refineMark) code += `var ${refineMark}=${g.issues}.length;`;
+
   const idxVar = g.temp("i");
   const elemExpr = `${g.input}[${idxVar}]`;
   const elemPath = extendPath(g.path, idxVar);
@@ -34,6 +49,12 @@ export function slowArray(ir: SchemaIR & { type: "array" }, g: SlowGen): string 
     for(var ${idxVar}=0;${idxVar}<${g.input}.length;${idxVar}++){
       ${g.visit(ir.element, { input: elemExpr, output: elemExpr, path: elemPath })}
     }`;
+
+  /** Wrap one refine effect in zod's abort gate, preserving declaration order. */
+  const gated = (body: string): string => {
+    const aborted = emitRuntimeHelper(g.ctx, "__zcAb", ZC_AB_DECL);
+    return `if(!${aborted}(${g.issues},${refineMark})){${body}}`;
+  };
 
   for (const check of ir.checks) {
     switch (check.kind) {
@@ -58,10 +79,10 @@ export function slowArray(ir: SchemaIR & { type: "array" }, g: SlowGen): string 
           }`;
         break;
       case "refine_effect":
-        code += refineCheck(check, g.input, g);
+        code += gated(refineCheck(check, g.input, g));
         break;
       case "super_refine_effect":
-        code += superRefineCheck(check, g.input, g);
+        code += gated(superRefineCheck(check, g.input, g));
         break;
     }
   }

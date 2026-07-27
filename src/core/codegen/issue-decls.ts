@@ -73,6 +73,81 @@ export const ZC_FSR_DECL =
 export const ZC_HOP_DECL = "const __zcHop=Object.prototype.hasOwnProperty;";
 
 /**
+ * Issue codes zod raises from a schema's `_zod.parse` rather than from a check,
+ * and which therefore carry `continue !== true` — what `util.aborted` looks for.
+ *
+ * Everything a CHECK produces (`too_small`, `too_big`, `invalid_format`,
+ * `not_multiple_of`, a refine's `custom`) is continuable, because `$ZodCheck`
+ * sets `continue: !def.abort` and an `abort: true` check costs the schema its
+ * compiled path anyway — so classifying by code alone is exact for generated
+ * issues.
+ *
+ * Read by {@link ZC_AB_DECL} and by the union's option-pruning loop, which
+ * applies the same rule inline over a per-option issue array.
+ */
+const ABORTING_ISSUE_CODES: readonly string[] = [
+  "invalid_type",
+  "invalid_value",
+  "invalid_union",
+  "unrecognized_keys",
+  "invalid_key",
+  "invalid_element",
+];
+
+/** `c==="invalid_type"||c==="invalid_value"||…` over the code held in `codeExpr`. */
+export function abortingCodeTest(codeExpr: string): string {
+  return ABORTING_ISSUE_CODES.map((code) => `${codeExpr}===${JSON.stringify(code)}`).join("||");
+}
+
+/**
+ * Port of zod's `util.aborted(payload, startIndex)`: has anything since
+ * `startIndex` produced a NON-continuable issue?
+ *
+ * zod gates a schema's check chain on this (`runChecks`: `else if (isAborted)
+ * continue`), which is what makes a container's `.refine()` still run after a
+ * property or element failed its own `min`/`max`/format check, and stop running
+ * once one failed to parse at all. The `startIndex` is the issue count when the
+ * node was entered, mirroring the fresh payload zod hands each sub-schema.
+ *
+ * Size/length checks are exempt in zod — they declare a `when` predicate, which
+ * bypasses the abort gate — so generated code leaves those ungated and only
+ * wraps the refine/superRefine effects.
+ */
+export const ZC_AB_DECL = `function __zcAb(e,i){for(;i<e.length;i++){var c=e[i].code;if(${abortingCodeTest("c")})return true;}return false;}`;
+
+/**
+ * Port of zod's `util.finalizeIssue` for issues NESTED inside an
+ * `invalid_key` / `invalid_element` wrapper. Those never reach the top-level
+ * finalization loop (which walks only the outer array), so zod finalizes them
+ * where it builds the wrapper: locale message applied when none was baked in,
+ * `input` cleared. Their `path` stays RELATIVE to the key or value schema — zod
+ * ran it on a fresh payload — so nothing rewrites it.
+ *
+ * `input` is cleared by assignment rather than `delete`, matching the top-level
+ * finalizer and the union's per-option loop.
+ */
+export const ZC_FZ_DECL =
+  "function __zcFz(e){for(var i=0;i<e.length;i++){var s=e[i];" +
+  'if(s.message===undefined&&typeof __zcMsg==="function")s.message=__zcMsg(s);' +
+  "s.input=undefined;}return e;}";
+
+/**
+ * Port of zod's `util.prefixIssues(key, issues)` for a map entry whose key is a
+ * property-key type: each issue's RELATIVE path is spliced onto the map's own
+ * path plus the key, and the issue moves into the parent's array.
+ *
+ * `b.concat(k,x.path)` flattens `x.path` one level, giving exactly
+ * `[...base, key, ...relative]`.
+ */
+export const ZC_PFX_DECL =
+  "function __zcPfx(d,s,b,k){for(var i=0;i<s.length;i++){var x=s[i];x.path=b.concat(k,x.path);d.push(x);}}";
+
+/** Does `keyExpr` hold one of zod's `util.propertyKeyTypes` (string|number|symbol)? */
+export function propertyKeyTest(keyExpr: string): string {
+  return `typeof ${keyExpr}==="string"||typeof ${keyExpr}==="number"||typeof ${keyExpr}==="symbol"`;
+}
+
+/**
  * superRefine fast-check: run the payload callback on a throwaway payload and
  * report whether it both added nothing AND left the value alone. zod's own
  * wrapper (the referenced function) installs `addIssue` and normalizes what the
@@ -131,8 +206,11 @@ export const ZC_SR_DECL =
 
 /** Non-issue runtime helper declarations hosted in the virtual module. */
 export const RUNTIME_HELPER_DECLS: Readonly<Record<string, string>> = {
+  __zcAb: ZC_AB_DECL,
   __zcFsr: ZC_FSR_DECL,
+  __zcFz: ZC_FZ_DECL,
   __zcHop: ZC_HOP_DECL,
+  __zcPfx: ZC_PFX_DECL,
   __zcSr: ZC_SR_DECL,
   __zcSrOk: ZC_SR_OK_DECL,
 };

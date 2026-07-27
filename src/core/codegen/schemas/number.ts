@@ -22,10 +22,32 @@ export function slowNumber(ir: NumberIR, g: SlowGen): string {
 
   if (ir.checks.length > 0) {
     code += `else{`;
+    // An integer FORMAT check (`.int()`, `.int32()`, `.uint32()`) is the one
+    // check here that can report `invalid_type` — non-continuable — and zod's
+    // `runChecks` then skips every check after it (`else if (isAborted)
+    // continue`). So `z.number().int().min(5)` on 1.5 reports the int failure
+    // ALONE, where an ungated chain also volunteers too_small. Its aborting
+    // branch is exactly `!Number.isInteger(value)` (the range branches report
+    // continuable too_small/too_big, which do NOT stop later checks), so one
+    // guard opened after the first such check reproduces zod without any
+    // runtime abort bookkeeping. Non-integer formats (float32/float64) never
+    // report invalid_type and so never open it.
+    const opensIntGuard = (check: (typeof ir.checks)[number]): boolean =>
+      check.kind === "number_format" &&
+      (check.format === "safeint" || check.format === "int32" || check.format === "uint32");
+    let seenIntFormat = false;
+    let intGuardOpen = false;
     // Insertion order mirrors zod's issue order for multi-failure inputs.
     // The slow path collects ALL issues (no short-circuit), so cost ordering
     // buys nothing here — only the fast path's && chain benefits from it.
     for (const check of ir.checks) {
+      // Opened lazily, on the first check that actually needs gating: an integer
+      // format check in LAST position has nothing after it, so the guard would
+      // be dead code.
+      if (seenIntFormat && !intGuardOpen) {
+        code += `if(Number.isInteger(${g.input})){`;
+        intGuardOpen = true;
+      }
       switch (check.kind) {
         case "greater_than":
           if (check.inclusive) {
@@ -116,7 +138,9 @@ export function slowNumber(ir: NumberIR, g: SlowGen): string {
           code += superRefineCheck(check, g.input, g);
           break;
       }
+      if (opensIntGuard(check)) seenIntFormat = true;
     }
+    if (intGuardOpen) code += `}`;
     code += `}`;
   }
 

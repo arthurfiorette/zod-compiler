@@ -373,12 +373,14 @@ see what compiled.
 Compiled validators match Zod on verdicts, output data and error messages, including issue ordering.
 Two things differ by design, both from the zero-allocation fast path:
 
-| Behavior              | Zod                              | zod-compiler                                  |
-| --------------------- | -------------------------------- | --------------------------------------------- |
-| Record key iteration  | All own keys (`Reflect.ownKeys`) | Own enumerable **string** keys only           |
-| Array output identity | A fresh array                    | The input array, by reference (holes survive) |
+| Behavior                  | Zod                                | zod-compiler                                            |
+| ------------------------- | ---------------------------------- | ------------------------------------------------------- |
+| Record key iteration      | All own keys (`Reflect.ownKeys`)   | Own enumerable **string** keys only                     |
+| Container output identity | A fresh array / set / map / object | The input container, by reference (array holes survive) |
 
-`z.object()` strips unknown keys exactly as Zod does.
+A container whose contents need no rewriting is validated in place and handed back, where Zod always
+rebuilds it. `z.object()` is the exception — it strips unknown keys exactly as Zod does, so its output
+is always a fresh object.
 
 ## Benchmark
 
@@ -436,7 +438,9 @@ pnpm benchmark   # run locally
 An eligible schema compiles to a **fast path** — one `&&` chain validating the whole input with zero
 allocations, reused by `.is()` and `parse()` — plus a **slow path** that collects errors, run only on
 failure and deferred until `.error` is read. A `z.object()` strips, so it instead compiles to a single
-pass that validates and rebuilds together, bailing on the first failure.
+pass that validates and rebuilds together, bailing on the first failure. That pass also covers the
+idioms that reshape a value — array size checks, `.refine()`, `.default()`, `.trim()`, `.transform()` —
+so one of them in a schema no longer costs it the whole single-pass parse.
 
 Regexes are pre-compiled with bounded repeats unrolled, checks run cheapest-first, discriminated unions
 dispatch through a jump table (plain tagged unions are auto-discriminated into it), and oversized check

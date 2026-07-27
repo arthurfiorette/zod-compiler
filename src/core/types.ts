@@ -429,6 +429,17 @@ export interface DefaultIR {
   type: "default";
   inner: SchemaIR;
   refIndex: number;
+  /**
+   * The declared default value is not itself `undefined`, read off the schema at
+   * extraction time. That makes the node's output ALWAYS defined — the default
+   * branch yields the declared value, and the inner branch only runs for a
+   * non-undefined input, which zod's strip test keeps regardless of what the
+   * inner produced. Lets a defaulted property claim a slot in the output object
+   * literal instead of a conditional append (see outputAlwaysDefined).
+   *
+   * Absent for the degenerate `.default(undefined)`, where zod drops the key.
+   */
+  alwaysDefined?: boolean;
 }
 
 export interface PipeIR {
