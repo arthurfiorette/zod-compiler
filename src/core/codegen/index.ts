@@ -53,10 +53,11 @@ export function generateValidator(
     usedHelpers: new Set(),
   };
 
-  // Enable slow-walk sharing only for mutation-free schemas: their walk is
-  // reached solely through __zcFinD (the deferred, cold error path), so every
-  // shared call runs only when `.error` is read — never on a successful parse.
-  if (options?.sharedSchemas !== undefined && !hasMutation(ir)) {
+  // Slow-walk sharing. The plan already excludes any shape that would reach for
+  // this export's `__rf[]`, and a shared walk returns its parsed value, so a
+  // rewriting shape (a stripping object above all) delivers its result through
+  // the call. Nothing left to gate on here.
+  if (options?.sharedSchemas !== undefined) {
     ctx.sharedSchemas = options.sharedSchemas;
   }
 
@@ -268,7 +269,7 @@ export function generateValidator(
   // shared function instead of emitting a second full copy. The fast path is
   // still generated inline above — only the cold walk is shared.
   const rootRef = ctx.sharedSchemas?.refFor(ir);
-  const slowCode = rootRef !== undefined ? `${rootRef.name}(_d,[],_e);` : generateSlow(ir, sg);
+  const slowCode = rootRef !== undefined ? `_d=${rootRef.name}(_d,[],_e);` : generateSlow(ir, sg);
 
   const buildCode = (): string => ["/* zod-compiler */", ...ctx.preamble].join("\n");
 

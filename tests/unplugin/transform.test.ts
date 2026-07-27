@@ -547,10 +547,12 @@ describe("transformCode() E2E", () => {
 
     expect(result).not.toBeNull();
     const out = result ?? "";
-    // Walk sharing no longer reaches object shapes: a shared walk writes nothing
-    // back, but a stripping object's walk has to produce the rebuilt value, so
-    // rebuilding shapes are excluded from the plan (see createSharedSchemaPlan).
-    expect((out.match(/function __zcSw_\d+\(input,path,_e\)/g) ?? []).length).toBe(0);
+    // The repeated shape's error walk is emitted ONCE at module scope and called
+    // from both exports. Stripping objects included: the shared walk returns its
+    // rebuilt value, so the call site receives what an inlined walk would have
+    // written (see createSharedSchemaPlan).
+    expect((out.match(/function __zcSw_\d+\(input,path,_e\)/g) ?? []).length).toBe(1);
+    expect(out).toMatch(/=__zcSw_0\(/);
     // Both exports still compile, each with its own build pass.
     expect(out).toContain("safeParse_validateUser");
     expect(out).toContain("safeParse_validateCompany");

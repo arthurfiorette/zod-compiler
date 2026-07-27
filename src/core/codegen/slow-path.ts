@@ -121,8 +121,9 @@ export function createSlowGen(
       const aborted = overrides?.aborted;
       // Shared sub-schema: call the file-level `__zcSw_N(input, path, issues)`
       // walk (signature defined in dedupe.ts) instead of inlining a duplicate.
-      // Only mutation-free schemas enable the plan, so the shared walk needs no
-      // output write-back and runs on the cold (deferred) path only.
+      // It returns the parsed value, so the assignment delivers whatever an
+      // inlined walk would have written to `output` — a stripping object's
+      // rebuilt result, a coerced number, a trimmed string.
       //
       // But the shared walk's 3-arg signature can't carry this call site's
       // abort flag — a shared pipe option would silently drop it. When we're in
@@ -130,7 +131,7 @@ export function createSlowGen(
       // the pipe's abort reaches the union. Non-tracking sites still share.
       const ref = aborted === undefined ? ctx.sharedSchemas?.refFor(ir) : undefined;
       if (ref !== undefined) {
-        return `${ref.name}(${input},${path},${issues});`;
+        return `${output}=${ref.name}(${input},${path},${issues});`;
       }
       return generateSlow(ir, createSlowGen(input, output, path, issues, ctx, aborted));
     },

@@ -186,8 +186,9 @@ In auto mode hoisted schemas also **compile** — which rescues the schema that 
 ### Bundle Size & Cross-File Dedup
 
 Validators share a runtime helper layer imported from one module, so each helper appears once per
-bundle. Schemas in a file sharing a structurally identical sub-shape emit its error walk once —
-**~50% raw / ~34% gzipped** on a realistic set.
+bundle. Schemas in a file sharing a structurally identical sub-shape emit its error walk once, which
+scales with how much a file repeats: **19% raw / 10% gzipped** for two exports reusing one nested
+shape, **28% / 18%** for four exports reusing two.
 
 **Transpile-only esbuild builds** (no `--bundle`) never fire the bundler's resolve hooks, so the
 `virtual:` specifier would survive into `dist/` and fail at runtime. Set `codegenMode: "inline"` to emit

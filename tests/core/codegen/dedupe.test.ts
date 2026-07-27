@@ -53,8 +53,12 @@ function shape(r: { success: boolean; error?: { issues: { code: string; path: un
 }
 
 function refs(info: CompiledSchemaInfo): string[] {
-  const text = info.codegenResult.code + info.codegenResult.functionDef;
-  return [...new Set([...text.matchAll(/__zcSw_\d+/g)].map((m) => m[0]))];
+  return [...new Set([...source(info).matchAll(/__zcSw_\d+/g)].map((m) => m[0]))];
+}
+
+/** A compiled schema's full generated text (preamble + validator). */
+function source(info: CompiledSchemaInfo): string {
+  return info.codegenResult.code + info.codegenResult.functionDef;
 }
 
 describe("schema dedupe", () => {
@@ -184,11 +188,12 @@ describe("schema dedupe", () => {
     expect(fastBody).toContain('input["a"]["street"]');
   });
 
-  it("excludes a stripping z.object() — a shared walk cannot return the rebuild", () => {
-    // A genuine z.object() strips, so its walk PRODUCES the rebuilt object.
-    // A shared body writes nothing back and returns nothing, so it could never
-    // deliver that value — these shapes stay inline. Pass-through object kinds
-    // (strictObject/looseObject/catchall) are unaffected and still share.
+  it("shares a stripping z.object() — the walk returns its rebuild", () => {
+    // A genuine z.object() strips, so its walk PRODUCES a rebuilt object. The
+    // shared body returns that value and the call site assigns it, so the shape
+    // shares like any other. It did not always: while shared walks returned
+    // nothing, this exclusion silently covered essentially every real schema,
+    // since z.object() is what people write.
     const Stripping = z.object({ a: z.string(), b: z.string(), c: z.string() });
     const { schemas: stripped, shared: strippedShared } = compileSchemas(
       [
@@ -197,9 +202,13 @@ describe("schema dedupe", () => {
       ],
       { mode: "inline" },
     );
-    expect(strippedShared.code).not.toContain("__zcSw_");
-    expect(refs(pick(stripped, "S1"))).toHaveLength(0);
-    expect(refs(pick(stripped, "S2"))).toHaveLength(0);
+    expect(strippedShared.code).toContain("__zcSw_0");
+    // The rebuild is delivered through the return value, not a write-back.
+    expect(strippedShared.code).toMatch(/return input;\s*\n?}/);
+    expect(refs(pick(stripped, "S1"))).toContain("__zcSw_0");
+    expect(refs(pick(stripped, "S2"))).toContain("__zcSw_0");
+    // Call sites assign what the shared walk returned.
+    expect(source(pick(stripped, "S1"))).toMatch(/=__zcSw_0\(/);
 
     // Same shape declared strict instead: shareable again.
     const PassThrough = z.strictObject({ a: z.string(), b: z.string(), c: z.string() });
@@ -213,21 +222,104 @@ describe("schema dedupe", () => {
     expect(passShared.code).toContain("__zcSw_0");
   });
 
-  it("excludes mutation-bearing roots from sharing (cold-path-only guarantee)", () => {
+  it("shares into a mutation-bearing root, whose walk runs eagerly", () => {
     const Shape = z.strictObject({ a: z.string(), b: z.string(), c: z.string() });
     const { schemas } = compileSchemas(
       [
         { exportName: "R1", schema: z.strictObject({ x: Shape, y: Shape }) },
         { exportName: "R2", schema: z.strictObject({ z: Shape }) },
-        // Mutation root (coerce) embedding the same shape — must stay fully inline.
+        // Mutation root (coerce): its walk is EAGER, so the shared call runs on
+        // every parse rather than only when `.error` is read. That is sound now
+        // that the shared walk returns its value, and measured free — the call
+        // disappears against the walk it replaces.
         { exportName: "M", schema: z.strictObject({ w: Shape, n: z.coerce.number() }) },
       ],
       { mode: "inline" },
     );
     expect(refs(pick(schemas, "R1"))).toContain("__zcSw_0");
     expect(refs(pick(schemas, "R2"))).toContain("__zcSw_0");
-    // The mutation root inlines its copy — sharing it would run on its eager path.
-    expect(refs(pick(schemas, "M"))).toHaveLength(0);
+    expect(refs(pick(schemas, "M"))).toContain("__zcSw_0");
+  });
+
+  it("never shares a shape that resolves through the per-export __rf array", () => {
+    // `__rf` is declared inside each export's IIFE; a module-scope shared body
+    // referencing it would be unbound. Zero-capture callbacks are fine — they
+    // are hosted from source text into the shared block's own preamble.
+    const captured = { min: 3 };
+    for (const inner of [
+      z.string().default("d"),
+      z.number().catch(0),
+      z.string().refine((v) => v.length > captured.min),
+      z.string().transform((v) => v + captured.min),
+    ]) {
+      const Shape = z.strictObject({ a: z.string(), b: z.string(), c: inner });
+      const { shared } = compileSchemas(
+        [
+          { exportName: "A", schema: z.strictObject({ x: Shape, y: Shape }) },
+          { exportName: "B", schema: z.strictObject({ z: Shape }) },
+        ],
+        { mode: "inline" },
+      );
+      expect(shared.code).not.toContain("__rf[");
+    }
+  });
+
+  it("a shared stripping walk delivers its rebuild to the call site", () => {
+    // The write-back crux. A shared walk that returned nothing would leave the
+    // caller holding the UNSTRIPPED input, so every one of these would carry the
+    // `junk` key through. The eager root matters most: its walk output IS the
+    // parse result, where the deferred roots only ever surface issues.
+    const Address = z.object({ street: z.string().min(1), city: z.string() });
+    const Deferred = z.object({ home: Address, work: Address });
+    const Eager = z.object({ n: z.coerce.number(), home: Address });
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "Deferred", schema: Deferred },
+        { exportName: "Eager", schema: Eager },
+      ],
+      { mode: "inline" },
+    );
+    expect(shared.code).toContain("__zcSw_0");
+    expect(refs(pick(schemas, "Eager"))).toContain("__zcSw_0");
+
+    const deferred = build(pick(schemas, "Deferred"), shared.code);
+    const eager = build(pick(schemas, "Eager"), shared.code);
+    const dirty = { street: "s", city: "c", junk: 1 };
+
+    // Deferred root: the build pass produces the payload, so its walk only ever
+    // reports issues — and it must still report them through the shared call.
+    expect(deferred({ home: dirty, work: dirty })).toStrictEqual({
+      success: true,
+      data: { home: { street: "s", city: "c" }, work: { street: "s", city: "c" } },
+    });
+    const bad = deferred({ home: { street: "", city: "c" }, work: dirty });
+    expect(bad.success).toBe(false);
+    expect(bad.error?.issues.map((i) => i.path.join("."))).toStrictEqual(["home.street"]);
+
+    // Eager root: the shared walk's RETURN VALUE is what lands in `data`.
+    expect(eager({ n: "5", home: dirty })).toStrictEqual({
+      success: true,
+      data: { n: 5, home: { street: "s", city: "c" } },
+    });
+  });
+
+  it("shares a shape carrying a zero-capture callback", () => {
+    // No `__rf` involved: the predicate is hosted from its source text into the
+    // shared block, so the shape stays shareable.
+    const Shape = z.strictObject({
+      a: z.string(),
+      b: z.string(),
+      c: z.string().refine((v) => v.length > 3),
+    });
+    const { shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.strictObject({ x: Shape, y: Shape }) },
+        { exportName: "B", schema: z.strictObject({ z: Shape }) },
+      ],
+      { mode: "inline" },
+    );
+    expect(shared.code).toContain("__zcSw_0");
+    expect(shared.code).not.toContain("__rf[");
   });
 
   it("excludes recursive shapes and still validates correctly", () => {
