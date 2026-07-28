@@ -32,6 +32,12 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./jit": {
+      "types": "./dist/jit.d.ts",
+      "source": "./src/jit.ts",
+      "import": "./dist/jit.js",
+      "default": "./dist/jit.js"
+    },
     "./vite": {
       "types": "./dist/unplugin/vite.d.ts",
       "source": "./src/unplugin/vite.ts",

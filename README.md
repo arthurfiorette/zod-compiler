@@ -13,7 +13,7 @@ Keep your existing Zod schemas. Get **2-43x faster** validation. No code changes
 
 ## Usage
 
-Three ways to use zod-compiler — pick one:
+Four ways to use zod-compiler — pick one:
 
 ### 1. Automatic Mode (Default)
 
@@ -92,6 +92,27 @@ npx zod-compiler generate src/ --schemas explicit --emit bag
 npx zod-compiler generate src/ --emit compact
 ```
 
+### 4. Runtime Compilation (No Build Step)
+
+`jit()` runs the same pipeline in-process, for `tsx`, `ts-node`, Jest — anywhere no plugin fires:
+
+```typescript
+import { jit } from "zod-compiler/jit";
+
+export const UserSchema = jit(z.object({ name: z.string().min(1), email: z.email() }));
+```
+
+Same validators a build emits, installed on the schema object, so Zod interop is unchanged.
+Compilation is lazy — 0.1-0.3 ms on a schema's first parse; `{ eager: true }` compiles up front,
+`jitAll(namespace)` takes a whole module.
+
+The cost is the import: ~570 KB of codegen and `acorn`, **~10 ms of module load**. That suits a
+long-lived process, not a CLI, a cold serverless handler or a browser — use the build plugin there.
+Libraries should ship plain Zod and let the app decide.
+
+Needs `new Function`, as Zod's own object fast-path does. `z.config({ jitless: true })` and a CSP
+that blocks eval both leave a working plain-Zod schema.
+
 ## Build Plugin
 
 ### Supported Build Tools
@@ -156,7 +177,8 @@ import zodCompiler from "zod-compiler/bun";
 await Bun.build({ entrypoints: ["./src/index.tsx"], outdir: "./dist", plugins: [zodCompiler()] });
 ```
 
-For code run straight from source (`bun run src/server.ts`) no build plugin fires — use the
+For code run straight from source (`bun run src/server.ts`) no build plugin fires — use
+[`jit()`](#4-runtime-compilation-no-build-step) to compile in-process, or the
 [CLI](#3-cli-no-bundler) to compile ahead of time.
 
 ### Schema Hoisting

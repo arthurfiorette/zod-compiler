@@ -1,0 +1,277 @@
+/**
+ * Runtime compilation (`zod-compiler/jit`).
+ *
+ * `jit()` runs the same extract → codegen pipeline the plugin and CLI run, so
+ * validator correctness is already covered by the differential parity suite.
+ * What is specific to this entry point, and what these tests pin, is the
+ * INSTALLATION contract:
+ *
+ *  - compilation is deferred to first use, so importing a module of schemas
+ *    costs nothing;
+ *  - the compiled methods land on the original schema object, keeping Zod
+ *    interop (identity, `.shape`, `instanceof`, `toJSONSchema`, `.meta()`,
+ *    composition into a parent schema) intact;
+ *  - `~standard` is replaced too, since Standard Schema consumers never read
+ *    `.safeParse`;
+ *  - anything that stops runtime codegen — `z.config({ jitless: true })`, a
+ *    CSP that blocks `new Function`, a schema the pipeline throws on — leaves
+ *    a working plain-Zod schema rather than a broken one.
+ */
+import { afterEach, describe, expect, it } from "vitest";
+import { core, z } from "zod";
+import { jit, jitAll } from "#src/jit.js";
+
+/** Comparable shape for a parse result — Zod and the compiler agree on all of it. */
+function normalize(result: {
+  data?: unknown;
+  error?: { issues: { code: string; message: string; path: PropertyKey[] }[] };
+  success: boolean;
+}): unknown {
+  return result.success
+    ? { data: result.data, success: true }
+    : {
+        issues: result.error?.issues.map((i) => ({
+          code: i.code,
+          message: i.message,
+          path: i.path,
+        })),
+        success: false,
+      };
+}
+
+/**
+ * The `.name` of whatever function currently occupies the schema's `safeParse`
+ * slot — `safeParse_jit` once compiled. Read off the descriptor rather than the
+ * property so the lazy accessor is not triggered just by looking.
+ */
+function safeParseName(schema: object): string | undefined {
+  const value = Object.getOwnPropertyDescriptor(schema, "safeParse")?.value as
+    | { name?: string }
+    | undefined;
+  return value?.name;
+}
+
+/** The `.name` Zod's own `safeParse` carries — how a test tells "not compiled". */
+const ZOD_SAFE_PARSE_NAME = safeParseName(z.object({ a: z.string() }));
+
+function expectParity(make: () => z.ZodType, inputs: unknown[]): void {
+  const plain = make();
+  const compiled = jit(make());
+  for (const input of inputs) {
+    expect(normalize(compiled.safeParse(input)), `input ${JSON.stringify(input)}`).toStrictEqual(
+      normalize(plain.safeParse(input)),
+    );
+  }
+}
+
+afterEach(() => {
+  delete core.globalConfig.jitless;
+});
+
+describe("jit() — lazy installation", () => {
+  it("installs an accessor rather than compiling at call time", () => {
+    const schema = jit(z.object({ a: z.string() }));
+    const descriptor = Object.getOwnPropertyDescriptor(schema, "safeParse");
+    expect(typeof descriptor?.get).toBe("function");
+    expect(descriptor?.value).toBeUndefined();
+  });
+
+  it("compiles on first use and replaces the accessor with the compiled method", () => {
+    const schema = jit(z.object({ a: z.string() }));
+    expect(schema.safeParse({ a: "x" }).success).toBe(true);
+    const descriptor = Object.getOwnPropertyDescriptor(schema, "safeParse");
+    expect(typeof descriptor?.get).toBe("undefined");
+    expect(descriptor?.value).toBeTypeOf("function");
+    expect(safeParseName(schema)).toBe("safeParse_jit");
+  });
+
+  it("compiles immediately under { eager: true }", () => {
+    const schema = jit(z.object({ a: z.string() }), { eager: true });
+    expect(typeof Object.getOwnPropertyDescriptor(schema, "safeParse")?.get).toBe("undefined");
+    expect(safeParseName(schema)).toBe("safeParse_jit");
+  });
+
+  it("preserves Zod's own-key enumerability, so the schema's shape is unchanged", () => {
+    expect(Object.keys(jit(z.object({ a: z.string() })))).toStrictEqual(
+      Object.keys(z.object({ a: z.string() })),
+    );
+  });
+
+  it("is idempotent — a second call neither recompiles nor throws", () => {
+    const schema = z.object({ a: z.string() });
+    expect(jit(schema)).toBe(jit(schema));
+    expect(schema.safeParse({ a: "x" }).success).toBe(true);
+    expect(jit(schema).safeParse({ a: "x" }).success).toBe(true);
+  });
+
+  it("lets an explicit assignment win over the pending compile", () => {
+    const schema = jit(z.object({ a: z.string() }));
+    const stub = (): { data: string; success: true } => ({ data: "stub", success: true });
+    (schema as unknown as { safeParse: unknown }).safeParse = stub;
+    expect(schema.safeParse(undefined)).toStrictEqual({ data: "stub", success: true });
+  });
+});
+
+describe("jit() — parity with Zod", () => {
+  it("matches on a plain object, including unknown-key stripping", () => {
+    expectParity(
+      () => z.object({ a: z.string().min(2), b: z.number().int() }),
+      [
+        { a: "xy", b: 1 },
+        { a: "xy", b: 1, junk: 9 },
+        { a: "x", b: 1 },
+        { a: "xy", b: 1.5 },
+        null,
+        [],
+      ],
+    );
+  });
+
+  it("matches on arrays and discriminated unions", () => {
+    expectParity(
+      () => z.array(z.object({ id: z.uuid() })).min(1),
+      [[{ id: "550e8400-e29b-41d4-a716-446655440000" }], [], [{ id: "not-a-uuid" }]],
+    );
+    expectParity(
+      () =>
+        z.discriminatedUnion("t", [
+          z.object({ t: z.literal("a"), x: z.number() }),
+          z.object({ t: z.literal("b"), y: z.string() }),
+        ]),
+      [{ t: "a", x: 1 }, { t: "b", y: "s" }, { t: "c" }],
+    );
+  });
+
+  it("matches on effects, whose callbacks are parsed from fn.toString() at runtime", () => {
+    const min = 3;
+    expectParity(
+      () =>
+        z.object({
+          captured: z.string().refine((v) => v.length >= min, "too short"),
+          defaulted: z.number().default(7),
+          rewritten: z.string().transform((v) => v.trim().toLowerCase()),
+        }),
+      [
+        { captured: "abcd", rewritten: " AB " },
+        { captured: "ab", rewritten: " AB " },
+        { captured: "abcd", defaulted: 1, rewritten: " AB " },
+      ],
+    );
+  });
+
+  it("matches on constructs that fall back to Zod", () => {
+    expectParity(
+      () => z.object({ c: z.custom((v) => v === 1), u: z.url() }),
+      [
+        { c: 1, u: "https://example.com" },
+        { c: 2, u: "https://example.com" },
+        { c: 1, u: "nope" },
+      ],
+    );
+  });
+
+  it("matches on recursive schemas", () => {
+    const make = (): z.ZodType => {
+      const node: z.ZodType = z.lazy(() => z.object({ kids: z.array(node), v: z.number() }));
+      return node;
+    };
+    expectParity(make, [
+      { kids: [{ kids: [], v: 2 }], v: 1 },
+      { kids: [{ kids: [], v: "x" }], v: 1 },
+    ]);
+  });
+});
+
+describe("jit() — installed surface", () => {
+  it("exposes the whole CompiledSchema surface", async () => {
+    const schema = jit(z.object({ a: z.string() }));
+    expect(schema.parse({ a: "x" })).toStrictEqual({ a: "x" });
+    expect(() => schema.parse({ a: 1 })).toThrow();
+    expect(await schema.parseAsync({ a: "x" })).toStrictEqual({ a: "x" });
+    expect((await schema.safeParseAsync({ a: "x" })).success).toBe(true);
+    expect(schema.is({ a: "x" })).toBe(true);
+    expect(schema.is({ a: 1 })).toBe(false);
+  });
+
+  it("routes ~standard through the compiled validator", () => {
+    const schema = jit(z.object({ a: z.string().min(3) }));
+    const standard = (schema as unknown as Record<string, { validate: (v: unknown) => unknown }>)[
+      "~standard"
+    ];
+    expect(standard?.validate({ a: "abc" })).toStrictEqual({ value: { a: "abc" } });
+    expect(standard?.validate({ a: "" })).toHaveProperty("issues");
+  });
+
+  it("keeps Zod interop — identity, shape, instanceof, metadata, composition", () => {
+    const original = z.object({ a: z.string() }).meta({ id: "MySchema", title: "T" });
+    const compiled = jit(original);
+    expect(compiled).toBe(original);
+    expect(compiled).toBeInstanceOf(z.ZodObject);
+    expect(Object.keys(compiled.shape)).toStrictEqual(["a"]);
+    expect(z.toJSONSchema(compiled)).toMatchObject({ title: "T", type: "object" });
+    expect(z.object({ nested: compiled }).safeParse({ nested: { a: "y" } }).success).toBe(true);
+  });
+});
+
+describe("jitAll()", () => {
+  it("compiles every Zod schema among an object's values and ignores the rest", () => {
+    const namespace = Object.freeze({
+      Other: z.array(z.number()),
+      User: z.object({ a: z.string() }),
+      notASchema: 42,
+    });
+    jitAll(namespace);
+    expect(namespace.User.safeParse({ a: "x" }).success).toBe(true);
+    expect(safeParseName(namespace.User)).toBe("safeParse_jit");
+    expect(namespace.Other.safeParse([1]).success).toBe(true);
+    expect(namespace.notASchema).toBe(42);
+  });
+});
+
+describe("jit() — degradation", () => {
+  it("leaves a working plain-Zod schema under z.config({ jitless: true })", () => {
+    core.globalConfig.jitless = true;
+    const schema = jit(z.object({ a: z.string().min(2) }));
+    expect(schema.safeParse({ a: "xy" }).success).toBe(true);
+    expect(schema.safeParse({ a: "x" }).success).toBe(false);
+    expect(safeParseName(schema)).toBe(ZOD_SAFE_PARSE_NAME);
+  });
+
+  it("does not throw when a method slot is locked non-configurable", () => {
+    // `jit()` is called at module scope, so a throw here takes down the
+    // importing app at boot. Zod 4.3.x leaves every slot configurable, but that
+    // is an unversioned internal — and another wrapper can lock one too.
+    const schema = z.object({ a: z.string().min(2) });
+    Object.defineProperty(schema, "safeParse", {
+      configurable: false,
+      value: schema.safeParse.bind(schema),
+      writable: false,
+    });
+    expect(() => jit(schema)).not.toThrow();
+    expect(schema.safeParse({ a: "xy" }).success).toBe(true);
+    expect(schema.safeParse({ a: "x" }).success).toBe(false);
+  });
+
+  it("leaves a working plain-Zod schema when new Function is blocked", () => {
+    const RealFunction = globalThis.Function;
+    // Zod's own object fast-pass is a `new Function` too, so block only the
+    // construction whose body is zod-compiler's — the CSP case for THIS module.
+    globalThis.Function = new Proxy(RealFunction, {
+      construct(target, args: unknown[]) {
+        const body = args.at(-1);
+        if (typeof body === "string" && body.includes("__zcMkv")) {
+          throw new EvalError("Refused to evaluate a string as JavaScript");
+        }
+        return Reflect.construct(target, args) as object;
+      },
+    });
+    try {
+      const schema = jit(z.object({ a: z.string().min(2) }));
+      expect(schema.safeParse({ a: "xy" }).success).toBe(true);
+      expect(schema.safeParse({ a: "x" }).success).toBe(false);
+      expect(safeParseName(schema)).toBe(ZOD_SAFE_PARSE_NAME);
+    } finally {
+      globalThis.Function = RealFunction;
+    }
+  });
+});
