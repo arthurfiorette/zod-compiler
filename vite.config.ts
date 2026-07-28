@@ -42,6 +42,31 @@ export default defineConfig({
     publint: true,
     report: false,
   },
+  run: {
+    tasks: {
+      ci: {
+        command: ["vp pack", "vp check", "knip", "vp test"],
+        input: [
+          { auto: true },
+          "!.tmp/**",
+          "!node_modules/.cache/**",
+          "!tests/fixtures/.*",
+          "!tests/fixtures/.*/**",
+          "!tests/fixtures/__*",
+          "!tests/fixtures/__*/**",
+        ],
+        output: [
+          { auto: true },
+          "!.tmp/**",
+          "!node_modules/.cache/**",
+          "!tests/fixtures/.*",
+          "!tests/fixtures/.*/**",
+          "!tests/fixtures/__*",
+          "!tests/fixtures/__*/**",
+        ],
+      },
+    },
+  },
   staged: {
     "*": "vp check --fix",
   },

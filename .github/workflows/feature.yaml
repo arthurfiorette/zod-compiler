@@ -13,12 +13,23 @@ jobs:
           node-version-file: "package.json"
           cache: true
       - run: vp install --frozen-lockfile
+      - name: restore Vite Task cache
+        id: vite-task-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-${{ runner.os }}-${{ runner.arch }}-
       # Build before tests: fixture modules self-import `zod-compiler`, whose
       # package exports resolve to dist when jiti executes them.
-      - run: vp pack
-      - run: vp check
-      - run: vp exec knip
-      - run: vp test
+      - run: vp run ci
+      - name: save Vite Task cache
+        if: success()
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
     timeout-minutes: 10
 name: Test and build
 on:
