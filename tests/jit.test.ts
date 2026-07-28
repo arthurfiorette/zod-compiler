@@ -237,6 +237,19 @@ describe("jit() — degradation", () => {
     expect(safeParseName(schema)).toBe(ZOD_SAFE_PARSE_NAME);
   });
 
+  it("yields to an AOT install without recursing (jit() plus the build plugin)", () => {
+    // The plugin emits `__zcMkv(fn, jit(schema), fc, is)`: it ASSIGNS the parse
+    // methods and then READS `~standard`. If cancelling on assignment left the
+    // other accessors in place, that read re-entered itself forever.
+    const schema = jit(z.object({ a: z.string() }));
+    const aot = (): { data: string; success: true } => ({ data: "aot", success: true });
+    (schema as unknown as { safeParse: unknown }).safeParse = aot;
+    expect(() => (schema as unknown as Record<string, unknown>)["~standard"]).not.toThrow();
+    expect(schema.safeParse(undefined)).toStrictEqual({ data: "aot", success: true });
+    // Everything the AOT install did not overwrite is Zod's own, not a stub.
+    expect(schema.parse({ a: "x" })).toStrictEqual({ a: "x" });
+  });
+
   it("does not throw when a method slot is locked non-configurable", () => {
     // `jit()` is called at module scope, so a throw here takes down the
     // importing app at boot. Zod 4.3.x leaves every slot configurable, but that

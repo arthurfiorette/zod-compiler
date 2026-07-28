@@ -144,7 +144,14 @@ export function jit<T extends ZodType>(
         materialize(schema);
       },
       () => {
+        if (!pending) return;
         pending = false;
+        // Restore EVERY slot, not just the one being written. A left-behind
+        // accessor whose trigger has been cancelled would read `target[slot]`
+        // and re-enter itself — unbounded recursion. This is the path the build
+        // plugin takes when a file uses `jit()` too: `__zcMkv` assigns the parse
+        // methods (cancelling here) and then reads `~standard`.
+        restore(target, original);
       },
     );
   } catch {
