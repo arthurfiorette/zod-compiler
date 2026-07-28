@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreDependencies": ["@vitest/coverage-v8", "semantic-release", "vite", "vitest"],
+  "ignoreDependencies": ["semantic-release"],
   "ignoreWorkspaces": ["apps/*"],
   "workspaces": {
     ".": {

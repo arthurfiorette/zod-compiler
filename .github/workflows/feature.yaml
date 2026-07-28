@@ -13,9 +13,8 @@ jobs:
           node-version: "24"
           cache: true
       - run: vp install --frozen-lockfile
-      # build before lint and test: #src imports resolve to dist/ — type-aware
-      # lint reads dist/ types, and test discovery executes fixtures through
-      # jiti, which resolves #src to dist/ at runtime.
+      # Build before tests: fixture modules self-import `zod-compiler`, whose
+      # package exports resolve to dist when jiti executes them.
       - run: vp pack
       - run: vp check
       - run: vp exec knip

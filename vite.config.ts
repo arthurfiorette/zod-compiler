@@ -16,6 +16,9 @@ export default defineConfig({
   },
   test: {
     include: ["tests/**/*.test.ts"],
+    coverage: {
+      provider: "v8",
+    },
     server: {
       deps: {
         inline: ["zod"],
@@ -35,6 +38,8 @@ export default defineConfig({
     deps: {
       neverBundle: true,
     },
+    logLevel: "warn",
+    report: false,
   },
   staged: {
     "*": "vp check --fix",
