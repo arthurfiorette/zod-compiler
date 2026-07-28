@@ -39,6 +39,7 @@ export default defineConfig({
       neverBundle: true,
     },
     logLevel: "warn",
+    publint: true,
     report: false,
   },
   staged: {

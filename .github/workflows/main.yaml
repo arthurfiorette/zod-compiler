@@ -16,7 +16,7 @@ jobs:
       - name: setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
-          node-version: "24"
+          node-version-file: "package.json"
           cache: true
       - run: vp install --frozen-lockfile
       # Build before tests: fixture modules self-import `zod-compiler`, whose

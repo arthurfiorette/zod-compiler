@@ -12,9 +12,10 @@
     "validation",
     "zod"
   ],
+  "license": "BSD-3-Clause",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gajus/zod-compiler.git"
+    "url": "git+https://github.com/gajus/zod-compiler.git"
   },
   "bin": {
     "zod-compiler": "./dist/cli/index.js"
@@ -126,6 +127,7 @@
     "@types/picomatch": "^4.0.3",
     "@vitest/coverage-v8": "catalog:",
     "knip": "^6.29.0",
+    "publint": "^0.3.22",
     "semantic-release": "^25.0.3",
     "typescript": "catalog:",
     "vite": "catalog:",
@@ -144,6 +146,13 @@
     },
     "@swc/core": {
       "optional": true
+    }
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "24.18.0",
+      "onFail": "download"
     }
   },
   "packageManager": "pnpm@10.33.1"
