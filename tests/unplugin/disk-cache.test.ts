@@ -105,6 +105,29 @@ describe("DiskCache", () => {
     expect(cache.load(key)?.result).toBe("result");
   });
 
+  it("gives a touched dep the SAME depset id (a checkout must not fork depsets)", () => {
+    // The id hashes (path, content-hash) pairs only. Folding mtime in would
+    // still validate correctly — the hash fallback above covers that — but every
+    // CI run starts from a fresh checkout where every mtime is the clone time,
+    // so each run would write a whole new depset file for unchanged sources.
+    // That is the shape of the 283 MB field incident the v2 layout exists to fix.
+    const cache = new DiskCache(path.join(tmpDir, "cache"), "opts");
+    const dep = writeDep("dep.ts", "export const x = 1;");
+    cache.save(cache.key("/a.ts", "source-a"), "result-a", [dep]);
+    expect(depsetFiles(path.join(tmpDir, "cache"))).toHaveLength(1);
+
+    // Re-stamp the dep as a fresh checkout would, then cache a second file
+    // against the same (unchanged) dependency.
+    const future = new Date(Date.now() + 60_000);
+    fs.utimesSync(dep, future, future);
+    resetDepValidationMemo();
+    cache.save(cache.key("/b.ts", "source-b"), "result-b", [dep]);
+
+    expect(depsetFiles(path.join(tmpDir, "cache"))).toHaveLength(1);
+    expect(cache.load(cache.key("/a.ts", "source-a"))?.result).toBe("result-a");
+    expect(cache.load(cache.key("/b.ts", "source-b"))?.result).toBe("result-b");
+  });
+
   it("misses when a dep file was deleted", () => {
     const cache = new DiskCache(path.join(tmpDir, "cache"), "opts");
     const dep = writeDep("dep.ts", "export const x = 1;");

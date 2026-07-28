@@ -238,6 +238,9 @@ if (!process.env.ZOD_COMPILER) {
 
 With `@t3-oss/env-*`, pass `skipValidation: !!process.env.ZOD_COMPILER`.
 
+A schema whose SHAPE branches on an env var is baked at build time, and the cache key does not include
+the environment — give each environment its own `cache` directory if you share one across them.
+
 ### Large projects and CI
 
 Discovery executes each schema file inside the bundler's process, so the **first cold run** is the
