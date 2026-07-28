@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import type { ArrayIR, ObjectIR, RecordIR, TupleIR } from "#src/core/types.js";
 import { compileIR } from "../helpers.js";
 

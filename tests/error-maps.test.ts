@@ -15,7 +15,7 @@
  * `safeParse` would have to carry them, and that entry point has no room (an
  * unused second parameter alone measured ~12% on every parse).
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { compileLikeProduction } from "./parity-harness.js";
 

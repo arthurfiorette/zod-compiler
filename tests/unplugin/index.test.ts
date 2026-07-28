@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import type { UnpluginContextMeta, UnpluginOptions } from "unplugin";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { unplugin } from "#src/unplugin/index.js";
 import { TRANSFORM_ID_FILTER } from "#src/unplugin/transform.js";
 import {

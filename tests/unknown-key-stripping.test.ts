@@ -9,7 +9,7 @@
  * container it has to reshape correctly, and each is compared against zod for
  * the full result — verdict, issues, and output data including key order.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import type { SafeParseSuccess } from "#src/core/types.js";
 import { compileLikeProduction, expectParity } from "./parity-harness.js";

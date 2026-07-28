@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { dispatch, extractRegistry } from "#src/core/extract/registry.js";
 import type { RecursionState } from "#src/core/extract/types.js";

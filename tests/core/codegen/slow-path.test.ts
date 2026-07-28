@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import type { CodeGenContext } from "#src/core/codegen/context.js";
 import { createSlowGen, generateSlow } from "#src/core/codegen/slow-path.js";
 import type { ArrayIR, SchemaIR, StringIR } from "#src/core/types.js";

@@ -13,7 +13,7 @@
  * parameter is zod's `ctx` issue-collection protocol (superRefine), and an async
  * or generator callback returns a promise where zod's sync parse raises.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { extractSchema, type RefEntry } from "#src/core/extract/index.js";
 import type { ObjectIR, SchemaIR, TransformEffectIR } from "#src/core/types.js";

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { discoverSchemas } from "#src/discovery.js";
 
 const fixturesDir = path.resolve(import.meta.dirname, "fixtures");

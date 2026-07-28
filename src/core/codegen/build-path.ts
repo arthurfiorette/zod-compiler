@@ -105,7 +105,7 @@ function rebuildSet(root: SchemaIR): ReadonlySet<SchemaIR> {
   collect(root);
 
   const rebuilds = new Set<SchemaIR>();
-  for (let changed = true; changed; ) {
+  for (let changed = true; changed;) {
     changed = false;
     for (const node of nodes) {
       if (rebuilds.has(node)) continue;

@@ -8,7 +8,7 @@
  * payload.aborted when `in` fails, so the union surfaces invalid_union rather
  * than the inner custom refine message).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { ZodRealError, z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import type { RefEntry } from "#src/core/extract/index.js";

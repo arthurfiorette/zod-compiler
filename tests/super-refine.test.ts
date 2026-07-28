@@ -17,7 +17,7 @@
  * and `payload.value` is writable public API (so the value is written back, and
  * the fast path refuses when it moved).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { core, z } from "zod";
 import { extractSchema, type RefEntry } from "#src/core/extract/index.js";
 import type { ArrayIR, ObjectIR, SchemaIR, StringIR } from "#src/core/types.js";

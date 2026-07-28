@@ -9,7 +9,7 @@
  * uses — matching zod's handleCatchall, inherited enumerable keys included — with
  * each unrecognized key checked against the catchall and reported at that key.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { extractSchema } from "#src/core/extract/index.js";
 import type { ObjectIR } from "#src/core/types.js";

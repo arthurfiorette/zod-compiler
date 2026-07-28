@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { KEY_MEMBERSHIP_INLINE_THRESHOLD } from "#src/core/codegen/context.js";
 import { generateValidator } from "#src/core/codegen/index.js";
 import type { ObjectIR } from "#src/core/types.js";
