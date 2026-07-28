@@ -49,6 +49,10 @@ export default defineConfig({
         input: [
           { auto: true },
           "!.tmp/**",
+          "!.vite-hooks",
+          "!.vite-hooks/**",
+          "!coverage",
+          "!coverage/**",
           "!node_modules/.cache/**",
           "!node_modules/.modules.yaml",
           "!node_modules/.vite/vitest",
@@ -63,6 +67,10 @@ export default defineConfig({
         output: [
           { auto: true },
           "!.tmp/**",
+          "!.vite-hooks",
+          "!.vite-hooks/**",
+          "!coverage",
+          "!coverage/**",
           "!node_modules/.cache/**",
           "!node_modules/.modules.yaml",
           "!node_modules/.vite/vitest",
