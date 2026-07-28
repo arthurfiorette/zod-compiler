@@ -107,7 +107,6 @@
     "size:cli": "vp run --filter @zod-compiler/benchmarks size:cli",
     "size:unplugin": "vp run --filter @zod-compiler/benchmarks size:unplugin",
     "test": "vp test run",
-    "typecheck": "vp exec tsc --noEmit",
     "prepare": "vp config"
   },
   "dependencies": {

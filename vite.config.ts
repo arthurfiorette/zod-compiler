@@ -187,10 +187,7 @@ export default defineConfig({
     ],
     options: {
       typeAware: true,
-      // The workspace contains intentionally invalid compiler fixtures and
-      // tests that are outside the production TypeScript project. Keep the
-      // production type check explicit via `vp run typecheck`.
-      typeCheck: false,
+      typeCheck: true,
     },
     jsPlugins: [
       {

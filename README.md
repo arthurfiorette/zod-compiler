@@ -465,7 +465,6 @@ vp install
 vp test
 vp run benchmark
 vp run lint
-vp run typecheck
 ```
 
 ## Acknowledgements

@@ -24,7 +24,6 @@ jobs:
       # jiti, which resolves #src to dist/ at runtime.
       - run: vp pack
       - run: vp check
-      - run: vp run typecheck
       - run: vp exec knip
       - run: vp test
       - env:
