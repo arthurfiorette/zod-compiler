@@ -97,8 +97,12 @@ describe("generateCompiledFileContent()", () => {
     expect(content).toContain(
       'import { config as __zodCompilerConfig, core as __zcCore, ZodRealError as __zcZodError } from "zod"',
     );
-    // __zcMsg, __zcMkv, __zcFin are declared at file level (once per file)
-    expect(content).toContain("var __zcMsg=__zodCompilerConfig().localeError;");
+    // __zcMsg, __zcMkv, __zcFin are declared at file level (once per file).
+    // __zcMsg reads the config PER CALL — a snapshot would miss a `z.config()`
+    // that runs after this module is imported, and dropped `customError`.
+    expect(content).toContain("var __zcMsg=function(iss){var c=__zodCompilerConfig()");
+    expect(content).toContain("c.customError");
+    expect(content).toContain("c.localeError");
     expect(content).toContain("function __zcMkv(fn,schema,fc,is)");
     expect(content).toContain("function __zcFin(e,d)");
   });

@@ -14,14 +14,19 @@ import {
   FIN_DECL,
   FIN_DEFERRED_DECL,
   FINZ_DECL,
+  ZOD_MSG_DECLARATION,
 } from "#src/core/iife.js";
 import type { SafeParseResult } from "#src/core/types.js";
 
+// `__zcMsg` is built from the SAME declaration production emits, not a
+// stand-in: it resolves `config.customError`/`config.localeError` per call, so
+// a harness that passed a snapshotted `localeError` here would silently not
+// exercise either.
 const localizedFin = new Function(
-  "__zcMsg",
+  "__zodCompilerConfig",
   "__zcZodError",
-  `${FAIL_CLASS_DECL}${FIN_DECL}; return __zcFin;`,
-)(z.config().localeError, ZodRealError);
+  `${ZOD_MSG_DECLARATION}${FAIL_CLASS_DECL}${FIN_DECL}; return __zcFin;`,
+)(z.config, ZodRealError);
 
 const finZ = new Function(`${FAILZ_CLASS_DECL}${FINZ_DECL}; return __zcFinZ;`)() as (
   rfp: (input: unknown) => SafeParseResult<unknown>,
@@ -56,7 +61,7 @@ export function compileLikeProduction(
     rf.push(schema);
   }
   const factory = new Function(
-    "__zcMsg",
+    "__zodCompilerConfig",
     "__zcZodError",
     "__zcCore",
     "__zcFin",
@@ -64,9 +69,9 @@ export function compileLikeProduction(
     "__rf",
     // Strict, like the ES module the generated code ships inside: an
     // assignment to an undeclared identifier must fail here, not in the bundle.
-    `"use strict";${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${generated.code}\nreturn ${generated.functionDef};`,
+    `"use strict";${ZOD_MSG_DECLARATION}${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${generated.code}\nreturn ${generated.functionDef};`,
   );
-  return factory(z.config().localeError, ZodRealError, core, localizedFin, finZ, rf) as (
+  return factory(z.config, ZodRealError, core, localizedFin, finZ, rf) as (
     input: unknown,
   ) => SafeParseResult<unknown>;
 }

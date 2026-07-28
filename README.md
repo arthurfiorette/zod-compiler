@@ -363,9 +363,10 @@ Three things differ by design:
 | ------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
 | Record key iteration      | All own keys (`Reflect.ownKeys`)                | Own enumerable **string** keys only                     |
 | Container output identity | A fresh array / set / map / object              | The input container, by reference (array holes survive) |
-| Per-call parse params     | `safeParse(x, { error, reportInput })` honoured | Ignored — messages bake at build time                   |
+| Per-call parse params     | `safeParse(x, { error, reportInput })` honoured | Ignored; global `z.config()` maps still apply           |
 
-Schema-level `error` options are unaffected; for a per-call map use `z.safeParse(Schema, x, params)`.
+Schema-level `error` and `z.config()` maps are unaffected; for a per-call map use
+`z.safeParse(Schema, x, params)`.
 
 `z.object()` strips unknown keys exactly as Zod does, so its output is always a fresh object.
 

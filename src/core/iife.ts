@@ -15,8 +15,31 @@ import type { CompiledSchemaInfo } from "./pipeline.js";
 export const ZOD_CONFIG_IMPORT =
   'import { config as __zodCompilerConfig, core as __zcCore, ZodRealError as __zcZodError } from "zod";';
 
-/** File-level __zcMsg declaration (must appear once after ZOD_CONFIG_IMPORT). */
-export const ZOD_MSG_DECLARATION = "var __zcMsg=__zodCompilerConfig().localeError;";
+/**
+ * File-level `__zcMsg` declaration (must appear once after ZOD_CONFIG_IMPORT):
+ * the message an issue gets when nothing was baked into it at build time.
+ *
+ * Resolves zod's tail of `finalizeIssue` — `config.customError` then
+ * `config.localeError` then "Invalid input" — and does it PER CALL, because the
+ * config is mutable: `z.config({ localeError })` in an entry point runs after
+ * the schema modules it imports, so a value snapshotted at module init misses
+ * it. Reading a captured `localeError` alone also dropped `customError`
+ * outright, silently ignoring the global map most i18n setups install.
+ *
+ * The head of zod's chain — the schema's own `error` option — is baked into the
+ * issue at build time and short-circuits this. The one link that cannot be
+ * reproduced is a per-CALL `ctx.error`, which would have to travel through
+ * `safeParse`; that entry point sits at V8's inlining budget, where even an
+ * unused extra parameter measured ~12% on every parse.
+ *
+ * Only ever called while building an error, never on a successful parse.
+ */
+export const ZOD_MSG_DECLARATION =
+  'function __zcUw(m){return typeof m==="string"?m:(m===undefined||m===null?undefined:m.message);}' +
+  "var __zcMsg=function(iss){var c=__zodCompilerConfig(),m;" +
+  "if(c.customError){m=__zcUw(c.customError(iss));if(m!==undefined&&m!==null)return m;}" +
+  "if(c.localeError){m=__zcUw(c.localeError(iss));if(m!==undefined&&m!==null)return m;}" +
+  'return "Invalid input";};';
 
 /**
  * Shared failure-result for __zcFin / __zcFinD. Inline mode (CLI emitter)

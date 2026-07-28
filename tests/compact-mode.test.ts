@@ -17,13 +17,14 @@ import { ZodRealError, z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import { extractSchema, type RefEntry } from "#src/core/extract/index.js";
 import {
-  FAIL_CLASS_DECL,
   FAILZ_CLASS_DECL,
+  FAIL_CLASS_DECL,
+  FINZ_DECL,
   FIN_DECL,
   FIN_DEFERRED_DECL,
-  FINZ_DECL,
-  generateIIFE,
   MK_VALIDATOR_DECL,
+  ZOD_MSG_DECLARATION,
+  generateIIFE,
 } from "#src/core/iife.js";
 import { compileSchemas } from "#src/core/pipeline.js";
 import { expectParity } from "./parity-harness.js";
@@ -291,7 +292,7 @@ function buildCompact(schema: unknown, name = "x"): CompiledLike {
     "__zodCompilerConfig",
     "__zcZodError",
     "__schema",
-    `var __zcMsg=__zodCompilerConfig().localeError;\n` +
+    `${ZOD_MSG_DECLARATION}\n` +
       `${FAIL_CLASS_DECL}${MK_VALIDATOR_DECL}${FIN_DECL}${FIN_DEFERRED_DECL}${FAILZ_CLASS_DECL}${FINZ_DECL}\n` +
       `return ${iife};`,
   );
