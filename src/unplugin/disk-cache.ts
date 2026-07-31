@@ -128,15 +128,32 @@ function readZodVersion(): string {
 }
 
 /**
- * Build fingerprint: the newest mtime across the package's own source trees.
+ * Build fingerprint: a content hash of the package's own source trees.
+ *
  * The published version string alone is not enough — file: installs, linked
  * monorepo packages, and canary builds rebuild the compiler without a version
  * bump, and serving codegen from an older compiler build would be silently
- * stale. Walking ~200 dirents once per process costs ~1ms.
+ * stale.
+ *
+ * CONTENT-addressed, for the same reason depset ids are: mtimes do not survive
+ * an install. pnpm rewrites every mtime under its `copy` import method, and
+ * copy is what you get whenever the store sits on a different filesystem than
+ * the workspace — the default on CI runners that mount the store as its own
+ * volume (`npm_config_package_import_method=copy`). An mtime fingerprint
+ * therefore rotates on every `pnpm install --frozen-lockfile`, which changes
+ * every cache key and makes a restored CI cache wholly unreachable: the archive
+ * unpacks, and nothing in it is ever looked up. Hardlink and APFS-clone installs
+ * DO preserve mtimes, so the bug hides locally and reproduces only on the
+ * runners that need the cache most.
+ *
+ * A content hash is also strictly tighter than mtime for the stated purpose: a
+ * rebuild that reproduces identical bytes no longer discards the whole cache.
+ *
+ * Hashing ~0.7 MB across ~250 files costs ~5ms — once per process, and only if
+ * a key is actually built (see `keyPrefix`).
  */
-function readBuildFingerprint(): string {
-  let newest = 0;
-  let files = 0;
+export function computeBuildFingerprint(root: string): string {
+  const found: string[] = [];
   const walk = (dir: string): void => {
     let entries: fs.Dirent[];
     try {
@@ -149,30 +166,50 @@ function readBuildFingerprint(): string {
       if (entry.isDirectory()) {
         walk(p);
       } else if (/\.(?:js|ts|json)$/.test(entry.name)) {
-        try {
-          const m = fs.statSync(p).mtimeMs;
-          files++;
-          if (m > newest) newest = m;
-        } catch {
-          // unreadable file — ignore
-        }
+        // Relative + POSIX-normalised: the absolute prefix differs per checkout
+        // and the separator differs per platform, neither of which is a rebuild.
+        found.push(path.relative(root, p).split(path.sep).join("/"));
       }
     }
   };
-  try {
-    const root = fileURLToPath(new URL("../..", import.meta.url));
-    for (const sub of ["dist", "src"]) {
-      walk(path.join(root, sub));
+  for (const sub of ["dist", "src"]) {
+    walk(path.join(root, sub));
+  }
+  found.sort();
+  const hash = createHash("sha1");
+  for (const rel of found) {
+    hash.update(rel);
+    hash.update("\0");
+    try {
+      hash.update(fs.readFileSync(path.join(root, rel)));
+    } catch {
+      // Unreadable file: fold in a marker rather than abort. Collapsing to a
+      // constant on error would make genuinely different builds share a key.
+      hash.update("<unreadable>");
     }
+  }
+  return `${hash.digest("hex")}:${found.length}`;
+}
+
+function readBuildFingerprint(): string {
+  try {
+    return computeBuildFingerprint(fileURLToPath(new URL("../..", import.meta.url)));
   } catch {
     return "0";
   }
-  return `${newest}:${files}`;
 }
 
-const PLUGIN_VERSION = readPluginVersion();
-const ZOD_VERSION = readZodVersion();
-const BUILD_FINGERPRINT = readBuildFingerprint();
+/**
+ * Version + build identity shared by every key in the process. Computed on
+ * first key, not at import: reading two package.json files and hashing dist is
+ * pure waste for a build that never enables the cache.
+ */
+let keyPrefixMemo: string | null = null;
+
+function keyPrefix(): string {
+  keyPrefixMemo ??= `${readPluginVersion()}\0${readBuildFingerprint()}\0${readZodVersion()}`;
+  return keyPrefixMemo;
+}
 
 /**
  * Per-process memo: path → current stat (+ lazily computed content hash).
@@ -259,9 +296,7 @@ export class DiskCache {
   }
 
   key(id: string, code: string): string {
-    return sha1(
-      `${PLUGIN_VERSION}\0${BUILD_FINGERPRINT}\0${ZOD_VERSION}\0${this.optionsKey}\0${id}\0${code}`,
-    );
+    return sha1(`${keyPrefix()}\0${this.optionsKey}\0${id}\0${code}`);
   }
 
   private entryPath(key: string): string {

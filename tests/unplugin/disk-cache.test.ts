@@ -2,7 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DiskCache, resetDepValidationMemo } from "#src/unplugin/disk-cache.js";
+import {
+  computeBuildFingerprint,
+  DiskCache,
+  resetDepValidationMemo,
+} from "#src/unplugin/disk-cache.js";
 
 let tmpDir: string;
 
@@ -276,5 +280,83 @@ describe("DiskCache — format migration and GC", () => {
     expect(depsetFiles(dir).length).toBe(1);
     // Marker claimed: next init within the interval skips the sweep.
     expect(fs.existsSync(path.join(dir, "_gc"))).toBe(true);
+  });
+});
+
+describe("computeBuildFingerprint", () => {
+  /** A package tree as an install materialises it: fresh files, fresh mtimes. */
+  const PKG: Record<string, string> = {
+    "dist/index.js": "export const compile = 1;",
+    "dist/index.d.ts": "export declare const compile: number;",
+    "dist/unplugin/disk-cache.js": "export class DiskCache {}",
+    "dist/tsconfig.tsbuildinfo.json": '{"version":"5"}',
+    "dist/README.md": "not part of the build identity",
+  };
+
+  function writePackage(root: string): string {
+    for (const [rel, content] of Object.entries(PKG)) {
+      const p = path.join(root, rel);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, content);
+    }
+    return root;
+  }
+
+  it("survives a reinstall that rewrites every mtime", () => {
+    // pnpm's `copy` import method — forced whenever the store sits on a
+    // different filesystem, as on CI runners that mount it as its own volume —
+    // stamps a wall-clock mtime on every file of every install. Keyed on
+    // mtime, the fingerprint rotated on each `pnpm install --frozen-lockfile`,
+    // so the whole key space moved and a restored cache archive was unpacked
+    // and then never read. Hardlink and APFS-clone installs preserve mtimes,
+    // which is why this only ever reproduced in CI. Same class of bug the
+    // depset id avoids by hashing content — one level up.
+    const root = writePackage(path.join(tmpDir, "pkg"));
+    const before = computeBuildFingerprint(root);
+
+    const later = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    for (const rel of Object.keys(PKG)) fs.utimesSync(path.join(root, rel), later, later);
+
+    expect(computeBuildFingerprint(root)).toBe(before);
+  });
+
+  it("is identical for the same package materialised at another path", () => {
+    // A different runner, workspace directory, and store layout.
+    const a = writePackage(path.join(tmpDir, "runner-a", "node_modules", "zod-compiler"));
+    const b = writePackage(path.join(tmpDir, "runner-b", ".pnpm", "zod-compiler@1.0.0"));
+
+    expect(computeBuildFingerprint(b)).toBe(computeBuildFingerprint(a));
+  });
+
+  it("still changes when the compiler is rebuilt without a version bump", () => {
+    // The reason the fingerprint exists at all: file:/linked/canary installs
+    // rebuild dist in place, and serving codegen from the older build would be
+    // silently stale.
+    const root = writePackage(path.join(tmpDir, "pkg"));
+    const before = computeBuildFingerprint(root);
+
+    fs.writeFileSync(path.join(root, "dist", "index.js"), "export const compile = 2;");
+
+    expect(computeBuildFingerprint(root)).not.toBe(before);
+  });
+
+  it("changes when a build file appears or disappears", () => {
+    const root = writePackage(path.join(tmpDir, "pkg"));
+    const before = computeBuildFingerprint(root);
+
+    fs.writeFileSync(path.join(root, "dist", "extra.js"), "export const extra = 1;");
+    expect(computeBuildFingerprint(root)).not.toBe(before);
+
+    fs.rmSync(path.join(root, "dist", "extra.js"));
+    expect(computeBuildFingerprint(root)).toBe(before);
+  });
+
+  it("ignores files that are not part of the build", () => {
+    const root = writePackage(path.join(tmpDir, "pkg"));
+    const before = computeBuildFingerprint(root);
+
+    fs.writeFileSync(path.join(root, "dist", "CHANGELOG.md"), "# 1.0.1");
+
+    expect(computeBuildFingerprint(root)).toBe(before);
   });
 });
