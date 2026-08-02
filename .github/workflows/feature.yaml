@@ -7,11 +7,17 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: setup Vite+
-        uses: voidzero-dev/setup-vp@v1
+      - name: setup node.js
+        uses: actions/setup-node@v6
         with:
           node-version-file: "package.json"
+      - name: setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        env:
+          VP_NODE_MANAGER: "no"
+        with:
           cache: true
+          run-install: false
       - run: vp install --frozen-lockfile
       - name: restore Vite Task cache
         id: vite-task-cache
