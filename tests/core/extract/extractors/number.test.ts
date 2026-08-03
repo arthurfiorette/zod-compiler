@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { extractNumber } from "#src/core/extract/extractors/number.js";
 import { extractSchema } from "#src/core/extract/index.js";

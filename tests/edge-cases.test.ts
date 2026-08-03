@@ -8,7 +8,7 @@
  * by construction). These complement zod-feature-matrix's one-case-per-feature
  * coverage with adversarial inputs per feature.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { compileLikeProduction, expectParity } from "./parity-harness.js";
 

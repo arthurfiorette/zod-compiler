@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vite-plus/test";
 import { loadSourceFile } from "#src/loader.js";
 import { hoistZodSchemas } from "#src/unplugin/hoist.js";
 import { compileHoistedSchemas } from "#src/unplugin/hoist-compile.js";

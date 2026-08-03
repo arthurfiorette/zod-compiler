@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import { extractSchema } from "#src/core/extract/index.js";

@@ -13,23 +13,38 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: setup pnpm
-        uses: pnpm/action-setup@v6
       - name: setup node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "24"
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      # build before lint and test: #src imports resolve to dist/ — type-aware
-      # lint reads dist/ types, and test discovery executes fixtures through
-      # jiti, which resolves #src to dist/ at runtime.
-      - run: pnpm build
-      - run: pnpm lint
-      - run: pnpm test
+          node-version-file: "package.json"
+      - name: setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        env:
+          VP_NODE_MANAGER: "no"
+        with:
+          cache: true
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: restore Vite Task cache
+        id: vite-task-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-${{ runner.os }}-${{ runner.arch }}-
+      # Build before tests: fixture modules self-import `zod-compiler`, whose
+      # package exports resolve to dist when jiti executes them.
+      - run: vp run ci
+      - name: save Vite Task cache
+        if: success()
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
       - env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: pnpm exec semantic-release
+        run: vp exec semantic-release
     timeout-minutes: 30
 name: Release
 on:

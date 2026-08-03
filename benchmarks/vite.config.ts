@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import UnpluginTypia from "@typia/unplugin/vite";
-import { defineConfig } from "vitest/config";
+import { defineConfig } from "vite-plus";
 import zodCompiler from "zod-compiler/vite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

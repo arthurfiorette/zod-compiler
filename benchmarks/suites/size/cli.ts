@@ -4,7 +4,7 @@
  * Generates compiled output for representative schemas and measures raw + gzip
  * bytes per schema. Mirrors what `npx zod-compiler generate` produces.
  *
- * Run: pnpm size:cli
+ * Run: vp run size:cli
  */
 import { gzipSync } from "node:zlib";
 import type { z } from "zod";

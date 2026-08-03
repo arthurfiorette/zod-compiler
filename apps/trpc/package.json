@@ -6,9 +6,9 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "client": "tsx src/client.ts",
-    "build": "tsdown",
+    "build": "vp pack",
     "check": "zod-compiler check src/schemas.ts --json",
-    "test": "vitest run"
+    "test": "vp test run"
   },
   "dependencies": {
     "@trpc/client": "^11.17.0",
@@ -17,11 +17,10 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "tsdown": "^0.22.1",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vitest": "catalog:",
+    "vite-plus": "catalog:",
     "zod-compiler": "workspace:*"
   }
 }

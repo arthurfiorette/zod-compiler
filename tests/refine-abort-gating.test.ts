@@ -24,7 +24,7 @@
  * `z.array(z.string()).min(2)` reports too_small next to a bad element's
  * invalid_type.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { z } from "zod";
 import { compileLikeProduction, expectParity } from "./parity-harness.js";
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { lookupWellKnownRegex, WELL_KNOWN_REGEXES } from "#src/core/codegen/well-known-regex.js";
 import { extractSchema } from "#src/core/extract/index.js";

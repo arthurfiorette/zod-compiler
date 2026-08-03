@@ -17,7 +17,7 @@
  *    CSP that blocks `new Function`, a schema the pipeline throws on — leaves
  *    a working plain-Zod schema rather than a broken one.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { core, z } from "zod";
 import { jit, jitAll } from "#src/jit.js";
 

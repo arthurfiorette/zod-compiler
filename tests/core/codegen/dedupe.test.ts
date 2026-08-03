@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { ZodRealError, z } from "zod";
 import { FAIL_CLASS_DECL, FIN_DECL, FIN_DEFERRED_DECL } from "#src/core/iife.js";
 import { compileSchemas, type CompiledSchemaInfo } from "#src/core/pipeline.js";

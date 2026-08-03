@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { diagnoseSchema } from "#src/core/diagnostic.js";
 import type { SchemaIR } from "#src/core/types.js";
 

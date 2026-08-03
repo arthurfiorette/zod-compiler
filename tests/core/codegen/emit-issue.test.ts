@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import type { CodeGenContext, SlowGen } from "#src/core/codegen/context.js";
 import {
   invalidFormat,

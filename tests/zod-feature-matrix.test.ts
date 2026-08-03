@@ -7,7 +7,7 @@
  * to Zod (which is parity by construction). This suite is the proof that
  * zod-compiler covers the entire Zod surface without silent divergence.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { compileLikeProduction, expectParity } from "./parity-harness.js";
 

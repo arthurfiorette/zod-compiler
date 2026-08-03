@@ -20,7 +20,7 @@
  * element-vs-size issue ordering, duplicate discriminator throw) — those now
  * live as parity regressions in edge-cases.test.ts.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { compileLikeProduction } from "./parity-harness.js";
 

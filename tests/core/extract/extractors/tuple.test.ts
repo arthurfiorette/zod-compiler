@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { extractSchema } from "#src/core/extract/index.js";
 import type { TupleIR } from "#src/core/types.js";

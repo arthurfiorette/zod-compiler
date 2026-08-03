@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { mayExportSchemas } from "#src/static-filter.js";
 
 const TS = "/project/src/file.ts";

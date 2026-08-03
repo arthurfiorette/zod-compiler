@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import type { CodeGenContext } from "#src/core/codegen/context.js";
 import { KEY_MEMBERSHIP_INLINE_THRESHOLD } from "#src/core/codegen/context.js";
 import { createFastGen, generateFast } from "#src/core/codegen/fast-path.js";

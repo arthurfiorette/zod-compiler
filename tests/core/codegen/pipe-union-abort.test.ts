@@ -6,7 +6,7 @@
  * union through every path it travels: a pipe's `out`, a `.default()` wrapper,
  * a transform `effect`, and a shared (deduped) slow-walk option.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { ZodRealError, z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import type { RefEntry } from "#src/core/extract/index.js";

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { UnpluginContextMeta, UnpluginOptions } from "unplugin";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { resetDepValidationMemo } from "#src/unplugin/disk-cache.js";
 import { unplugin } from "#src/unplugin/index.js";
 import { type TransformHandler, transformHandler } from "./hooks.js";

@@ -5,7 +5,7 @@
   "scripts": {
     "build": "rspack build",
     "start": "node dist/main.js",
-    "test": "pnpm build && node dist/main.js"
+    "test": "vp run build && node dist/main.js"
   },
   "dependencies": {
     "zod": "catalog:",

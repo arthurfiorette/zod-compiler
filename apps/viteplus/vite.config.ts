@@ -1,8 +1,8 @@
-import { defineConfig } from "vite-plus";
+import { defineConfig, lazyPlugins } from "vite-plus";
 import zodCompiler from "zod-compiler/vite";
 
 export default defineConfig({
-  plugins: [zodCompiler()],
+  plugins: lazyPlugins(() => [zodCompiler()]),
   build: {
     lib: {
       entry: "src/main.ts",

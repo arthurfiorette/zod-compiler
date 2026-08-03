@@ -3,7 +3,7 @@
  * extract → codegen pipeline with a production-equivalent __zcFin (Zod locale
  * wired, mirroring ZOD_MSG_DECLARATION) and compares against Zod itself.
  */
-import { expect } from "vitest";
+import { expect } from "vite-plus/test";
 import { ZodRealError, z, core } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import type { ExtractOptions, RefEntry } from "#src/core/extract/index.js";
