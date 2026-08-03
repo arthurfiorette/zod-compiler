@@ -375,10 +375,10 @@ A schema delegates to Zod when it reaches JavaScript the generated code cannot r
 | Overlapping or policy-sensitive object intersections | Zod's independent parse-and-merge semantics cannot be safely collapsed     |
 | Dynamic error maps, unresolvable `z.lazy()`          | Not knowable at build time                                                 |
 
-Everything else compiles, including `transform`/`refine`/`superRefine` whether or not the callback
-captures — a zero-capture one is inlined, a capturing one called by reference. Delegation is
-per-sub-schema: one uncompilable field goes to Zod, not the whole object. Run `zod-compiler check` to
-see what compiled.
+Everything else compiles, including context-free `preprocess` callbacks and
+`transform`/`refine`/`superRefine` whether or not the callback captures — a zero-capture one is inlined,
+a capturing one called by reference. Delegation is per-sub-schema: one uncompilable field goes to Zod,
+not the whole object. Run `zod-compiler check` to see what compiled.
 
 ### Behavioral Differences from Zod
 
@@ -437,6 +437,8 @@ Schema-level `error` and `z.config()` maps are unaffected; for a per-call map us
 | object with superRefine (cross-field)           | 1.6M   | 2.3M   | **11.6M**        | —     | —     | 5.0x      |
 | coerced query object (valid)                    | 1.9M   | 2.3M   | **5.2M**         | —     | —     | 2.2x      |
 | coerced query object (invalid)                  | 1.1M   | 162K   | **10.1M**        | —     | —     | **62x**   |
+| preprocessed query object (valid)               | 426K   | 1.6M   | **5.3M**         | —     | —     | 3.4x      |
+| preprocessed query object (invalid)             | 387K   | 149K   | **12.4M**        | —     | —     | **84x**   |
 | stringbool config object (valid)                | —      | 1.9M   | **6.0M**         | —     | —     | 3.1x      |
 | stringbool config object (invalid)              | —      | 129K   | **13.1M**        | —     | —     | **101x**  |
 | custom/instanceof request (valid)               | 894K   | 3.0M   | **8.6M**         | —     | —     | 2.9x      |
@@ -466,9 +468,10 @@ idioms (array size checks, `.refine()`, `.default()`, `.trim()`, `.transform()`)
 Regexes are pre-compiled with bounded repeats unrolled, checks run cheapest-first, discriminated unions
 dispatch through a jump table (plain tagged unions are auto-discriminated into it), and oversized check
 functions are split to stay within V8's optimizer budget. Stripping objects, native coercions,
-`stringbool`, defaults, string rewrites and synchronous transforms validate and build their output in
-one pass. An intersection of two objects with disjoint keys compiles to that same single pass over the
-merged shape, and `z.custom()` / `z.instanceof()` compile to a direct predicate call.
+`stringbool`, defaults, string rewrites, context-free preprocessors and synchronous transforms validate
+and build their output in one pass. An intersection of two objects with disjoint keys compiles to that
+same single pass over the merged shape, and `z.custom()` / `z.instanceof()` compile to a direct predicate
+call.
 
 Where success is cheaper to compile than failure, only the verdict and output are compiled: intersections
 and `custom` keep the original Zod schema to construct issues, so a rejection still reports exactly what

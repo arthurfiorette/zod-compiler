@@ -39,6 +39,17 @@ export const CoercedQuerySchema = z.object({
   since: z.coerce.date(),
 });
 
+// The same request boundary written in the common pre-Zod-4 style, where
+// callers normalize raw query values explicitly before validating them.
+export const PreprocessedQuerySchema = z.object({
+  page: z.preprocess((value) => Number(value), z.number().int().positive()),
+  pageSize: z.preprocess((value) => Number(value), z.number().int().min(1).max(100)),
+  minPrice: z.preprocess((value) => Number(value), z.number().nonnegative()),
+  maxPrice: z.preprocess((value) => Number(value), z.number().positive()),
+  includeArchived: z.preprocess((value) => Boolean(value), z.boolean()),
+  since: z.preprocess((value) => new Date(String(value)), z.date()),
+});
+
 // ─── Environment/query boolean flags ──────────────────────────────────────
 
 export const StringBoolConfigSchema = z.object({

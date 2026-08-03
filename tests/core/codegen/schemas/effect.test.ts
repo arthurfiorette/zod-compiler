@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { ArrayIR, NumberIR, ObjectIR, StringIR, TransformEffectIR } from "#src/core/types.js";
+import type {
+  ArrayIR,
+  NumberIR,
+  ObjectIR,
+  PreprocessEffectIR,
+  StringIR,
+  TransformEffectIR,
+} from "#src/core/types.js";
 import { compileFastCheck, compileIR } from "../helpers.js";
 
 describe("slow-path — transform effect", () => {
@@ -121,6 +128,38 @@ describe("slow-path — transform effect", () => {
     expect(safeParse(0).success).toBe(false);
     expect(safeParse(101).success).toBe(false);
     expect(safeParse("not a number").success).toBe(false);
+  });
+});
+
+describe("slow-path — preprocess effect", () => {
+  it("applies the callback before validating the output schema", () => {
+    const ir: PreprocessEffectIR = {
+      type: "effect",
+      effectKind: "preprocess",
+      source: "v => Number(v)",
+      inner: {
+        type: "number",
+        checks: [{ kind: "greater_than", value: 0, inclusive: false }],
+      },
+    };
+    const safeParse = compileIR(ir);
+    expect(safeParse("42")).toEqual({ success: true, data: 42 });
+    expect(safeParse("0").success).toBe(false);
+    expect(safeParse("nope").success).toBe(false);
+  });
+
+  it("validates a preprocessed object and returns its parsed output", () => {
+    const ir: PreprocessEffectIR = {
+      type: "effect",
+      effectKind: "preprocess",
+      source: 'v => ({ name: String(v), extra: "strip" })',
+      inner: {
+        type: "object",
+        properties: { name: { type: "string", checks: [] } },
+        stripUnknownKeys: true,
+      },
+    };
+    expect(compileIR(ir)("Ada")).toEqual({ success: true, data: { name: "Ada" } });
   });
 });
 

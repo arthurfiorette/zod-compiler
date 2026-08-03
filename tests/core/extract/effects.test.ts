@@ -1,5 +1,30 @@
 import { describe, expect, it } from "vite-plus/test";
-import { tryCompileEffect } from "#src/core/extract/effects.js";
+import { isContextFreeUnaryCallback, tryCompileEffect } from "#src/core/extract/effects.js";
+
+describe("isContextFreeUnaryCallback", () => {
+  it("accepts ordinary zero- and one-parameter synchronous callbacks", () => {
+    const captured = 2;
+    expect(isContextFreeUnaryCallback(() => captured)).toBe(true);
+    expect(isContextFreeUnaryCallback((value: number) => value * captured)).toBe(true);
+  });
+
+  it("rejects every way a callback can observe a second argument", () => {
+    expect(isContextFreeUnaryCallback((value: unknown, _ctx: unknown) => value)).toBe(false);
+    expect(isContextFreeUnaryCallback((value: unknown, _ctx = null) => value)).toBe(false);
+    expect(isContextFreeUnaryCallback((value: unknown, ..._ctx: unknown[]) => value)).toBe(false);
+    expect(isContextFreeUnaryCallback((...values: unknown[]) => values[0])).toBe(false);
+    expect(
+      isContextFreeUnaryCallback(function (value: unknown) {
+        return arguments.length > 1 ? value : undefined;
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects async and non-function values", () => {
+    expect(isContextFreeUnaryCallback(async (value: unknown) => value)).toBe(false);
+    expect(isContextFreeUnaryCallback(null)).toBe(false);
+  });
+});
 
 describe("tryCompileEffect", () => {
   // ─── Compilable (zero-capture) functions ──────────────────────────────────

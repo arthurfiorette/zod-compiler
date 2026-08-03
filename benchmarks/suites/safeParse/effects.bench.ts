@@ -6,6 +6,7 @@ import {
   aotCapturedTransformObject,
   aotCoercedQuery,
   aotCustomRequest,
+  aotPreprocessedQuery,
   aotStringBoolConfig,
   aotSuperRefineObject,
   aotZeroCaptureRefineObject,
@@ -18,6 +19,7 @@ import {
   CapturedTransformSchema,
   CoercedQuerySchema,
   CustomRequestSchema,
+  PreprocessedQuerySchema,
   StringBoolConfigSchema,
   SuperRefineObjectSchema,
   ZeroCaptureRefineObjectSchema,
@@ -30,6 +32,7 @@ import {
   v3CapturedTransformSchema,
   v3CoercedQuerySchema,
   v3CustomRequestSchema,
+  v3PreprocessedQuerySchema,
   v3SuperRefineObjectSchema,
   v3ZeroCaptureRefineObjectSchema,
   v3ZeroCaptureRefineStringSchema,
@@ -76,6 +79,32 @@ describe("safeParse: coerced query object — invalid", () => {
   });
   bench("zod-compiler", () => {
     aotCoercedQuery.safeParse(invalidCoercedQuery);
+  });
+});
+
+// ─── Explicit request preprocessing (single-pass build path) ───────────────
+
+describe("safeParse: preprocessed query object — valid", () => {
+  bench("zod", () => {
+    PreprocessedQuerySchema.safeParse(validCoercedQuery);
+  });
+  bench("zod v3", () => {
+    v3PreprocessedQuerySchema.safeParse(validCoercedQuery);
+  });
+  bench("zod-compiler", () => {
+    aotPreprocessedQuery.safeParse(validCoercedQuery);
+  });
+});
+
+describe("safeParse: preprocessed query object — invalid", () => {
+  bench("zod", () => {
+    PreprocessedQuerySchema.safeParse(invalidCoercedQuery);
+  });
+  bench("zod v3", () => {
+    v3PreprocessedQuerySchema.safeParse(invalidCoercedQuery);
+  });
+  bench("zod-compiler", () => {
+    aotPreprocessedQuery.safeParse(invalidCoercedQuery);
   });
 });
 

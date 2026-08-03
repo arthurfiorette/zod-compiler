@@ -67,6 +67,8 @@ describe("build path — everyday constructs stay on the single-pass generator",
     ["class instance", z.object({ createdAt: z.instanceof(Date) })],
     ["stringbool", z.object({ enabled: z.stringbool() })],
     ["stringbool inside an array", z.object({ flags: z.array(z.stringbool()) })],
+    ["preprocess", z.object({ page: z.preprocess((v) => Number(v), z.number().int()) })],
+    ["preprocess inside an array", z.array(z.preprocess((v) => Number(v), z.number()))],
     ["sync transform", z.object({ a: z.string().transform((s) => s.length) })],
     [
       "transform over a rebuilding object",

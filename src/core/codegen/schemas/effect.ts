@@ -1,4 +1,5 @@
 import type {
+  PreprocessEffectIR,
   RefineEffectCheckIR,
   SuperRefineEffectCheckIR,
   TransformEffectIR,
@@ -17,7 +18,16 @@ import { ZC_SR_DECL, ZC_SR_OK_DECL, ZC_SR_RUN_DECL } from "../issue-decls.js";
  * Generate code for a TransformEffectIR node.
  * Validates the inner schema, then applies the transform function and writes back the result.
  */
-export function slowEffect(ir: TransformEffectIR, g: SlowGen): string {
+export function slowEffect(ir: TransformEffectIR | PreprocessEffectIR, g: SlowGen): string {
+  if (ir.effectKind === "preprocess") {
+    const valueVar = g.temp("pv");
+    return `${emit`
+      var ${valueVar}=${emitEffectCallable(g.ctx, ir)}(${g.input});
+      ${g.output}=${valueVar};
+      ${g.visit(ir.inner, { input: valueVar, output: g.output, aborted: g.aborted })}
+    `}\n`;
+  }
+
   const beforeVar = g.temp("ib");
   const innerCode = g.visit(ir.inner);
   // A transform is `inner.transform(fn)` = a pipe(inner, transform): zod's

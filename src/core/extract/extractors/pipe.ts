@@ -1,5 +1,9 @@
 import type { SchemaIR } from "../../types.js";
-import { isReferenceablePredicate, tryCompileEffect } from "../effects.js";
+import {
+  isContextFreeUnaryCallback,
+  isReferenceablePredicate,
+  tryCompileEffect,
+} from "../effects.js";
 import type { ExtractorContext, ZodDef } from "../types.js";
 import { extractStringBool, isStringBoolCodec } from "./string-bool.js";
 
@@ -17,6 +21,36 @@ export function extractPipe(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   // against the output schema — delegate to Zod.
   if (def.transform !== undefined) {
     return ctx.fallback("transform");
+  }
+
+  // z.preprocess(fn, schema) is represented as pipe(transform(fn), schema):
+  // run the callback before validating the output schema. A synchronous
+  // single-argument callback needs no Zod parse context, so it can use the
+  // same inline-or-reference machinery as a regular transform.
+  const inDef = def.in?._zod?.def;
+  if (inDef && inDef.type === "transform" && isContextFreeUnaryCallback(inDef.transform)) {
+    const source = tryCompileEffect(inDef.transform);
+    if (source) {
+      return {
+        type: "effect",
+        effectKind: "preprocess",
+        source,
+        inner: ctx.visit(def.out, "._zod.def.out"),
+      };
+    }
+    if (ctx.refs) {
+      const refIndex = ctx.refs.length;
+      ctx.refs.push({
+        schema: inDef.transform,
+        accessPath: `${ctx.path}._zod.def.in._zod.def.transform`,
+      });
+      return {
+        type: "effect",
+        effectKind: "preprocess",
+        refIndex,
+        inner: ctx.visit(def.out, "._zod.def.out"),
+      };
+    }
   }
 
   const outDef = def.out?._zod?.def;

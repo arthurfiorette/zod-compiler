@@ -64,6 +64,30 @@ export function isReferenceablePredicate(fn: unknown): boolean {
 }
 
 /**
+ * Can a callback be invoked with the value alone without hiding Zod's second
+ * parse-context argument? `fn.length` is insufficient here: default and rest
+ * parameters can observe that argument while still reporting length 0 or 1.
+ */
+export function isContextFreeUnaryCallback(fn: unknown): boolean {
+  if (!isReferenceablePredicate(fn)) return false;
+  let ast: Node;
+  try {
+    ast = parseExpressionAt((fn as Function).toString(), 0, {
+      ecmaVersion: "latest",
+      sourceType: "module",
+    });
+  } catch {
+    return false;
+  }
+  const fnNode = ast as { params?: Node[]; body?: Node };
+  if ((fnNode.params?.length ?? 0) > 1) return false;
+  if (fnNode.params?.some((param) => param.type === "RestElement")) return false;
+  const refs = new Set<string>();
+  if (fnNode.body) collectIdentifierRefs(fnNode.body, refs);
+  return !refs.has("arguments");
+}
+
+/**
  * A `superRefine`: a `custom` check whose callback takes zod's PAYLOAD rather
  * than the value, collecting issues instead of returning a verdict. Zod stores
  * it on the check instance (`_zod.check`) rather than `def.fn`.

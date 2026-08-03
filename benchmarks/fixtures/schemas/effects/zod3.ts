@@ -41,6 +41,15 @@ export const v3CoercedQuerySchema = z.object({
   since: z.coerce.date(),
 });
 
+export const v3PreprocessedQuerySchema = z.object({
+  page: z.preprocess((value) => Number(value), z.number().int().positive()),
+  pageSize: z.preprocess((value) => Number(value), z.number().int().min(1).max(100)),
+  minPrice: z.preprocess((value) => Number(value), z.number().nonnegative()),
+  maxPrice: z.preprocess((value) => Number(value), z.number().positive()),
+  includeArchived: z.preprocess((value) => Boolean(value), z.boolean()),
+  since: z.preprocess((value) => new Date(String(value)), z.date()),
+});
+
 const minimumScore = 50;
 export const v3CustomRequestSchema = z.object({
   active: z.boolean(),

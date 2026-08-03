@@ -2,7 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import type { RefEntry } from "#src/core/extract/index.js";
 import { extractSchema } from "#src/core/extract/index.js";
-import type { FallbackIR, PipeIR, StringIR, TransformEffectIR } from "#src/core/types.js";
+import type {
+  FallbackIR,
+  PipeIR,
+  PreprocessEffectIR,
+  StringIR,
+  TransformEffectIR,
+} from "#src/core/types.js";
 
 describe("extractSchema — pipe", () => {
   it("extracts string-to-string pipe with checks", () => {
@@ -74,5 +80,45 @@ describe("extractSchema — pipe", () => {
     const schema = z.string().pipe(z.string().transform((v) => v + suffix));
     extractSchema(schema, refs);
     expect(refs).toHaveLength(1);
+  });
+
+  it("extracts a zero-capture preprocessor before its output schema", () => {
+    const ir = extractSchema(
+      z.preprocess((value) => Number(value), z.number().int().positive()),
+    ) as PreprocessEffectIR;
+    expect(ir.type).toBe("effect");
+    expect(ir.effectKind).toBe("preprocess");
+    expect(ir.source).toContain("Number");
+    expect(ir.inner.type).toBe("number");
+  });
+
+  it("retains a capturing preprocessor by reference", () => {
+    const radix = 16;
+    const refs: RefEntry[] = [];
+    const ir = extractSchema(
+      z.preprocess((value) => parseInt(String(value), radix), z.number()),
+      refs,
+    ) as PreprocessEffectIR;
+    expect(ir.type).toBe("effect");
+    expect(ir.effectKind).toBe("preprocess");
+    expect(ir.refIndex).toBe(0);
+    expect(refs).toHaveLength(1);
+  });
+
+  it("keeps context-observing preprocessors on Zod", () => {
+    const callbackWithDefaultContext = (value: unknown, ctx: unknown = null) =>
+      ctx ? value : "missing";
+    const withDefaultContext = z.preprocess(callbackWithDefaultContext, z.string());
+    const withRest = z.preprocess(
+      (value, ...context) => (context.length ? value : "missing"),
+      z.string(),
+    );
+    for (const schema of [withDefaultContext, withRest]) {
+      const refs: RefEntry[] = [];
+      const ir = extractSchema(schema, refs) as PipeIR;
+      expect(ir.type).toBe("pipe");
+      expect(ir.in.type).toBe("fallback");
+      expect(refs).toHaveLength(1);
+    }
   });
 });

@@ -469,6 +469,17 @@ export interface TransformEffectIR {
   inner: SchemaIR;
 }
 
+export interface PreprocessEffectIR {
+  type: "effect";
+  effectKind: "preprocess";
+  /** Zero-capture preprocessor source, mutually exclusive with refIndex. */
+  source?: string;
+  /** Runtime callback reference for a capturing preprocessor. */
+  refIndex?: number;
+  /** The output schema to validate after applying the preprocessor. */
+  inner: SchemaIR;
+}
+
 // ─── Schema IR: Special ────────────────────────────────────────────────────
 
 /**
@@ -603,6 +614,7 @@ export type SchemaIR = TypeMessageCarrier &
     | PipeIR
     // Effects
     | TransformEffectIR
+    | PreprocessEffectIR
     // Special
     | CustomIR
     | ZodDelegateIR

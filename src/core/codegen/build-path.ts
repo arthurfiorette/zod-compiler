@@ -621,16 +621,25 @@ function buildRecord(ir: SchemaIR & { type: "record" }, input: string, g: BuildG
 
 /**
  * `.transform(fn)`: validate the inner schema, then hand its parsed value to the
- * callback. Zod's transform is a pipe whose `in` failing aborts the whole thing,
- * which is exactly what returning FAIL from the inner build does — so the
- * callback runs only on a clean parse, as `slowEffect` guarantees with its issue
- * count.
+ * callback. `z.preprocess(fn, schema)` reverses those two steps: call first,
+ * then validate the callback's output. Returning FAIL from the inner build
+ * preserves the corresponding pipe short-circuit in either direction.
  *
  * The IR reaches here only for a synchronous single-argument callback: a
  * `ctx`-taking or async transform is extracted as a `fallback` instead
  * (see extractPipe), so there is no parse context to reproduce.
  */
 function buildEffect(ir: SchemaIR & { type: "effect" }, input: string, g: BuildGen): Built | null {
+  if (ir.effectKind === "preprocess") {
+    const value = local(g, "bpv");
+    const inner = build(ir.inner, value, g);
+    if (inner === null) return null;
+    return {
+      code: `${value}=${emitEffectCallable(g.ctx, ir)}(${input});${inner.code}`,
+      value: inner.value,
+    };
+  }
+
   const inner = build(ir.inner, input, g);
   if (inner === null) return null;
   const out = local(g, "bx");
