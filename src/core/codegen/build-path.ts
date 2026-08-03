@@ -230,6 +230,7 @@ function children(ir: SchemaIR): readonly SchemaIR[] {
     case "catch":
     case "effect":
     case "recursionTarget":
+    case "zodDelegate":
       return [ir.inner];
     case "pipe":
       return [ir.in, ir.out];
@@ -356,6 +357,8 @@ function buildInline(ir: SchemaIR, input: string, g: BuildGen): Built | null {
     case "effect":
       return buildEffect(ir, input, g);
     case "readonly":
+      return build(ir.inner, input, g);
+    case "zodDelegate":
       return build(ir.inner, input, g);
     case "union":
     case "discriminatedUnion":

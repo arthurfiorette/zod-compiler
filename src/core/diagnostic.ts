@@ -144,6 +144,10 @@ function* iterChildren(ir: SchemaIR, parentPath: string): Generator<[string, Sch
       // coverage and any inner fallbacks are reported at the same path.
       yield [parentPath, ir.inner];
       break;
+    case "zodDelegate":
+      // The success path is compiled; only issue materialization delegates.
+      yield [parentPath, ir.inner];
+      break;
   }
 }
 

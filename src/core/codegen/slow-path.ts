@@ -38,6 +38,7 @@ import { slowUndefined } from "./schemas/undefined.js";
 import { slowUnion } from "./schemas/union.js";
 import { slowUnknown } from "./schemas/unknown.js";
 import { slowVoid } from "./schemas/void.js";
+import { slowCompiledZodDelegate } from "./schemas/zod-delegate.js";
 
 // ─── Typed registry ─────────────────────────────────────────────────────────
 // Adding a new SchemaIR type without registering a generator here causes a
@@ -83,6 +84,7 @@ const slowRegistry = {
   effect: slowEffect,
   // Special
   custom: slowCustom,
+  zodDelegate: slowCompiledZodDelegate,
   templateLiteral: slowTemplateLiteral,
   catch: slowCatch,
   fallback: slowFallback,

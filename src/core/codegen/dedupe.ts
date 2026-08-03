@@ -179,6 +179,8 @@ function referencesExportRefs(ir: SchemaIR): boolean {
     case "custom":
       // Both the predicate and pristine error delegate live on the export.
       return true;
+    case "zodDelegate":
+      return true;
     case "effect":
       if (ir.refIndex !== undefined) return true;
       break;
@@ -241,6 +243,7 @@ function childSchemas(ir: SchemaIR): SchemaIR[] {
       return [ir.in, ir.out];
     case "effect":
     case "recursionTarget":
+    case "zodDelegate":
       return [ir.inner];
     default:
       return [];

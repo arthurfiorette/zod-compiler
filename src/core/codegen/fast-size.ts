@@ -147,6 +147,7 @@ function fastChildren(ir: SchemaIR): readonly SchemaIR[] {
     case "readonly":
     case "default":
     case "catch":
+    case "zodDelegate":
       return [ir.inner];
     default:
       return [];

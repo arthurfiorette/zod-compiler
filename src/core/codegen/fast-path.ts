@@ -52,6 +52,7 @@ import { fastUndefined } from "./schemas/undefined.js";
 import { fastUnion } from "./schemas/union.js";
 import { fastUnknown } from "./schemas/unknown.js";
 import { fastVoid } from "./schemas/void.js";
+import { fastZodDelegate } from "./schemas/zod-delegate.js";
 
 // ─── Typed registry ─────────────────────────────────────────────────────────
 // `null` = statically ineligible (the type NEVER has a fast path).
@@ -96,6 +97,7 @@ const fastRegistry = {
   effect: null, // statically ineligible
   // Special
   custom: fastCustom,
+  zodDelegate: fastZodDelegate,
   templateLiteral: fastTemplateLiteral,
   catch: fastCatch,
   fallback: null, // statically ineligible

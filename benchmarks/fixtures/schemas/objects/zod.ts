@@ -14,6 +14,21 @@ export const UserSchema = z.object({
 
 export type User = z.infer<typeof UserSchema>;
 
+// The same request shape composed from independently-owned schema fragments.
+export const UserIntersectionSchema = z.intersection(
+  z.object({
+    username: z.string().min(3).max(20),
+    email: z.email(),
+    password: z.string().min(8),
+  }),
+  z.object({
+    age: z.number().int().positive(),
+    role: z.enum(["user", "admin"]),
+    newsletter: z.boolean(),
+    referral: z.string().optional(),
+  }),
+);
+
 // ─── Large: API Response (nested objects + arrays) ──────────────────────────
 
 const ItemSchema = z.object({

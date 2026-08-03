@@ -169,6 +169,28 @@ export function generateValidator(
   // the compact branch takes.
   const buildFnName = generateBuild(ir, ctx);
 
+  // A zodDelegate with a rebuilding inner exists only to accelerate that
+  // build. If an unmodelled descendant made the all-or-nothing build decline,
+  // preserve the old root-fallback shape instead of wrapping the same pristine
+  // Zod call in an issues array/copy/finalizer. This keeps unsupported object
+  // intersections neutral rather than making compilation slower than Zod.
+  if (ir.type === "zodDelegate" && rebuildsOutput(ir.inner) && buildFnName === null) {
+    ctx.preamble.length = 0;
+    ctx.usedHelpers.clear();
+    ctx.regexCache.clear();
+    ctx.effectFnCache?.clear();
+    ctx.valueCache?.clear();
+    const delegate = emitRfDelegate(ctx, ir.refIndex);
+    return {
+      code: ["/* zod-compiler */", ...ctx.preamble].join("\n"),
+      functionDef: `function ${fnName}(input){return ${delegate}(input);}`,
+      refCount: options?.refCount ?? 0,
+      usedHelpers: ctx.usedHelpers,
+      fastFnName: null,
+      fastTotal: false,
+    };
+  }
+
   // `.is()` for a build-path schema is the fast expression — stripping reshapes
   // the payload, never the verdict. A substituted `.default()` breaks that: the
   // fast check demands a present value where the schema accepts its absence, so
@@ -483,6 +505,7 @@ function childIRs(ir: SchemaIR): readonly SchemaIR[] {
     case "catch":
     case "effect":
     case "recursionTarget":
+    case "zodDelegate":
       return [ir.inner];
     case "pipe":
       return [ir.in, ir.out];

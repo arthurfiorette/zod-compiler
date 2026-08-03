@@ -14,6 +14,20 @@ export const v3UserSchema = z.object({
 
 export type V3User = z.infer<typeof v3UserSchema>;
 
+export const v3UserIntersectionSchema = z.intersection(
+  z.object({
+    username: z.string().min(3).max(20),
+    email: z.string().email(),
+    password: z.string().min(8),
+  }),
+  z.object({
+    age: z.number().int().positive(),
+    role: z.enum(["user", "admin"]),
+    newsletter: z.boolean(),
+    referral: z.string().optional(),
+  }),
+);
+
 // ─── Large: API Response (nested objects + arrays) ──────────────────────────
 
 const ItemSchema = z.object({

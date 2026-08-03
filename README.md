@@ -2,7 +2,8 @@
 
 **Compile Zod schemas into zero-overhead validation functions at build time.**
 
-Keep your existing Zod schemas. Get **2-43x faster** validation. No code changes required.
+Keep your existing Zod schemas. Get **1.2-43x faster** validation, and up to **190x** on rejected
+input. No code changes required.
 
 - [What Gets Compiled](#what-gets-compiled)
 - [Schema Hoisting](#schema-hoisting)
@@ -351,7 +352,7 @@ npx zod-compiler check src/schemas.ts --json --fail-under 80
 
 ## What Gets Compiled
 
-### Fully Compiled (2-43x faster)
+### Fully Compiled (1.2-43x faster)
 
 Every Zod type except the fallbacks below — all primitives, `object` / `strictObject` / `looseObject`,
 `array`, `tuple`, `record`, `set`, `map`, `union`, `discriminatedUnion`, `intersection`, `pipe`,
@@ -366,13 +367,13 @@ All standard checks are supported: `min`, `max`, `length`, `email`, `uuid`, `reg
 
 A schema delegates to Zod when it reaches JavaScript the generated code cannot reproduce:
 
-| Construct                                   | Why                                                                        |
-| ------------------------------------------- | -------------------------------------------------------------------------- |
-| `.check(fn)`, `superRefine` + later checks  | The callback holds Zod's payload unmediated, or `fatal` aborts Zod's chain |
-| `ctx`-taking or `async` callbacks           | Needs Zod's parse context / the async pipeline                             |
-| `z.url()`, `z.jwt()`                        | Algorithmic formats (`new URL()`, signature parsing)                       |
-| Object intersections                        | Zod parses both sides and merges; the compiler cannot reproduce the merge  |
-| Dynamic error maps, unresolvable `z.lazy()` | Not knowable at build time                                                 |
+| Construct                                            | Why                                                                        |
+| ---------------------------------------------------- | -------------------------------------------------------------------------- |
+| `.check(fn)`, `superRefine` + later checks           | The callback holds Zod's payload unmediated, or `fatal` aborts Zod's chain |
+| `ctx`-taking or `async` callbacks                    | Needs Zod's parse context / the async pipeline                             |
+| `z.url()`, `z.jwt()`                                 | Algorithmic formats (`new URL()`, signature parsing)                       |
+| Overlapping or policy-sensitive object intersections | Zod's independent parse-and-merge semantics cannot be safely collapsed     |
+| Dynamic error maps, unresolvable `z.lazy()`          | Not knowable at build time                                                 |
 
 Everything else compiles, including `transform`/`refine`/`superRefine` whether or not the callback
 captures — a zero-capture one is inlined, a capturing one called by reference. Delegation is
@@ -440,8 +441,10 @@ Schema-level `error` and `z.config()` maps are unaffected; for a per-call map us
 | stringbool config object (invalid)              | —      | 129K   | **13.1M**        | —     | —     | **101x**  |
 | custom/instanceof request (valid)               | 894K   | 3.0M   | **8.6M**         | —     | —     | 2.9x      |
 | custom/instanceof request (invalid)             | 755K   | 158K   | **8.5M**         | —     | —     | **54x**   |
+| disjoint object intersection (valid)            | 1.4M   | 1.7M   | **9.7M**         | —     | —     | 5.7x      |
+| disjoint object intersection (invalid)          | 548K   | 80K    | **15.3M**        | —     | —     | **190x**  |
 
-_ops/s, higher is better. `vitest bench` on an Apple M4 Max (zod 4.3.6, zod v3 3.23.8, typia 12, ajv 8),
+_ops/s, higher is better. `vp test bench` on an Apple M4 Max (zod 4.3.6, zod v3 3.23.8, typia 12, ajv 8),
 best of three runs. The harness costs ~55 ns per iteration, so the fastest rows sit at that floor and gaps
 between the AOT columns there are noise, not real._
 
@@ -464,7 +467,12 @@ Regexes are pre-compiled with bounded repeats unrolled, checks run cheapest-firs
 dispatch through a jump table (plain tagged unions are auto-discriminated into it), and oversized check
 functions are split to stay within V8's optimizer budget. Stripping objects, native coercions,
 `stringbool`, defaults, string rewrites and synchronous transforms validate and build their output in
-one pass.
+one pass. An intersection of two objects with disjoint keys compiles to that same single pass over the
+merged shape, and `z.custom()` / `z.instanceof()` compile to a direct predicate call.
+
+Where success is cheaper to compile than failure, only the verdict and output are compiled: intersections
+and `custom` keep the original Zod schema to construct issues, so a rejection still reports exactly what
+Zod would — including an intersection's one-issue-per-side shape — without slowing the hot path.
 
 ## Development
 

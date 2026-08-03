@@ -143,7 +143,7 @@ describe("unknown-key stripping — looseObject / strictObject unaffected", () =
   });
 });
 
-describe("unknown-key stripping — intersection delegates to zod (merge+strip)", () => {
+describe("unknown-key stripping — disjoint object intersection", () => {
   it("intersection of objects strips keys outside both shapes", () => {
     expectParity(
       z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })),

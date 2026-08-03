@@ -6,15 +6,18 @@ import {
   aotApiResponse,
   aotStrictRow,
   aotUser,
+  aotUserIntersection,
   dirtyUser,
   invalidUser,
   StrictRowSchema,
   typiaValidateApiResponse,
   typiaValidateUser,
   UserSchema,
+  UserIntersectionSchema,
   v3ApiResponseSchema,
   v3StrictRowSchema,
   v3UserSchema,
+  v3UserIntersectionSchema,
   validApiResponse10,
   validApiResponse100,
   validStrictRow,
@@ -54,6 +57,30 @@ describe("safeParse: medium object — invalid user", () => {
   });
   bench("ajv", () => {
     ajvUser(invalidUser);
+  });
+});
+
+describe("safeParse: disjoint object intersection — valid user", () => {
+  bench("zod", () => {
+    UserIntersectionSchema.safeParse(validUser);
+  });
+  bench("zod v3", () => {
+    v3UserIntersectionSchema.safeParse(validUser);
+  });
+  bench("zod-compiler", () => {
+    aotUserIntersection.safeParse(validUser);
+  });
+});
+
+describe("safeParse: disjoint object intersection — invalid user", () => {
+  bench("zod", () => {
+    UserIntersectionSchema.safeParse(invalidUser);
+  });
+  bench("zod v3", () => {
+    v3UserIntersectionSchema.safeParse(invalidUser);
+  });
+  bench("zod-compiler", () => {
+    aotUserIntersection.safeParse(invalidUser);
   });
 });
 

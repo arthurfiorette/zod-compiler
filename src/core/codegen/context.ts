@@ -709,6 +709,7 @@ export function hasMutation(ir: SchemaIR): boolean {
     case "nullable":
     case "readonly":
     case "recursionTarget":
+    case "zodDelegate":
       return hasMutation(ir.inner);
     case "union":
     case "discriminatedUnion":
@@ -788,6 +789,7 @@ export function rejectsUndefined(ir: SchemaIR): boolean {
     case "nullable":
     case "readonly":
     case "recursionTarget":
+    case "zodDelegate":
       return rejectsUndefined(ir.inner);
     default:
       // optional / any / unknown / undefined / void / default / catch /

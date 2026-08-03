@@ -487,6 +487,18 @@ export interface CustomIR {
   abort: boolean;
 }
 
+/**
+ * A schema whose hot-path verdict/output can be compiled through `inner`, but
+ * whose cold issue walk delegates to the retained pristine Zod schema. Used
+ * when success semantics are simpler than exact failure semantics.
+ */
+export interface ZodDelegateIR {
+  type: "zodDelegate";
+  inner: SchemaIR;
+  /** __rf[] index of the pristine Zod schema used by the slow error walk. */
+  refIndex: number;
+}
+
 export interface FallbackIR {
   type: "fallback";
   reason: "transform" | "refine" | "superRefine" | "custom" | "lazy" | "unsupported" | "coalesced";
@@ -593,6 +605,7 @@ export type SchemaIR = TypeMessageCarrier &
     | TransformEffectIR
     // Special
     | CustomIR
+    | ZodDelegateIR
     | TemplateLiteralIR
     | CatchIR
     | FallbackIR
