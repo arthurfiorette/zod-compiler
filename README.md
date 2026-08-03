@@ -434,6 +434,8 @@ Schema-level `error` and `z.config()` maps are unaffected; for a per-call map us
 | object with captured transform                  | 1.4M   | 6.3M   | **15.1M**        | —     | —     | 2.4x      |
 | object with captured refine (cross-field)       | 1.6M   | 2.4M   | **15.3M**        | —     | —     | 6.3x      |
 | object with superRefine (cross-field)           | 1.6M   | 2.3M   | **11.6M**        | —     | —     | 5.0x      |
+| coerced query object (valid)                    | 1.9M   | 2.3M   | **5.2M**         | —     | —     | 2.2x      |
+| coerced query object (invalid)                  | 1.1M   | 162K   | **10.1M**        | —     | —     | **62x**   |
 
 _ops/s, higher is better. `vitest bench` on an Apple M4 Max (zod 4.3.6, zod v3 3.23.8, typia 12, ajv 8),
 best of three runs. The harness costs ~55 ns per iteration, so the fastest rows sit at that floor and gaps
@@ -456,7 +458,8 @@ idioms (array size checks, `.refine()`, `.default()`, `.trim()`, `.transform()`)
 
 Regexes are pre-compiled with bounded repeats unrolled, checks run cheapest-first, discriminated unions
 dispatch through a jump table (plain tagged unions are auto-discriminated into it), and oversized check
-functions are split to stay within V8's optimizer budget.
+functions are split to stay within V8's optimizer budget. Stripping objects, native coercions, defaults,
+string rewrites and synchronous transforms validate and build their output in one pass.
 
 ## Development
 

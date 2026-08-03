@@ -141,7 +141,7 @@ describe("Standard Schema — parity with zod's own validate", () => {
       () => z.object({ q: z.string().trim(), n: z.number().default(3) }),
       [{ q: "  x  " }, { q: 5 }],
     ],
-    ["coerce (eager walk)", () => z.object({ n: z.coerce.number() }), [{ n: "5" }, { n: "x" }]],
+    ["coerce (build path)", () => z.object({ n: z.coerce.number() }), [{ n: "5" }, { n: "x" }]],
     [
       "cross-field refine",
       () => z.object({ a: z.number(), b: z.number() }).refine((v) => v.a < v.b, "a<b"),

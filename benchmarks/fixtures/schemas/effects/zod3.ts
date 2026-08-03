@@ -29,6 +29,17 @@ export const v3ZeroCaptureRefineObjectSchema = z.object({
   }),
 });
 
+// ─── Coerced request/query payload ─────────────────────────────────────────
+
+export const v3CoercedQuerySchema = z.object({
+  page: z.coerce.number().int().positive(),
+  pageSize: z.coerce.number().int().min(1).max(100),
+  minPrice: z.coerce.number().nonnegative(),
+  maxPrice: z.coerce.number().positive(),
+  includeArchived: z.coerce.boolean(),
+  since: z.coerce.date(),
+});
+
 // ─── Captured-variable transform (Zod fallback) ────────────────────────────
 
 const prefix = "usr_";

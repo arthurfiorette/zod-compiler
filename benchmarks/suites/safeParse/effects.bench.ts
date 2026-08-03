@@ -4,6 +4,8 @@ import {
   aotCapturedRefineObject,
   aotCapturedTransform,
   aotCapturedTransformObject,
+  aotCoercedQuery,
+  aotSuperRefineObject,
   aotZeroCaptureRefineObject,
   aotZeroCaptureRefineString,
   aotZeroCaptureTransformObject,
@@ -12,31 +14,61 @@ import {
   CapturedRefineSchema,
   CapturedTransformObjectSchema,
   CapturedTransformSchema,
-  aotSuperRefineObject,
+  CoercedQuerySchema,
   SuperRefineObjectSchema,
-  v3SuperRefineObjectSchema,
-  validSuperRefineObject,
-  v3CapturedRefineObjectSchema,
-  v3CapturedRefineSchema,
-  v3CapturedTransformObjectSchema,
-  v3CapturedTransformSchema,
-  v3ZeroCaptureRefineObjectSchema,
-  v3ZeroCaptureRefineStringSchema,
-  v3ZeroCaptureTransformObjectSchema,
-  v3ZeroCaptureTransformStringSchema,
-  validCapturedRefineObject,
-  validCapturedRefineString,
-  validCapturedTransformObject,
-  validCapturedTransformString,
-  validRefineObject,
-  validRefineString,
-  validTransformObject,
-  validTransformString,
   ZeroCaptureRefineObjectSchema,
   ZeroCaptureRefineStringSchema,
   ZeroCaptureTransformObjectSchema,
   ZeroCaptureTransformStringSchema,
+  v3CapturedRefineObjectSchema,
+  v3CapturedRefineSchema,
+  v3CapturedTransformObjectSchema,
+  v3CapturedTransformSchema,
+  v3CoercedQuerySchema,
+  v3SuperRefineObjectSchema,
+  v3ZeroCaptureRefineObjectSchema,
+  v3ZeroCaptureRefineStringSchema,
+  v3ZeroCaptureTransformObjectSchema,
+  v3ZeroCaptureTransformStringSchema,
+  invalidCoercedQuery,
+  validCapturedRefineObject,
+  validCapturedRefineString,
+  validCapturedTransformObject,
+  validCapturedTransformString,
+  validCoercedQuery,
+  validRefineObject,
+  validRefineString,
+  validSuperRefineObject,
+  validTransformObject,
+  validTransformString,
 } from "../../fixtures/schemas/index.js";
+
+// ─── Native coercions (single-pass build path) ─────────────────────────────
+// ajv/typia excluded: coercion is a Zod-specific feature.
+
+describe("safeParse: coerced query object — valid", () => {
+  bench("zod", () => {
+    CoercedQuerySchema.safeParse(validCoercedQuery);
+  });
+  bench("zod v3", () => {
+    v3CoercedQuerySchema.safeParse(validCoercedQuery);
+  });
+  bench("zod-compiler", () => {
+    aotCoercedQuery.safeParse(validCoercedQuery);
+  });
+});
+
+describe("safeParse: coerced query object — invalid", () => {
+  bench("zod", () => {
+    CoercedQuerySchema.safeParse(invalidCoercedQuery);
+  });
+  bench("zod v3", () => {
+    v3CoercedQuerySchema.safeParse(invalidCoercedQuery);
+  });
+  bench("zod-compiler", () => {
+    aotCoercedQuery.safeParse(invalidCoercedQuery);
+  });
+});
 
 // ─── Zero-capture transforms (fully optimized at build time) ────────────────
 // ajv/typia excluded: transform() is a Zod-specific feature.

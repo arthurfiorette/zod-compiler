@@ -32,9 +32,9 @@ export interface CodeGenResult {
    * schema accepts `input` (mutation-free schemas, where a fast-check failure
    * can never become a slow-path success). generateIIFE installs it as the
    * zero-allocation `.is()` guard. False for partial fast paths
-   * (default/catch/coerce — `fc` only shortcuts present-and-valid input, so a
-   * `false` result does NOT imply rejection) and for schemas with no fast path;
-   * `.is()` then derives from `safeParse(input).success`.
+   * (default/catch — `fc` only shortcuts present-and-valid input, so a `false`
+   * result does NOT imply rejection) and for schemas with no fast path, such as
+   * coercion; `.is()` then derives from `safeParse(input).success`.
    */
   fastTotal: boolean;
   /**

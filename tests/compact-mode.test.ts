@@ -185,10 +185,8 @@ describe("compact mode — codegen shape", () => {
     expect(source).not.toContain("_e.push");
   });
 
-  it.each([
-    ["catch", z.number().catch(0)],
-    ["coerce", z.coerce.number()],
-  ])("a %s schema keeps the compiled path (no delegation)", (_label, schema) => {
+  it("a catch schema keeps the compiled path (no delegation)", () => {
+    const schema = z.number().catch(0);
     const { result, source } = compactCodegen(schema);
     expect(result.rootDelegateRefIndex).toBeUndefined();
     expect(source).not.toContain("__zcFinZ(");
@@ -196,6 +194,7 @@ describe("compact mode — codegen shape", () => {
 
   it.each([
     ["default", z.object({ n: z.number().default(1) }), 1],
+    ["coerce", z.coerce.number(), 0],
     ["transform", z.string().transform((s) => s), 0],
     ["overwrite", z.object({ q: z.string().trim() }), 0],
   ])(
@@ -341,7 +340,7 @@ describe("compact mode — runtime behavior", () => {
 // ─── 5. Interactions: mixed files and stripUnknownKeys ───────────────────────
 
 describe("compact mode — interactions", () => {
-  it("delegates eligible schemas and keeps the compiled path for mutation schemas in one file", () => {
+  it("delegates eligible schemas and keeps each build pass in one file", () => {
     const { schemas: results } = compileSchemas(
       [
         { exportName: "Pure", schema: z.object({ name: z.string().min(1) }) },
@@ -357,10 +356,12 @@ describe("compact mode — interactions", () => {
     expect(pure.refEntries).toHaveLength(1);
     expect(pure.codegenResult.functionDef).toContain("__zcFinZ");
 
-    // Mutation validator (coerce rewrites the value, which the build pass does
-    // not model) → compiled path, no compact delegation.
-    expect(withCoerce.codegenResult.rootDelegateRefIndex).toBeUndefined();
-    expect(withCoerce.codegenResult.functionDef).not.toContain("__zcFinZ");
+    // Coercion is modelled by the build pass: keep that hot path, append a root
+    // ref, and delegate only the cold issue walk.
+    expect(withCoerce.codegenResult.rootDelegateRefIndex).toBe(0);
+    expect(withCoerce.refEntries).toHaveLength(1);
+    expect(withCoerce.codegenResult.functionDef).toContain("__zcFinZ");
+    expect(withCoerce.codegenResult.functionDef).toMatch(/=__vb_\d+\(input\);/);
   });
 
   it("delegates a stripping object's cold path while keeping its build pass", () => {

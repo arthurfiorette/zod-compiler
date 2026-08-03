@@ -110,8 +110,10 @@ export interface ZodCompilerPluginOptions {
    *   validation engine). The hot path — `parse`/`safeParse` of valid input and
    *   `.is()` — is unchanged; only error *reporting* on invalid input runs Zod
    *   (deferred until `.error` is read, so `.success`/`.is()` checks stay fast).
-   *   Schemas that mutate (`default`/`catch`/`coerce`/`transform`) keep the
-   *   compiled path. Best for large schema sets where bundle size dominates.
+   *   Modelled rewrites (`default`/`coerce`/`transform`/string overwrites) keep
+   *   their compiled build pass and delegate only issue production; unmodelled
+   *   mutations such as `catch`, URL normalization and `superRefine` keep the
+   *   fully compiled path. Best for large schema sets where bundle size dominates.
    * @default "schema"
    */
   output?: "schema" | "bag" | "compact" | undefined;

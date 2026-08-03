@@ -58,6 +58,11 @@ describe("build path — everyday constructs stay on the single-pass generator",
     ["overwrite then check", z.object({ q: z.string().trim().min(1) })],
     ["check then overwrite", z.object({ q: z.string().min(1).trim() })],
     ["overwrite inside an array", z.object({ t: z.array(z.string().trim()) })],
+    ["coerced string", z.object({ q: z.coerce.string().min(1) })],
+    ["coerced number", z.object({ n: z.coerce.number().int().positive() })],
+    ["coerced boolean", z.object({ b: z.coerce.boolean() })],
+    ["coerced bigint", z.object({ n: z.coerce.bigint().positive() })],
+    ["coerced date", z.object({ d: z.coerce.date().min(new Date(0)) })],
     ["sync transform", z.object({ a: z.string().transform((s) => s.length) })],
     [
       "transform over a rebuilding object",
@@ -76,8 +81,6 @@ describe("build path — everyday constructs stay on the single-pass generator",
   });
 
   it.each([
-    // Rewrites the value with no predicate the pass can express.
-    ["coerce", z.object({ n: z.coerce.number() })],
     // catchValue receives a ctx holding the inner schema's collected issues, and
     // this pass produces a sentinel rather than an issue list.
     ["catch", z.object({ n: z.number().catch(0) })],
@@ -258,6 +261,44 @@ describe("build path — zod parity for the newly covered constructs", () => {
       }),
       [{}, { a: 5 }, { a: "x" }],
       "t5",
+    );
+  });
+
+  it("native coercions, checks, and throwing conversions", () => {
+    expectParity(
+      z.object({ q: z.coerce.string().min(2) }),
+      [{ q: 12 }, { q: "x" }, { q: Symbol("s") }],
+      "cstr",
+    );
+    expectParity(
+      z.object({ q: z.coerce.string().trim().min(2) }),
+      [{ q: 12 }, { q: " x " }, { q: "  " }],
+      "cstrtrim",
+    );
+    expectParity(
+      z.object({ n: z.coerce.number().int().positive() }),
+      [{ n: "12" }, { n: "1.5" }, { n: "x" }, { n: Symbol("s") }],
+      "cnum",
+    );
+    expectParity(
+      z.object({ n: z.coerce.number().refine((n) => n % 2 === 0, "even") }),
+      [{ n: "12" }, { n: "11" }, { n: "x" }],
+      "cnumref",
+    );
+    expectParity(
+      z.object({ b: z.coerce.boolean() }),
+      [{ b: "" }, { b: "false" }, { b: 0 }, { b: 1 }],
+      "cbool",
+    );
+    expectParity(
+      z.object({ n: z.coerce.bigint().positive() }),
+      [{ n: "12" }, { n: 3 }, { n: "x" }, { n: 1.5 }],
+      "cbig",
+    );
+    expectParity(
+      z.object({ d: z.coerce.date().min(new Date(0)) }),
+      [{ d: "2024-01-01" }, { d: 0 }, { d: -1 }, { d: "nope" }, { d: Symbol("s") }],
+      "cdate",
     );
   });
 });

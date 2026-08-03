@@ -222,16 +222,14 @@ describe("schema dedupe", () => {
     expect(passShared.code).toContain("__zcSw_0");
   });
 
-  it("shares into a mutation-bearing root, whose walk runs eagerly", () => {
+  it("shares into a mutation-bearing root's deferred error walk", () => {
     const Shape = z.strictObject({ a: z.string(), b: z.string(), c: z.string() });
     const { schemas } = compileSchemas(
       [
         { exportName: "R1", schema: z.strictObject({ x: Shape, y: Shape }) },
         { exportName: "R2", schema: z.strictObject({ z: Shape }) },
-        // Mutation root (coerce): its walk is EAGER, so the shared call runs on
-        // every parse rather than only when `.error` is read. That is sound now
-        // that the shared walk returns its value, and measured free — the call
-        // disappears against the walk it replaces.
+        // Mutation root (coerce): the build pass handles valid input; its cold
+        // error walk may still share the repeated strict shape.
         { exportName: "M", schema: z.strictObject({ w: Shape, n: z.coerce.number() }) },
       ],
       { mode: "inline" },
@@ -267,11 +265,12 @@ describe("schema dedupe", () => {
   it("a shared stripping walk delivers its rebuild to the call site", () => {
     // The write-back crux. A shared walk that returned nothing would leave the
     // caller holding the UNSTRIPPED input, so every one of these would carry the
-    // `junk` key through. The eager root matters most: its walk output IS the
-    // parse result, where the deferred roots only ever surface issues.
+    // `junk` key through. The eager, unmodelled-mutation root matters most: its
+    // walk output IS the parse result, where the build-path root only uses the
+    // walk for errors.
     const Address = z.object({ street: z.string().min(1), city: z.string() });
     const Deferred = z.object({ home: Address, work: Address });
-    const Eager = z.object({ n: z.coerce.number(), home: Address });
+    const Eager = z.object({ q: z.string().trim().url(), home: Address });
     const { schemas, shared } = compileSchemas(
       [
         { exportName: "Deferred", schema: Deferred },
@@ -297,9 +296,9 @@ describe("schema dedupe", () => {
     expect(bad.error?.issues.map((i) => i.path.join("."))).toStrictEqual(["home.street"]);
 
     // Eager root: the shared walk's RETURN VALUE is what lands in `data`.
-    expect(eager({ n: "5", home: dirty })).toStrictEqual({
+    expect(eager({ q: "  https://example.com  ", home: dirty })).toStrictEqual({
       success: true,
-      data: { n: 5, home: { street: "s", city: "c" } },
+      data: { q: "https://example.com", home: { street: "s", city: "c" } },
     });
   });
 

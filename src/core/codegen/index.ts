@@ -163,10 +163,10 @@ export function generateValidator(
     fastExpr = `${fastFnName}(input)`;
   }
 
-  // Build Path: one pass that validates and assembles the stripped output,
-  // bailing on the first failure (see build-path). Null unless the schema
-  // rebuilds AND its only mutation is stripping AND the shape is modelled — so
-  // this emits nothing for the mutation-free schemas the compact branch takes.
+  // Build Path: one pass that validates and assembles rewritten output, bailing
+  // on the first failure (see build-path). Null unless every mutation in the
+  // schema is modelled — so this emits nothing for the mutation-free schemas
+  // the compact branch takes.
   const buildFnName = generateBuild(ir, ctx);
 
   // `.is()` for a build-path schema is the fast expression — stripping reshapes
@@ -215,10 +215,11 @@ export function generateValidator(
     };
   }
 
-  // Compact + Build Path: same bargain for a stripping schema. The build pass
-  // still has to run (it produces the payload, which zod's schema would only
-  // reproduce by parsing again), but the compiled issue walk is what compact
-  // drops, and delegating that to the retained zod schema costs a few bytes.
+  // Compact + Build Path: same bargain for a schema with modelled rewrites. The
+  // build pass still has to run (it produces the payload, which zod's schema
+  // would only reproduce by parsing again), but the compiled issue walk is what
+  // compact drops, and delegating that to the retained zod schema costs a few
+  // bytes.
   if (
     options?.compact === true &&
     buildFnName !== null &&
@@ -275,9 +276,9 @@ export function generateValidator(
 
   const functionDefParts = [`function ${fnName}(input){`];
 
-  // Build Path: the schema's only mutation is stripping, so one pass can
-  // validate and assemble the output together and bail on the first failure,
-  // leaving the issue-producing walk deferred behind `.error` (see build-path).
+  // Build Path: every mutation is modelled, so one pass can validate and
+  // assemble the output together and bail on the first failure, leaving the
+  // issue-producing walk deferred behind `.error` (see build-path).
   // The fast check stays out of `safeParse` entirely — running it first would
   // read every property twice — but it is still an EXACT acceptance predicate
   // (stripping reshapes the output, never the verdict), so `.is()` installs it.
@@ -339,8 +340,8 @@ export function generateValidator(
   if (fastExpr !== null && !hasMutation(ir)) {
     // Mutation-free schemas with a fast path: a fast-check failure can never
     // become a slow-path success (both are generated from the same checks —
-    // unlike default/catch/coerce schemas, whose partial fast path requires
-    // value presence while the slow path SUCCEEDS by applying the default).
+    // unlike default/catch schemas, whose partial fast path requires value
+    // presence while the slow path SUCCEEDS by applying the fallback).
     // The slow path's only output is therefore the issues array, observable
     // solely through `.error` — defer the whole re-walk into the cached
     // accessor (__zcFinD): a failed safeParse whose `.error` is never read
@@ -426,8 +427,9 @@ export function generateValidator(
     refCount: options?.refCount ?? 0,
     usedHelpers: ctx.usedHelpers,
     fastFnName,
-    // Partial fast path (default/catch/coerce) or none: a false fc result does
-    // not imply rejection, so `.is()` derives from safeParse(input).success.
+    // Partial fast path (default/catch) or none (including coercion): a false fc
+    // result does not imply rejection, so `.is()` derives from
+    // safeParse(input).success.
     fastTotal: false,
   };
 }

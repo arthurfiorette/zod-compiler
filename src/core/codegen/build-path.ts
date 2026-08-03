@@ -1,5 +1,5 @@
 /**
- * Build Path: one uninstrumented pass that VALIDATES and BUILDS the stripped
+ * Build Path: one uninstrumented pass that VALIDATES and BUILDS rewritten
  * output together, abandoning the whole parse at the first failing check.
  *
  * `z.object()` strips unknown keys, so a successful parse cannot return the
@@ -30,10 +30,10 @@
  * whole schema its single-pass parse. Modelled, beyond the stripping containers
  * this started with: array size checks and `.refine()`, object-level `.refine()`,
  * `.default()` substitution, ordered string rewrites (`.trim()`,
- * `.toLowerCase()`), and sync `.transform()`. Still declined, via
- * {@link mutatesBeyondStrip} — coerce, `.catch()` (its callback wants the inner
- * schema's issue list, which this pass never builds), `z.url()`, and
- * `superRefine`.
+ * `.toLowerCase()`), sync `.transform()`, and the five native coercions
+ * (`string`, `number`, `boolean`, `bigint`, `date`). Still declined, via
+ * {@link mutatesBeyondStrip} — `.catch()` (its callback wants the inner schema's
+ * issue list, which this pass never builds), `z.url()`, and `superRefine`.
  */
 
 import type { ObjectIR, RefineEffectCheckIR, SchemaIR } from "../types.js";
@@ -80,9 +80,10 @@ interface BuildGen {
 }
 
 /**
- * Which nodes of `root` produce a value that is not their input — i.e. are, or
- * contain, a stripping object. Everything else can be validated in place and
- * passed through, which is what keeps this generator small.
+ * Which nodes of `root` produce a value that is not their input — a stripping
+ * object, coercion, default, overwrite or transform, including containers that
+ * contain one. Everything else can be validated in place and passed through,
+ * which is what keeps this generator small.
  *
  * Computed as a fixpoint rather than a plain walk because of recursion: a
  * `recursiveRef` is a back-edge with no children, so a local walk reads false
@@ -120,7 +121,13 @@ function rebuildSet(root: SchemaIR): ReadonlySet<SchemaIR> {
         // An overwrite effect (`.trim()`, `.toLowerCase()`) rewrites the string,
         // so the node's output is a new value: it has to be BUILT rather than
         // validated in place (see buildString).
-        (node.type === "string" && node.checks.some((c) => c.kind === "overwrite_effect")) ||
+        (node.type === "string" &&
+          (node.coerce === true || node.checks.some((c) => c.kind === "overwrite_effect"))) ||
+        ((node.type === "number" ||
+          node.type === "boolean" ||
+          node.type === "bigint" ||
+          node.type === "date") &&
+          node.coerce === true) ||
         // `.transform(fn)` replaces the value with the callback's result.
         node.type === "effect" ||
         (target !== undefined && rebuilds.has(target)) ||
@@ -141,9 +148,10 @@ export function rebuildsOutput(ir: SchemaIR): boolean {
 
 /**
  * True when the subtree mutates for any reason the build pass cannot reproduce —
- * coerce, `.catch()`, `z.url()`, `superRefine`. Those rewrite values in ways this
- * pass (which validates, substitutes declared defaults, applies ordered string
- * rewrites and copies) does not model, so the schema keeps the eager walk.
+ * `.catch()`, `z.url()`, `superRefine`. Those rewrite values in ways this pass
+ * (which validates, coerces, substitutes declared defaults, applies ordered
+ * string rewrites and copies) does not model, so the schema keeps the eager
+ * walk.
  */
 function mutatesBeyondStrip(ir: SchemaIR): boolean {
   return mutatesHere(ir) || children(ir).some(mutatesBeyondStrip);
@@ -157,19 +165,19 @@ function mutatesBeyondStrip(ir: SchemaIR): boolean {
 function mutatesHere(ir: SchemaIR): boolean {
   switch (ir.type) {
     case "string":
-      // Overwrite effects are absent: `buildString` applies them in order. A
-      // `z.url()` check still is not — it trims, normalizes and needs try/catch.
+      // Coercion and overwrite effects are absent: `buildString` applies them
+      // in order. A `z.url()` check still is not — it trims, normalizes and
+      // needs its own normalization/error semantics.
       return (
-        ir.coerce === true ||
         superRefines(ir.checks) ||
         ir.checks.some((c) => c.kind === "string_format" && c.format === "url")
       );
     case "number":
-      return ir.coerce === true || superRefines(ir.checks);
+      return superRefines(ir.checks);
     case "boolean":
     case "bigint":
     case "date":
-      return ir.coerce === true;
+      return false;
     // `default` and `effect` are absent: substituting a constant for `undefined`
     // and applying a sync transform are both modelled (see buildDefault /
     // buildEffect), and their inners are reached through `children`.
@@ -336,6 +344,11 @@ function buildInline(ir: SchemaIR, input: string, g: BuildGen): Built | null {
       return buildDefault(ir, input, g);
     case "string":
       return buildString(ir, input, g);
+    case "number":
+    case "boolean":
+    case "bigint":
+    case "date":
+      return buildCoercedPrimitive(ir, input, g);
     case "effect":
       return buildEffect(ir, input, g);
     case "readonly":
@@ -621,20 +634,23 @@ function buildEffect(ir: SchemaIR & { type: "effect" }, input: string, g: BuildG
 }
 
 /**
- * A string carrying an overwrite effect (`.trim()`, `.toLowerCase()`, ...): the
- * checks are emitted one statement at a time in DECLARATION order, interleaved
- * with the rewrites, because a rewrite is visible to every check after it —
- * `z.string().trim().min(1)` rejects `"  "` where `z.string().min(1).trim()`
- * accepts it. That ordering is exactly why the fast path, which sorts checks
- * cheapest-first and returns the input unchanged, has to decline these.
+ * A coercing and/or overwrite string (`z.coerce.string()`, `.trim()`,
+ * `.toLowerCase()`, ...): coerce first, then emit checks one statement at a time
+ * in DECLARATION order, interleaved with rewrites, because a rewrite is visible
+ * to every check after it — `z.string().trim().min(1)` rejects `"  "` where
+ * `z.string().min(1).trim()` accepts it. That ordering is exactly why the fast
+ * path, which sorts checks cheapest-first and returns the input unchanged, has
+ * to decline these.
  *
- * Only reached for a rewriting string; a check-only one never enters the rebuild
- * set and is validated in place by `passthrough`.
+ * Only reached for a rewriting string; a non-coercing, check-only one never
+ * enters the rebuild set and is validated in place by `passthrough`.
  */
 function buildString(ir: SchemaIR & { type: "string" }, input: string, g: BuildGen): Built | null {
-  if (ir.coerce === true) return null;
   const value = local(g, "bs");
-  let code = `if(typeof ${input}!=="string")return ${g.fail};${value}=${input};`;
+  let code =
+    ir.coerce === true
+      ? `try{${value}=String(${input});}catch(_){return ${g.fail};}`
+      : `if(typeof ${input}!=="string")return ${g.fail};${value}=${input};`;
   for (const check of ir.checks) {
     switch (check.kind) {
       case "overwrite_effect":
@@ -654,6 +670,55 @@ function buildString(ir: SchemaIR & { type: "string" }, input: string, g: BuildG
     }
   }
   return { code, value };
+}
+
+/** Primitive nodes whose `coerce` flag rewrites their output before checks run. */
+type CoercedPrimitiveIR = Extract<SchemaIR, { type: "number" | "boolean" | "bigint" | "date" }>;
+
+/**
+ * Coerce once into a local, then reuse the ordinary Fast Path as the acceptance
+ * predicate over the converted value. The build path only needs a verdict on
+ * its hot pass; if it fails, the existing deferred slow walk reruns the original
+ * coercing schema and produces Zod-identical issues.
+ *
+ * Number/BigInt/Date conversion can invoke user hooks and throw. Zod catches
+ * those throws and reports invalid_type, so the sentinel branch does the same
+ * without allocating an issue. Boolean never invokes conversion hooks.
+ */
+function buildCoercedPrimitive(ir: CoercedPrimitiveIR, input: string, g: BuildGen): Built | null {
+  if (ir.coerce !== true) return null;
+  const value = local(g, "bc");
+  let conversion: string;
+  switch (ir.type) {
+    case "number":
+      conversion = `Number(${input})`;
+      break;
+    case "boolean":
+      conversion = `Boolean(${input})`;
+      break;
+    case "bigint":
+      conversion = `BigInt(${input})`;
+      break;
+    case "date":
+      conversion = `new Date(${input})`;
+      break;
+  }
+
+  // A fresh shallow node is intentional: only the coerce flag changes. The
+  // existing primitive generator remains the single source of truth for every
+  // range, format, refine and finite/valid-date check.
+  const predicate = generateFast(
+    { ...ir, coerce: false },
+    createFastGen(value, g.ctx, true, g.scope),
+  );
+  if (predicate === null) return null;
+
+  const assign = `${value}=${conversion};`;
+  const code = ir.type === "boolean" ? assign : `try{${assign}}catch(_){return ${g.fail};}`;
+  return {
+    code: code + (predicate === "true" ? "" : `if(!(${predicate}))return ${g.fail};`),
+    value,
+  };
 }
 
 /**

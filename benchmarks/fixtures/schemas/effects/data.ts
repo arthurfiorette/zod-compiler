@@ -39,3 +39,17 @@ export const validSuperRefineObject = {
   name: "Alice",
   password: "securepass123",
 };
+
+export const validCoercedQuery = {
+  page: "2",
+  pageSize: "25",
+  minPrice: "10.5",
+  maxPrice: "250",
+  includeArchived: "1",
+  since: "2026-01-01T00:00:00Z",
+};
+
+export const invalidCoercedQuery = {
+  ...validCoercedQuery,
+  page: "not-a-number",
+};
