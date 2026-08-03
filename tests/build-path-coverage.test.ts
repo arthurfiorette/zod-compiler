@@ -63,6 +63,8 @@ describe("build path — everyday constructs stay on the single-pass generator",
     ["coerced boolean", z.object({ b: z.coerce.boolean() })],
     ["coerced bigint", z.object({ n: z.coerce.bigint().positive() })],
     ["coerced date", z.object({ d: z.coerce.date().min(new Date(0)) })],
+    ["stringbool", z.object({ enabled: z.stringbool() })],
+    ["stringbool inside an array", z.object({ flags: z.array(z.stringbool()) })],
     ["sync transform", z.object({ a: z.string().transform((s) => s.length) })],
     [
       "transform over a rebuilding object",
@@ -299,6 +301,25 @@ describe("build path — zod parity for the newly covered constructs", () => {
       z.object({ d: z.coerce.date().min(new Date(0)) }),
       [{ d: "2024-01-01" }, { d: 0 }, { d: -1 }, { d: "nope" }, { d: Symbol("s") }],
       "cdate",
+    );
+  });
+
+  it("stringbool conversion, casing, custom values, and invalid inputs", () => {
+    expectParity(
+      z.object({ enabled: z.stringbool(), strict: z.stringbool({ case: "sensitive" }) }),
+      [
+        { enabled: "YES", strict: "true" },
+        { enabled: "off", strict: "false" },
+        { enabled: "maybe", strict: "true" },
+        { enabled: "yes", strict: "TRUE" },
+        { enabled: true, strict: "false" },
+      ],
+      "stringbool",
+    );
+    expectParity(
+      z.array(z.stringbool({ truthy: ["1", "yes"], falsy: ["0", "no"] })),
+      [["1", "no", "YES"], ["true"], [1]],
+      "stringboolCustom",
     );
   });
 });

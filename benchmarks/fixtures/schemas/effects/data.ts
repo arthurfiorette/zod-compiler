@@ -53,3 +53,23 @@ export const invalidCoercedQuery = {
   ...validCoercedQuery,
   page: "not-a-number",
 };
+
+export const validStringBoolConfig = {
+  analytics: "YES",
+  cache: "no",
+  compression: "enabled",
+  debug: "0",
+  experimental: "TRUE",
+  gracefulShutdown: "off",
+  metrics: "y",
+  profiling: "disabled",
+  rateLimit: "1",
+  tracing: "FALSE",
+  useTls: "on",
+  verbose: "n",
+};
+
+export const invalidStringBoolConfig = {
+  ...validStringBoolConfig,
+  analytics: "maybe",
+};

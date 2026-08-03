@@ -5,6 +5,7 @@ import {
   aotCapturedTransform,
   aotCapturedTransformObject,
   aotCoercedQuery,
+  aotStringBoolConfig,
   aotSuperRefineObject,
   aotZeroCaptureRefineObject,
   aotZeroCaptureRefineString,
@@ -15,6 +16,7 @@ import {
   CapturedTransformObjectSchema,
   CapturedTransformSchema,
   CoercedQuerySchema,
+  StringBoolConfigSchema,
   SuperRefineObjectSchema,
   ZeroCaptureRefineObjectSchema,
   ZeroCaptureRefineStringSchema,
@@ -31,11 +33,13 @@ import {
   v3ZeroCaptureTransformObjectSchema,
   v3ZeroCaptureTransformStringSchema,
   invalidCoercedQuery,
+  invalidStringBoolConfig,
   validCapturedRefineObject,
   validCapturedRefineString,
   validCapturedTransformObject,
   validCapturedTransformString,
   validCoercedQuery,
+  validStringBoolConfig,
   validRefineObject,
   validRefineString,
   validSuperRefineObject,
@@ -67,6 +71,27 @@ describe("safeParse: coerced query object — invalid", () => {
   });
   bench("zod-compiler", () => {
     aotCoercedQuery.safeParse(invalidCoercedQuery);
+  });
+});
+
+// ─── Environment/query boolean flags (single-pass build path) ─────────────
+// Zod v3 / ajv / typia excluded: stringbool is a Zod v4 codec.
+
+describe("safeParse: stringbool config object — valid", () => {
+  bench("zod", () => {
+    StringBoolConfigSchema.safeParse(validStringBoolConfig);
+  });
+  bench("zod-compiler", () => {
+    aotStringBoolConfig.safeParse(validStringBoolConfig);
+  });
+});
+
+describe("safeParse: stringbool config object — invalid", () => {
+  bench("zod", () => {
+    StringBoolConfigSchema.safeParse(invalidStringBoolConfig);
+  });
+  bench("zod-compiler", () => {
+    aotStringBoolConfig.safeParse(invalidStringBoolConfig);
   });
 });
 

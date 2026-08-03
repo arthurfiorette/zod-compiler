@@ -30,13 +30,13 @@
  * whole schema its single-pass parse. Modelled, beyond the stripping containers
  * this started with: array size checks and `.refine()`, object-level `.refine()`,
  * `.default()` substitution, ordered string rewrites (`.trim()`,
- * `.toLowerCase()`), sync `.transform()`, and the five native coercions
- * (`string`, `number`, `boolean`, `bigint`, `date`). Still declined, via
+ * `.toLowerCase()`), sync `.transform()`, `z.stringbool()`, and the five native
+ * coercions (`string`, `number`, `boolean`, `bigint`, `date`). Still declined, via
  * {@link mutatesBeyondStrip} — `.catch()` (its callback wants the inner schema's
  * issue list, which this pass never builds), `z.url()`, and `superRefine`.
  */
 
-import type { ObjectIR, RefineEffectCheckIR, SchemaIR } from "../types.js";
+import type { ObjectIR, RefineEffectCheckIR, SchemaIR, StringBoolIR } from "../types.js";
 import type { CodeGenContext, FastScope } from "./context.js";
 import {
   declareFastTemps,
@@ -55,6 +55,7 @@ import { ZC_HOP_DECL } from "./issue-decls.js";
 import { defaultValueExpr, needsPostInnerDefault } from "./schemas/default.js";
 import { innerAppliesDefaultOnUndefined } from "./schemas/optional.js";
 import { fastStringCheck } from "./schemas/string.js";
+import { emitStringBoolMap, stringBoolUsesInline } from "./schemas/string-bool.js";
 
 /** Statements that leave the built value in `value`, or `return <FAIL>` on failure. */
 interface Built {
@@ -81,9 +82,9 @@ interface BuildGen {
 
 /**
  * Which nodes of `root` produce a value that is not their input — a stripping
- * object, coercion, default, overwrite or transform, including containers that
- * contain one. Everything else can be validated in place and passed through,
- * which is what keeps this generator small.
+ * object, coercion, codec, default, overwrite or transform, including
+ * containers that contain one. Everything else can be validated in place and
+ * passed through, which is what keeps this generator small.
  *
  * Computed as a fixpoint rather than a plain walk because of recursion: a
  * `recursiveRef` is a back-edge with no children, so a local walk reads false
@@ -118,6 +119,8 @@ function rebuildSet(root: SchemaIR): ReadonlySet<SchemaIR> {
         // never be handed to `passthrough`, whose fast check would reject the
         // absent value outright.
         node.type === "default" ||
+        // `z.stringbool()` replaces its accepted string with a boolean.
+        node.type === "stringBool" ||
         // An overwrite effect (`.trim()`, `.toLowerCase()`) rewrites the string,
         // so the node's output is a new value: it has to be BUILT rather than
         // validated in place (see buildString).
@@ -149,9 +152,9 @@ export function rebuildsOutput(ir: SchemaIR): boolean {
 /**
  * True when the subtree mutates for any reason the build pass cannot reproduce —
  * `.catch()`, `z.url()`, `superRefine`. Those rewrite values in ways this pass
- * (which validates, coerces, substitutes declared defaults, applies ordered
- * string rewrites and copies) does not model, so the schema keeps the eager
- * walk.
+ * (which validates, coerces, decodes string booleans, substitutes declared
+ * defaults, applies ordered string rewrites and copies) does not model, so the
+ * schema keeps the eager walk.
  */
 function mutatesBeyondStrip(ir: SchemaIR): boolean {
   return mutatesHere(ir) || children(ir).some(mutatesBeyondStrip);
@@ -187,7 +190,6 @@ function mutatesHere(ir: SchemaIR): boolean {
     // issue list — there is nothing to hand it.
     case "catch":
     case "fallback":
-    case "stringBool":
       return true;
     case "object":
     case "array":
@@ -344,6 +346,8 @@ function buildInline(ir: SchemaIR, input: string, g: BuildGen): Built | null {
       return buildDefault(ir, input, g);
     case "string":
       return buildString(ir, input, g);
+    case "stringBool":
+      return buildStringBool(ir, input, g);
     case "number":
     case "boolean":
     case "bigint":
@@ -670,6 +674,35 @@ function buildString(ir: SchemaIR & { type: "string" }, input: string, g: BuildG
     }
   }
   return { code, value };
+}
+
+/**
+ * `z.stringbool()`: normalize once, select the declared truthy/falsy side, and
+ * return the boolean directly. The ordinary Fast Path cannot host this codec
+ * because its contract returns the original input by reference; the build path
+ * is designed for exactly this kind of small output rewrite.
+ */
+function buildStringBool(ir: StringBoolIR, input: string, g: BuildGen): Built {
+  let code = `if(typeof ${input}!=="string")return ${g.fail};`;
+  let normalized = input;
+  if (!ir.caseSensitive) {
+    normalized = local(g, "bn");
+    code += `${normalized}=${input}.toLowerCase();`;
+  }
+
+  const out = local(g, "bb");
+  if (stringBoolUsesInline(ir)) {
+    const membership = (values: readonly string[]): string =>
+      values.map((value) => `${normalized}===${escapeString(value)}`).join("||");
+    code +=
+      `if(${membership(ir.truthy)}){${out}=true;}` +
+      `else if(${membership(ir.falsy)}){${out}=false;}` +
+      `else{return ${g.fail};}`;
+  } else {
+    const lookup = emitStringBoolMap(ir, g.ctx);
+    code += `${out}=${lookup}.get(${normalized});if(${out}===undefined)return ${g.fail};`;
+  }
+  return { code, value: out };
 }
 
 /** Primitive nodes whose `coerce` flag rewrites their output before checks run. */

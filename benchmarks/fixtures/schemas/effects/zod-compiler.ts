@@ -8,6 +8,7 @@ import {
   CapturedTransformObjectSchema,
   CapturedTransformSchema,
   CoercedQuerySchema,
+  StringBoolConfigSchema,
   SuperRefineObjectSchema,
   ZeroCaptureRefineObjectSchema,
   ZeroCaptureRefineStringSchema,
@@ -25,3 +26,4 @@ export const aotCapturedRefine = compile(CapturedRefineSchema.clone());
 export const aotCapturedRefineObject = compile(CapturedRefineObjectSchema.clone());
 export const aotSuperRefineObject = compile(SuperRefineObjectSchema.clone());
 export const aotCoercedQuery = compile(CoercedQuerySchema.clone());
+export const aotStringBoolConfig = compile(StringBoolConfigSchema.clone());

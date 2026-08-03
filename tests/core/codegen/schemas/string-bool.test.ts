@@ -100,12 +100,12 @@ describe("slow-path — stringBool", () => {
     expect(safeParse("2").success).toBe(false);
   });
 
-  it("generates Set-based lookup for large value sets", () => {
+  it("generates Map-based lookup for large value sets", () => {
     const result = generateValidator(DEFAULT_IR, "sbTest");
-    expect(result.code).toContain("Set");
+    expect(result.code).toContain("Map");
   });
 
-  it("Set-based path validates correctly at runtime", () => {
+  it("Map-based path validates correctly at runtime", () => {
     const safeParse = compileIR(DEFAULT_IR);
     for (const v of DEFAULT_IR.truthy) {
       expect(safeParse(v)).toEqual({ success: true, data: true });
@@ -142,8 +142,8 @@ describe("slow-path — stringBool", () => {
     expect(safeParse("maybe").success).toBe(false);
   });
 
-  it("generates Set for large per-side value sets", () => {
-    // truthy has 6 values (> ENUM_INLINE_THRESHOLD=5) → uses Set
+  it("generates one Map for large per-side value sets", () => {
+    // truthy has 6 values (> ENUM_INLINE_THRESHOLD=5) → uses one boolean Map
     const ir: StringBoolIR = {
       type: "stringBool",
       truthy: ["true", "1", "yes", "on", "y", "enabled"],
@@ -151,11 +151,12 @@ describe("slow-path — stringBool", () => {
       caseSensitive: false,
     };
     const result = generateValidator(ir, "sbLarge");
-    expect(result.code).toContain("Set");
+    expect(result.code).toContain("Map");
+    expect(result.code.match(/new Map/g)).toHaveLength(1);
   });
 
-  it("mixed threshold: truthy inline, falsy Set", () => {
-    // truthy=["1","yes"] (2 ≤ 5) but falsy has 6 values → Set for falsy
+  it("mixed threshold: truthy small, falsy large uses one Map", () => {
+    // truthy=["1","yes"] (2 ≤ 5) but falsy has 6 values → one boolean Map
     const ir: StringBoolIR = {
       type: "stringBool",
       truthy: ["1", "yes"],
@@ -163,7 +164,7 @@ describe("slow-path — stringBool", () => {
       caseSensitive: false,
     };
     const result = generateValidator(ir, "sbMixed");
-    expect(result.code).toContain("Set");
+    expect(result.code).toContain("Map");
     const safeParse = compileIR(ir);
     expect(safeParse("1")).toEqual({ success: true, data: true });
     expect(safeParse("off")).toEqual({ success: true, data: false });

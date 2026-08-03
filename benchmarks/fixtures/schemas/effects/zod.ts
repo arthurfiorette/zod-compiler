@@ -38,6 +38,23 @@ export const CoercedQuerySchema = z.object({
   since: z.coerce.date(),
 });
 
+// ─── Environment/query boolean flags ──────────────────────────────────────
+
+export const StringBoolConfigSchema = z.object({
+  analytics: z.stringbool(),
+  cache: z.stringbool(),
+  compression: z.stringbool(),
+  debug: z.stringbool(),
+  experimental: z.stringbool(),
+  gracefulShutdown: z.stringbool(),
+  metrics: z.stringbool(),
+  profiling: z.stringbool(),
+  rateLimit: z.stringbool(),
+  tracing: z.stringbool(),
+  useTls: z.stringbool(),
+  verbose: z.stringbool(),
+});
+
 // ─── Captured-variable transform (Zod fallback) ────────────────────────────
 
 const prefix = "usr_";
