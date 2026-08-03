@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vite-plus/test";
 import { createCaller, resetStore } from "../src/router.js";
 import {
   CreateUserSchema,

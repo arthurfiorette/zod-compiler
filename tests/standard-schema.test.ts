@@ -13,7 +13,7 @@
  * `__zcMkv` now replaces `~standard` outright, keeping Zod's own validate as the
  * throw path so async refinements and throwing checks behave exactly as before.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { MK_VALIDATOR_DECL } from "#src/core/iife.js";
 import { compileLikeProduction } from "./parity-harness.js";

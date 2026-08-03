@@ -14,7 +14,7 @@
  * the build pass reproduces value substitution and rewrite ORDERING, which is
  * where a fast, wrong answer would otherwise hide.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import type { RefEntry } from "#src/core/extract/index.js";

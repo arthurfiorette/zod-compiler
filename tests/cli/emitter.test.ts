@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { generateCompiledFileContent, resolveOutputPath } from "#src/cli/emitter.js";
 import type { CodeGenResult } from "#src/core/codegen/index.js";
 

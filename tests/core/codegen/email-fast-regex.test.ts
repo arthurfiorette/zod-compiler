@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import {
   EMAIL_FAST_REGEX_SOURCE,
   EMAIL_REGEX_SOURCE,

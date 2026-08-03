@@ -123,7 +123,7 @@ async function main() {
   try {
     // Step 1: Build
     log("Building Next.js app...");
-    execSync("pnpm build", {
+    execSync("vp run build", {
       cwd: APP_DIR,
       stdio: "inherit",
       env: { ...process.env, NODE_ENV: "production" },
@@ -132,7 +132,7 @@ async function main() {
 
     // Step 2: Start server
     log("Starting production server on port 3456...");
-    server = spawn("pnpm", ["start", "-p", "3456"], {
+    server = spawn("vp", ["run", "start", "-p", "3456"], {
       cwd: APP_DIR,
       stdio: "pipe",
       env: { ...process.env, NODE_ENV: "production" },

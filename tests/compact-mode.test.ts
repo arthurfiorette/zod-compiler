@@ -12,7 +12,7 @@
  *     guards (`.is`), and reports `.error` lazily, mutating nothing on the hot
  *     path.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { ZodRealError, z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import { extractSchema, type RefEntry } from "#src/core/extract/index.js";

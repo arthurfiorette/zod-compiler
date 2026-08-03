@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import type { MapIR } from "#src/core/types.js";
 import { compileFastCheck, compileIR } from "../helpers.js";
 

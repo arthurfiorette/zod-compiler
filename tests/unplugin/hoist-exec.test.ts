@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vite-plus/test";
 import { loadSourceFile } from "#src/loader.js";
 import { transformCode } from "#src/unplugin/transform.js";
 

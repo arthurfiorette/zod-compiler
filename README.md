@@ -445,7 +445,7 @@ Nested objects, arrays and recursive types gain the most. Rejection is fast beca
 `safeParse` defers building the error until `.error` is read.
 
 ```bash
-pnpm benchmark   # run locally
+vp run benchmark # run locally
 ```
 
 ### Performance Architecture
@@ -464,10 +464,10 @@ string rewrites and synchronous transforms validate and build their output in on
 ## Development
 
 ```bash
-pnpm install
-pnpm test
-pnpm benchmark
-pnpm lint
+vp install
+vp test
+vp run benchmark
+vp run lint
 ```
 
 ## Acknowledgements

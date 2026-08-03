@@ -1,0 +1,18 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true,
+    // Tests exercise intentionally invalid inputs and are validated at runtime.
+    // Keep production type checking in the root project while still letting
+    // Vite+ lint every test file in the same `vp check` pass.
+    "noCheck": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "paths": {
+      "#src/*": ["../src/*"]
+    }
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["fixtures"]
+}

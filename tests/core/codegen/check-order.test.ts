@@ -12,7 +12,7 @@
  * whose order is part of zod parity, so it keeps declaration order. Both
  * properties are pinned here — the emitted shape, and full parity with zod.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import { extractSchema } from "#src/core/extract/index.js";

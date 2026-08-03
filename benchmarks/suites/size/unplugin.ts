@@ -8,7 +8,7 @@
  * `__zcReUuid`) and shared helpers (`__zcMkv`, `__zcFin`, issue factories) must
  * appear exactly ONCE in the bundle no matter how many files reference them.
  *
- * Run: pnpm size:unplugin
+ * Run: vp run size:unplugin
  */
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";

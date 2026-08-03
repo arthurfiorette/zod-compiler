@@ -1,6 +1,6 @@
 import path from "node:path";
 import process from "node:process";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { z } from "zod";
 import { diagnoseSchema } from "#src/core/diagnostic.js";
 import { extractSchema } from "#src/core/extract/index.js";

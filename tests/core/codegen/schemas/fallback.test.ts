@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import type { CodeGenContext } from "#src/core/codegen/context.js";
 import { slowFallback } from "#src/core/codegen/schemas/fallback.js";

@@ -1,5 +1,5 @@
 import type { ModifyRspackConfigFn, RsbuildPluginAPI } from "@rsbuild/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import zodCompiler from "#src/unplugin/rsbuild.js";
 
 describe("rsbuild plugin", () => {

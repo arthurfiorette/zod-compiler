@@ -20,7 +20,7 @@
  * finalization loop, so zod finalizes them where it builds the wrapper. The
  * record walk nested them raw, leaking absolute paths and the raw `input`.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import type { RefEntry } from "#src/core/extract/index.js";

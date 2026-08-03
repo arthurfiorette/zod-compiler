@@ -5,7 +5,7 @@
   "scripts": {
     "build": "rsbuild build",
     "start": "node dist/index.mjs",
-    "test": "pnpm build && pnpm start"
+    "test": "vp run build && vp run start"
   },
   "dependencies": {
     "zod": "catalog:",

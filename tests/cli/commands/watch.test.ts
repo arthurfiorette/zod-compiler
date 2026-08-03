@@ -1,7 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from "vite-plus/test";
 import type { WatchDeps } from "#src/cli/commands/watch.js";
 import { debounce, isWatchTarget, resolveWatchDirs, runWatch } from "#src/cli/commands/watch.js";
 import { resolveOutputPath } from "#src/cli/emitter.js";

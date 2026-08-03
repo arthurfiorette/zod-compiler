@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import zodCompiler, {
   transform,
   transformWithSwc,
