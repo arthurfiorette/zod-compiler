@@ -5,6 +5,7 @@ import { extractArray } from "./extractors/array.js";
 import { extractBigint } from "./extractors/bigint.js";
 import { extractBoolean } from "./extractors/boolean.js";
 import { extractCatch } from "./extractors/catch.js";
+import { extractCustom } from "./extractors/custom.js";
 import { extractDate } from "./extractors/date.js";
 import { extractDefault } from "./extractors/default.js";
 import { extractEnum } from "./extractors/enum.js";
@@ -68,6 +69,7 @@ export const extractRegistry = {
   nullable: extractNullable,
   readonly: extractReadonly,
   intersection: extractIntersection,
+  custom: extractCustom,
   // Complex extractors
   string: extractString,
   number: extractNumber,

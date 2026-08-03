@@ -23,6 +23,7 @@ import { fastArray } from "./schemas/array.js";
 import { fastBigInt } from "./schemas/bigint.js";
 import { fastBoolean } from "./schemas/boolean.js";
 import { fastCatch } from "./schemas/catch.js";
+import { fastCustom } from "./schemas/custom.js";
 import { fastDate } from "./schemas/date.js";
 import { fastDefault } from "./schemas/default.js";
 import { fastDiscriminatedUnion } from "./schemas/discriminated-union.js";
@@ -94,6 +95,7 @@ const fastRegistry = {
   // Effects
   effect: null, // statically ineligible
   // Special
+  custom: fastCustom,
   templateLiteral: fastTemplateLiteral,
   catch: fastCatch,
   fallback: null, // statically ineligible

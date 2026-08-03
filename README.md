@@ -356,7 +356,8 @@ npx zod-compiler check src/schemas.ts --json --fail-under 80
 Every Zod type except the fallbacks below — all primitives, `object` / `strictObject` / `looseObject`,
 `array`, `tuple`, `record`, `set`, `map`, `union`, `discriminatedUnion`, `intersection`, `pipe`,
 the `optional` / `nullable` / `readonly` / `default` / `catch` / `coerce` wrappers, `templateLiteral`,
-recursive `lazy` (self, mutual and nested), and `transform` / `refine` / `superRefine`.
+recursive `lazy` (self, mutual and nested), `custom` / `instanceof`, and
+`transform` / `refine` / `superRefine`.
 
 All standard checks are supported: `min`, `max`, `length`, `email`, `uuid`, `regex`, `int`, `positive`,
 `multipleOf`, `includes`, `startsWith`, and the rest.
@@ -368,8 +369,7 @@ A schema delegates to Zod when it reaches JavaScript the generated code cannot r
 | Construct                                   | Why                                                                        |
 | ------------------------------------------- | -------------------------------------------------------------------------- |
 | `.check(fn)`, `superRefine` + later checks  | The callback holds Zod's payload unmediated, or `fatal` aborts Zod's chain |
-| `ctx`-taking or `async` transforms          | Needs Zod's parse context / the async pipeline                             |
-| `z.custom()`, `z.instanceof()`              | No extractor yet                                                           |
+| `ctx`-taking or `async` callbacks           | Needs Zod's parse context / the async pipeline                             |
 | `z.url()`, `z.jwt()`                        | Algorithmic formats (`new URL()`, signature parsing)                       |
 | Object intersections                        | Zod parses both sides and merges; the compiler cannot reproduce the merge  |
 | Dynamic error maps, unresolvable `z.lazy()` | Not knowable at build time                                                 |
@@ -438,6 +438,8 @@ Schema-level `error` and `z.config()` maps are unaffected; for a per-call map us
 | coerced query object (invalid)                  | 1.1M   | 162K   | **10.1M**        | —     | —     | **62x**   |
 | stringbool config object (valid)                | —      | 1.9M   | **6.0M**         | —     | —     | 3.1x      |
 | stringbool config object (invalid)              | —      | 129K   | **13.1M**        | —     | —     | **101x**  |
+| custom/instanceof request (valid)               | 894K   | 3.0M   | **8.6M**         | —     | —     | 2.9x      |
+| custom/instanceof request (invalid)             | 755K   | 158K   | **8.5M**         | —     | —     | **54x**   |
 
 _ops/s, higher is better. `vitest bench` on an Apple M4 Max (zod 4.3.6, zod v3 3.23.8, typia 12, ajv 8),
 best of three runs. The harness costs ~55 ns per iteration, so the fastest rows sit at that floor and gaps

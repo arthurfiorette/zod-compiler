@@ -32,6 +32,7 @@ describe("extractRegistry — Zod def.type coverage", () => {
     z.map(z.string(), z.string()),
     z.union([z.string(), z.number()]),
     z.intersection(z.string(), z.string()),
+    z.custom(() => true),
     z.optional(z.string()),
     z.nullable(z.string()),
     z.readonly(z.string()),

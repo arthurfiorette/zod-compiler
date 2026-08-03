@@ -366,12 +366,12 @@ describe("feature matrix — composition", () => {
     ));
   it("check() with built-in checks", () =>
     expectParity(z.number().check(z.gt(0), z.lt(10)), [5, 0, 10]));
-  it("custom (falls back)", () =>
+  it("custom", () =>
     expectParity(
       z.custom<string>((v) => typeof v === "string"),
       ["x", 1],
     ));
-  it("instanceof (falls back)", () => expectParity(z.instanceof(Date), [new Date(), "x"]));
+  it("instanceof", () => expectParity(z.instanceof(Date), [new Date(), "x"]));
   it("lazy self-recursive", () => {
     interface Tree {
       value: string;

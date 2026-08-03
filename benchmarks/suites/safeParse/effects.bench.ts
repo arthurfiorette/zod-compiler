@@ -5,6 +5,7 @@ import {
   aotCapturedTransform,
   aotCapturedTransformObject,
   aotCoercedQuery,
+  aotCustomRequest,
   aotStringBoolConfig,
   aotSuperRefineObject,
   aotZeroCaptureRefineObject,
@@ -16,6 +17,7 @@ import {
   CapturedTransformObjectSchema,
   CapturedTransformSchema,
   CoercedQuerySchema,
+  CustomRequestSchema,
   StringBoolConfigSchema,
   SuperRefineObjectSchema,
   ZeroCaptureRefineObjectSchema,
@@ -27,18 +29,21 @@ import {
   v3CapturedTransformObjectSchema,
   v3CapturedTransformSchema,
   v3CoercedQuerySchema,
+  v3CustomRequestSchema,
   v3SuperRefineObjectSchema,
   v3ZeroCaptureRefineObjectSchema,
   v3ZeroCaptureRefineStringSchema,
   v3ZeroCaptureTransformObjectSchema,
   v3ZeroCaptureTransformStringSchema,
   invalidCoercedQuery,
+  invalidCustomRequest,
   invalidStringBoolConfig,
   validCapturedRefineObject,
   validCapturedRefineString,
   validCapturedTransformObject,
   validCapturedTransformString,
   validCoercedQuery,
+  validCustomRequest,
   validStringBoolConfig,
   validRefineObject,
   validRefineString,
@@ -92,6 +97,32 @@ describe("safeParse: stringbool config object — invalid", () => {
   });
   bench("zod-compiler", () => {
     aotStringBoolConfig.safeParse(invalidStringBoolConfig);
+  });
+});
+
+// ─── z.custom()/z.instanceof() domain fields ──────────────────────────────
+
+describe("safeParse: custom/instanceof request object — valid", () => {
+  bench("zod", () => {
+    CustomRequestSchema.safeParse(validCustomRequest);
+  });
+  bench("zod v3", () => {
+    v3CustomRequestSchema.safeParse(validCustomRequest);
+  });
+  bench("zod-compiler", () => {
+    aotCustomRequest.safeParse(validCustomRequest);
+  });
+});
+
+describe("safeParse: custom/instanceof request object — invalid", () => {
+  bench("zod", () => {
+    CustomRequestSchema.safeParse(invalidCustomRequest);
+  });
+  bench("zod v3", () => {
+    v3CustomRequestSchema.safeParse(invalidCustomRequest);
+  });
+  bench("zod-compiler", () => {
+    aotCustomRequest.safeParse(invalidCustomRequest);
   });
 });
 

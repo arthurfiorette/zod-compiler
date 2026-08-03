@@ -471,6 +471,22 @@ export interface TransformEffectIR {
 
 // ─── Schema IR: Special ────────────────────────────────────────────────────
 
+/**
+ * z.custom() / z.instanceof(): call the predicate on the hot path and retain
+ * the original schema solely for exact, cold-path issue production.
+ */
+export interface CustomIR {
+  type: "custom";
+  /** Zero-capture predicate source, mutually exclusive with refIndex. */
+  source?: string;
+  /** __rf[] index of a captured predicate, mutually exclusive with source. */
+  refIndex?: number;
+  /** __rf[] index of the pristine Zod schema used by the slow error walk. */
+  schemaRefIndex: number;
+  /** z.custom() defaults to aborting a failed union option. */
+  abort: boolean;
+}
+
 export interface FallbackIR {
   type: "fallback";
   reason: "transform" | "refine" | "superRefine" | "custom" | "lazy" | "unsupported" | "coalesced";
@@ -576,6 +592,7 @@ export type SchemaIR = TypeMessageCarrier &
     // Effects
     | TransformEffectIR
     // Special
+    | CustomIR
     | TemplateLiteralIR
     | CatchIR
     | FallbackIR

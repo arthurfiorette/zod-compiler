@@ -176,6 +176,9 @@ function referencesExportRefs(ir: SchemaIR): boolean {
     case "fallback":
       // `refIndex` is mandatory on these — the value/schema lives on the export.
       return true;
+    case "custom":
+      // Both the predicate and pristine error delegate live on the export.
+      return true;
     case "effect":
       if (ir.refIndex !== undefined) return true;
       break;

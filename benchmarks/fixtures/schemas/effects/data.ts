@@ -73,3 +73,19 @@ export const invalidStringBoolConfig = {
   ...validStringBoolConfig,
   analytics: "maybe",
 };
+
+export class RequestToken {}
+
+export const validCustomRequest = {
+  active: true,
+  age: 28,
+  email: "alice@example.com",
+  id: "u_1",
+  score: 75,
+  token: new RequestToken(),
+};
+
+export const invalidCustomRequest = {
+  ...validCustomRequest,
+  score: 20,
+};

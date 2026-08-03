@@ -6,6 +6,7 @@ import { slowArray } from "./schemas/array.js";
 import { slowBigInt } from "./schemas/bigint.js";
 import { slowBoolean } from "./schemas/boolean.js";
 import { slowCatch } from "./schemas/catch.js";
+import { slowCustom } from "./schemas/custom.js";
 import { slowDate } from "./schemas/date.js";
 import { slowDefault } from "./schemas/default.js";
 import { slowDiscriminatedUnion } from "./schemas/discriminated-union.js";
@@ -81,6 +82,7 @@ const slowRegistry = {
   // Effects
   effect: slowEffect,
   // Special
+  custom: slowCustom,
   templateLiteral: slowTemplateLiteral,
   catch: slowCatch,
   fallback: slowFallback,

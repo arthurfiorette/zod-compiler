@@ -7,10 +7,9 @@ import type { CompiledSchemaInfo } from "./pipeline.js";
 
 /**
  * Import statement required by generateIIFE output (references
- * __zodCompilerConfig). `core` is bound for $ZodAsyncError: a superRefine
- * callback is reached through zod's wrapper, so an async one is only
- * detectable by the promise it returns, at which point zod's own synchronous
- * parse raises (see ZC_SR_DECL).
+ * __zodCompilerConfig). `core` is bound for $ZodAsyncError: superRefine and
+ * custom callbacks may only reveal that they are async through the promise
+ * they return, at which point zod's own synchronous parse raises.
  */
 export const ZOD_CONFIG_IMPORT =
   'import { config as __zodCompilerConfig, core as __zcCore, ZodRealError as __zcZodError } from "zod";';

@@ -1,4 +1,5 @@
 import { z } from "zod3";
+import { RequestToken } from "./data.js";
 
 // ─── Zero-capture transform (fully compiled by zod-compiler) ────────────────────
 
@@ -38,6 +39,16 @@ export const v3CoercedQuerySchema = z.object({
   maxPrice: z.coerce.number().positive(),
   includeArchived: z.coerce.boolean(),
   since: z.coerce.date(),
+});
+
+const minimumScore = 50;
+export const v3CustomRequestSchema = z.object({
+  active: z.boolean(),
+  age: z.number().int(),
+  email: z.string().email(),
+  id: z.string(),
+  score: z.custom<number>((value) => typeof value === "number" && value >= minimumScore),
+  token: z.instanceof(RequestToken),
 });
 
 // ─── Captured-variable transform (Zod fallback) ────────────────────────────

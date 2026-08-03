@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RequestToken } from "./data.js";
 
 // ─── Zero-capture transform (fully compiled by zod-compiler) ────────────────────
 
@@ -53,6 +54,18 @@ export const StringBoolConfigSchema = z.object({
   tracing: z.stringbool(),
   useTls: z.stringbool(),
   verbose: z.stringbool(),
+});
+
+// ─── Domain predicates in an everyday request object ──────────────────────
+
+const minimumScore = 50;
+export const CustomRequestSchema = z.object({
+  active: z.boolean(),
+  age: z.number().int(),
+  email: z.email(),
+  id: z.string(),
+  score: z.custom<number>((value) => typeof value === "number" && value >= minimumScore),
+  token: z.instanceof(RequestToken),
 });
 
 // ─── Captured-variable transform (Zod fallback) ────────────────────────────

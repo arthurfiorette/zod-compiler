@@ -183,6 +183,15 @@ export const ZC_SR_RUN_DECL =
   'if(r&&typeof r.then==="function"){throw new __zcCore.$ZodAsyncError();}}';
 
 /**
+ * z.custom()/z.instanceof() fast verdict. Zod treats truthy predicate returns
+ * as success and raises $ZodAsyncError when a synchronous parse encounters a
+ * thenable, including a non-async function that happens to return a Promise.
+ */
+export const ZC_CUSTOM_OK_DECL =
+  "function __zcCu(f,v){var r=f(v);" +
+  'if(r&&typeof r.then==="function"){throw new __zcCore.$ZodAsyncError();}return !!r;}';
+
+/**
  * superRefine slow-path merge: run the callback, then move its issues onto the
  * validator's list the way zod's finalizeIssue does — the node's path prefixed
  * onto any path the user supplied, and the internal `inst`/`continue` fields
@@ -211,6 +220,7 @@ export const RUNTIME_HELPER_DECLS: Readonly<Record<string, string>> = {
   __zcFz: ZC_FZ_DECL,
   __zcHop: ZC_HOP_DECL,
   __zcPfx: ZC_PFX_DECL,
+  __zcCu: ZC_CUSTOM_OK_DECL,
   __zcSr: ZC_SR_DECL,
   __zcSrOk: ZC_SR_OK_DECL,
 };

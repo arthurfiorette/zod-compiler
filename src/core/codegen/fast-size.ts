@@ -103,6 +103,8 @@ function shallowFastCost(ir: SchemaIR): number {
     case "file":
     case "templateLiteral":
       return 40;
+    case "custom":
+      return 30;
     case "literal":
     case "optional":
     case "nullable":
@@ -225,6 +227,8 @@ function shallowRuntimeCost(ir: SchemaIR): number {
       return 3;
     case "templateLiteral":
       return 100;
+    case "custom":
+      return 20;
     case "recursiveRef":
     case "recursionTarget":
       // A recursive call expands into an unknown amount of work; treat it as

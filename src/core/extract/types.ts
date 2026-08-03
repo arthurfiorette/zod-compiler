@@ -44,6 +44,12 @@ export interface ZodCheckSchema {
 
 export interface ZodDef {
   type: string;
+  /** Predicate function on z.custom() / z.instanceof(). */
+  fn?: unknown;
+  /** Whether a failing custom schema aborts its containing union option. */
+  abort?: boolean;
+  /** Custom issue path suffix on z.custom(). */
+  path?: unknown;
   checks: ZodCheckSchema[];
   check: string;
   format: string;
@@ -124,6 +130,7 @@ export type SupportedZodDefType =
   | "nullable"
   | "readonly"
   | "intersection"
+  | "custom"
   | "string"
   | "number"
   | "bigint"
