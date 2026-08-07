@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
+import { generateValidator } from "#src/core/codegen/index.js";
 import type { RefEntry } from "#src/core/extract/index.js";
 import { extractSchema } from "#src/core/extract/index.js";
 import { compileLikeProduction, expectParity } from "./parity-harness.js";
@@ -618,5 +619,152 @@ describe("literal values with no JS source form", () => {
     const refs: RefEntry[] = [];
     const ir = extractSchema(z.partialRecord(z.literal(SYM as never), z.string()), refs);
     expect(ir.type, "symbol-keyed record must not compile").toBe("fallback");
+  });
+});
+
+// ─── Discriminated-union dispatch on the build path ─────────────────────────
+// Zod resolves a discriminated union through a `discriminator value → option`
+// map built from each option's `_zod.propValues`. An input whose discriminator
+// misses that map is rejected outright with `invalid_union` ("No matching
+// discriminator") — no option's own parse ever runs.
+//
+// The build path (the single pass that validates and assembles rewritten output
+// together, reached only when something in the schema mutates) handled
+// `discriminatedUnion` in the same case as a plain `union`: probe the options in
+// declaration order, take the first that builds. That is only equivalent while
+// every option accepts EXACTLY its dispatch values, and a value-substituting
+// wrapper on the discriminator breaks it — `z.literal("a").default("a")`
+// contributes the single dispatch value `"a"` to `propValues` while its own
+// parse also accepts a MISSING `t`. So `{v:"x"}` was accepted, and returned
+// `{t:"a",v:"x"}`, where zod rejects. The `.default()` is also what pulls the
+// schema onto the build path in the first place, so the two arrive together.
+//
+// `.prefault()` and `.catch()` have the same shape but do not reach this pass
+// today (a prefaulted schema delegates to zod wholesale; `.catch()` is refused
+// by `mutatesBeyondStrip` and keeps the eager walk, which already switches).
+// They are pinned anyway so a later coverage widening cannot reintroduce the
+// hole silently.
+//
+// The opposite error would be refusing every wrapped discriminator: `.optional()`
+// and `.nullable()` are NOT bugs, because their `undefined`/`null` genuinely ARE
+// in `propValues` and so are legitimate dispatch values. Those must stay
+// compiled, on the build path, and keep matching zod.
+
+/** The build-path entry function's body, or null when no build pass was emitted. */
+function buildEntryBody(schema: unknown): string | null {
+  const refs: RefEntry[] = [];
+  const ir = extractSchema(schema, refs);
+  const { code, functionDef } = generateValidator(ir, "du", { refCount: refs.length });
+  const entry = /=(__vb_\d+)\(input\)/.exec(functionDef)?.[1];
+  if (entry === undefined) return null;
+  // Every preamble entry is emitted as its own line.
+  return code.split("\n").find((line) => line.startsWith(`function ${entry}(`)) ?? null;
+}
+
+describe("discriminated-union dispatch on the build path", () => {
+  /** Two options whose second is unreachable by dispatch from the first's values. */
+  const withDiscriminator = (t: z.ZodType): z.ZodType =>
+    z.discriminatedUnion("t", [
+      z.object({ t: t as never, v: z.string() }),
+      z.object({ t: z.literal("b"), v: z.number() }),
+    ]) as unknown as z.ZodType;
+
+  /** Inputs that separate dispatch from sequential probing. */
+  const INPUTS = [
+    { v: "x" }, // discriminator ABSENT — the case that regressed
+    { t: "a", v: "x" },
+    { t: "b", v: 1 },
+    { t: "zzz", v: "x" }, // discriminator present but unlisted
+    { t: null, v: "x" },
+    { t: "a", v: 1 }, // dispatches to "a", then fails on its own field
+    [],
+    null,
+    undefined,
+    "nope",
+  ];
+
+  it("a .default() discriminator dispatches instead of probing", () => {
+    const schema = withDiscriminator(z.literal("a").default("a"));
+    expectParity(schema, INPUTS, "duDefault");
+
+    const body = buildEntryBody(schema);
+    expect(body, "the .default() must pull the schema onto the build path").not.toBeNull();
+    expect(body, "object-ness proved before the discriminator is read").toContain(
+      'if(typeof input!=="object"||input===null||Array.isArray(input))return',
+    );
+    expect(body, "dispatches on the discriminator").toContain('switch(input["t"])');
+    expect(body, "an unlisted discriminator fails outright").toMatch(/default:return __bf_\d+;/);
+  });
+
+  it("a .prefault() discriminator matches zod", () => {
+    expectParity(withDiscriminator(z.literal("a").prefault("a")), INPUTS, "duPrefault");
+  });
+
+  it("a .catch() discriminator matches zod", () => {
+    expectParity(withDiscriminator(z.literal("a").catch("a")), INPUTS, "duCatch");
+  });
+
+  it("a .catch() discriminator alongside a rebuilding field matches zod", () => {
+    const schema = z.discriminatedUnion("t", [
+      z.object({ t: z.literal("a").catch("a"), v: z.string().trim() }),
+      z.object({ t: z.literal("b"), v: z.number() }),
+    ]);
+    expectParity(schema, [...INPUTS, { t: "a", v: " x " }], "duCatchTrim");
+  });
+
+  it("an .optional() discriminator stays compiled — undefined IS a dispatch value", () => {
+    const schema = z.discriminatedUnion("t", [
+      z.object({ t: z.literal("a").optional(), v: z.string().trim() }),
+      z.object({ t: z.literal("b"), v: z.number() }),
+    ]);
+    expectCompiled(schema);
+    expectParity(
+      schema,
+      [...INPUTS, { t: undefined, v: " x " }, { t: "a", v: " x " }],
+      "duOptional",
+    );
+    expect(buildEntryBody(schema), "undefined is an ordinary case arm").toContain(
+      "case undefined:",
+    );
+  });
+
+  it("a .nullable() discriminator stays compiled — null IS a dispatch value", () => {
+    const schema = z.discriminatedUnion("t", [
+      z.object({ t: z.literal("a").nullable(), v: z.string().trim() }),
+      z.object({ t: z.literal("b"), v: z.number() }),
+    ]);
+    expectCompiled(schema);
+    expectParity(schema, [...INPUTS, { t: null, v: " x " }], "duNullable");
+    expect(buildEntryBody(schema), "null is an ordinary case arm").toContain("case null:");
+  });
+
+  it("a multi-value literal discriminator shares ONE hosted build across its cases", () => {
+    const schema = z.discriminatedUnion("t", [
+      z.object({ t: z.literal(["a", "c"]), v: z.string().trim() }),
+      z.object({ t: z.literal("b"), v: z.number() }),
+    ]);
+    expectParity(schema, [...INPUTS, { t: "c", v: " x " }, { t: "a", v: " x " }], "duMultiLiteral");
+
+    const body = buildEntryBody(schema) ?? "";
+    expect(body.match(/case /g), "one arm per discriminator value").toHaveLength(3);
+    expect(
+      // `=__vb_N(input)` is a CALL from a case arm; the entry's own
+      // `function __vb_M(input){` header has no `=` and is not counted.
+      new Set(body.match(/=__vb_\d+\(input\)/g)).size,
+      "one hosted build per REACHABLE option, not per case",
+    ).toBe(2);
+  });
+
+  it("a rebuilding non-discriminator field alone reaches the dispatching build", () => {
+    // Nothing wraps the discriminator here: the `.trim()` is what makes the
+    // schema rebuild, so this pins that ordinary discriminated unions keep the
+    // build path (a regression here is a silent slowdown, not a wrong answer).
+    const schema = z.discriminatedUnion("t", [
+      z.object({ t: z.literal("a"), v: z.string().trim() }),
+      z.object({ t: z.literal("b"), v: z.number() }),
+    ]);
+    expectCompiled(schema);
+    expectParity(schema, [...INPUTS, { t: "a", v: " x " }], "duTrim");
+    expect(buildEntryBody(schema), "still dispatches").toContain('switch(input["t"])');
   });
 });

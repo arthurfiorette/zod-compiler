@@ -46,6 +46,7 @@ import {
   emitTemp,
   escapeString,
   keyMembershipTest,
+  literalToJs,
   outputAlwaysDefined,
   rejectsUndefined,
 } from "./context.js";
@@ -361,8 +362,9 @@ function buildInline(ir: SchemaIR, input: string, g: BuildGen): Built | null {
     case "zodDelegate":
       return build(ir.inner, input, g);
     case "union":
-    case "discriminatedUnion":
       return buildUnion(ir, input, g);
+    case "discriminatedUnion":
+      return buildDiscriminatedUnion(ir, input, g);
     default:
       // A rebuilding intersection, map or set: expressible in principle, but
       // each needs its own output-shaping rules, so they keep the eager walk
@@ -418,15 +420,11 @@ function buildRecursiveCall(refId: number, input: string, g: BuildGen): Built | 
  * would abandon the whole parse instead of moving on to the next option. Behind
  * a call, the same signal is just a value to test.
  *
- * A discriminated union gets the same treatment rather than a switch: the
- * options still have to be probed by call, and its dispatch advantage is
- * already spent by the enclosing container's own work.
+ * PLAIN unions only. A discriminated union must not reach here: zod resolves it
+ * by dispatch, not by probing, and the two disagree — see
+ * {@link buildDiscriminatedUnion}.
  */
-function buildUnion(
-  ir: SchemaIR & { type: "discriminatedUnion" | "union" },
-  input: string,
-  g: BuildGen,
-): Built | null {
+function buildUnion(ir: SchemaIR & { type: "union" }, input: string, g: BuildGen): Built | null {
   const hosted: string[] = [];
   for (const option of ir.options) {
     const fn = g.rebuilds.has(option) ? hostBuild(option, g) : hostPassthrough(option, g);
@@ -442,6 +440,69 @@ function buildUnion(
   }
   code += `if(${out}===${g.fail})return ${g.fail};`;
   return { code, value: out };
+}
+
+/**
+ * Dispatch on the discriminator and build ONLY the option that value selects,
+ * failing outright when it selects none — mirroring zod, which resolves the
+ * option through a `discriminator value → option` map built from each option's
+ * `propValues` and pushes `invalid_union` ("No matching discriminator") without
+ * ever running an option's parse when the lookup misses.
+ *
+ * Probing the options in order like {@link buildUnion} does is NOT equivalent,
+ * because an option can accept more than its own dispatch values. A wrapper that
+ * substitutes a value contributes only the value it wraps to `propValues` while
+ * its parse also accepts the input it substitutes FOR:
+ * `z.literal("a").default("a")` dispatches on `"a"` alone yet parses a MISSING
+ * discriminator, so sequential probing accepted `{v:"x"}` — output `{t:"a",v:"x"}`
+ * — where zod rejects it. `.prefault()` and `.catch()` have the same shape, and
+ * only escape it because neither reaches this pass today (a prefaulted schema
+ * delegates to zod wholesale, and `.catch()` is refused by
+ * {@link mutatesBeyondStrip}); a `.default()` is exactly what pulls the build
+ * path in. The switch cannot drift that way: the dispatch table IS zod's, so an
+ * unlisted discriminator reaches `default:` and fails, whatever the options
+ * would have accepted on their own.
+ *
+ * The reverse — rejecting what zod accepts — is why `.optional()`/`.nullable()`
+ * discriminators stay compiled rather than being refused here: their
+ * `undefined`/`null` are in `propValues`, so they arrive as ordinary cases.
+ *
+ * Object-ness is proved BEFORE the discriminator is read, both because zod
+ * rejects a non-object with its own `invalid_type` ahead of the lookup and
+ * because the property read would throw on `null`/`undefined`.
+ */
+function buildDiscriminatedUnion(
+  ir: SchemaIR & { type: "discriminatedUnion" },
+  input: string,
+  g: BuildGen,
+): Built | null {
+  const out = local(g, "bd");
+  // One hosted build per REACHABLE option, keyed by option index: a multi-value
+  // literal (`z.literal(["a","c"])`) contributes several cases selecting the
+  // same option, and they share the one function rather than emitting it twice.
+  const hostedByOption = new Map<number, string>();
+  let arms = "";
+  for (const { value, option: index } of ir.cases) {
+    let fn = hostedByOption.get(index);
+    if (fn === undefined) {
+      const option = ir.options[index];
+      if (option === undefined) return null;
+      const hosted = g.rebuilds.has(option) ? hostBuild(option, g) : hostPassthrough(option, g);
+      if (hosted === null) return null;
+      fn = hosted;
+      hostedByOption.set(index, fn);
+    }
+    arms += `case ${literalToJs(value)}:${out}=${fn}(${input});break;`;
+  }
+  if (arms === "") return null;
+
+  return {
+    code:
+      `if(typeof ${input}!=="object"||${input}===null||Array.isArray(${input}))return ${g.fail};` +
+      `switch(${input}[${escapeString(ir.discriminator)}]){${arms}default:return ${g.fail};}` +
+      `if(${out}===${g.fail})return ${g.fail};`,
+    value: out,
+  };
 }
 
 /**
