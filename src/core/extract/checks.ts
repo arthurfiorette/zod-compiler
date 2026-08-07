@@ -57,11 +57,35 @@ export function payloadCheckRef(
 const PATTERNLESS_FORMATS = new Set(["email", "uuid", "url"]);
 
 /**
- * Formats whose def.pattern is NOT the authoritative validator — zod's
- * runtime check is algorithmic and accepts inputs the pattern rejects
- * (e.g. z.cidrv6() splits the prefix and validates the IPv6 part separately).
+ * String formats whose `def.pattern` is NOT the validator Zod actually runs.
+ *
+ * Zod attaches a `def.pattern` to every string format because `toJSONSchema()`
+ * needs one to emit. A handful of constructors then REPLACE the pattern check
+ * outright: `$ZodStringFormat.init` installs the pattern check with `??=`, and
+ * the constructor's following `inst._zod.check = …` assignment overwrites it.
+ * The pattern survives only as JSON Schema metadata. Compiling it produces a
+ * verdict Zod does not share — in BOTH directions — so these delegate instead.
+ *
+ * - `ipv6`: Zod validates with `new URL("http://[" + value + "]")`. The URL
+ *   parser accepts IPv4-mapped forms the regex has no alternative for
+ *   (`"::ffff:1.2.3.4"`, `"1:2:3:4:5:6:1.2.3.4"`) and, since it strips tabs and
+ *   ends the host at `@` or `/`, even non-addresses (`"@_c.Z=\t/X+9"`).
+ * - `cidrv6`: splits on `/`, range-checks the prefix as a number, then runs the
+ *   same `new URL` probe on the address half — inheriting every `ipv6` gap.
+ * - `base64`: `length % 4 === 0 && atob(value)` does not throw. `atob` is
+ *   HTML's forgiving-base64 decode, which STRIPS ASCII whitespace before
+ *   decoding, so Zod accepts `"AAAA    "`, `"\t\t\t\tAAAA"` and `"+c \n"` —
+ *   all rejected by `regexes.base64`, whose charset has no room for whitespace.
+ * - `base64url`: `regexes.base64url.test(v)` AND an `atob` of the re-padded
+ *   value. The regex alone is `^[A-Za-z0-9_-]*$`, which accepts every
+ *   `length % 4 === 1` string (`"a"`, `"-"`, `"A"`, `"9"`) that decoding fails.
+ *
+ * Every other string format compiles its pattern, which is only safe while that
+ * pattern and Zod's installed check keep agreeing. What keeps this list honest
+ * — in both directions — is tests/string-format-parity.test.ts, which fuzzes
+ * every reachable string format against Zod over one shared corpus.
  */
-const NON_AUTHORITATIVE_PATTERN_FORMATS = new Set(["cidrv6"]);
+const NON_AUTHORITATIVE_PATTERN_FORMATS = new Set(["base64", "base64url", "cidrv6", "ipv6"]);
 
 /**
  * Check kinds where Zod itself installs a `when` guard

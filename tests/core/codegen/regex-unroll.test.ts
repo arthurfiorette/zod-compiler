@@ -226,6 +226,12 @@ describe("unrollRepeats", () => {
 
     // Zod's live patterns, not the registry copies — the compiler rewrites
     // whatever source the installed Zod version actually produces.
+    //
+    // ipv6/cidrv6/base64/base64url are absent on purpose: Zod overwrites their
+    // pattern check with an algorithmic one, so extraction delegates them to
+    // Zod and no pattern reaches codegen (see NON_AUTHORITATIVE_PATTERN_FORMATS
+    // and tests/string-format-parity.test.ts). Their registry copies are still
+    // unroll-checked by the block above.
     describe("every Zod string format, as extracted", () => {
       const formats: [string, z.ZodType, string[]][] = [
         ["email", z.email(), ["john@example.com"]],
@@ -238,8 +244,6 @@ describe("unrollRepeats", () => {
         ["xid", z.xid(), ["9m4e2mr0ui3e8a215n4g"]],
         ["ksuid", z.ksuid(), ["2naeRjTrKbDPVJEXBTGfAP1H3Kz"]],
         ["ipv4", z.ipv4(), ["192.168.1.1"]],
-        ["ipv6", z.ipv6(), ["::1"]],
-        ["base64", z.base64(), ["aGVsbG8="]],
         ["e164", z.e164(), ["+14155552671"]],
         ["iso.date", z.iso.date(), ["2024-06-15", "2024-02-29"]],
         ["iso.time", z.iso.time(), ["12:34:56"]],

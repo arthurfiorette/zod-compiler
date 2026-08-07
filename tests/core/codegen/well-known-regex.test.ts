@@ -42,9 +42,6 @@ describe("well-known-regex", () => {
       ["xid", z.xid(), "__zcReXid"],
       ["ksuid", z.ksuid(), "__zcReKsuid"],
       ["ipv4", z.ipv4(), "__zcReIpv4"],
-      ["ipv6", z.ipv6(), "__zcReIpv6"],
-      ["base64", z.base64(), "__zcReBase64"],
-      ["base64url", z.base64url(), "__zcReBase64Url"],
       ["e164", z.e164(), "__zcReE164"],
       ["guid", z.guid(), "__zcReGuid"],
     ] as const;
@@ -61,6 +58,36 @@ describe("well-known-regex", () => {
         // Older Zod versions may use a different source string. Skip the
         // assertion when the registry doesn't recognize it — `latest` matrix
         // catches genuine drift.
+        if (actual === null) return;
+        expect(actual).toBe(expected);
+      });
+    }
+  });
+
+  // Zod sets `def.pattern` on these too (toJSONSchema needs one) but then
+  // REPLACES the pattern check with an algorithmic one, so the pattern is not
+  // the verdict Zod gives. Extraction delegates them instead of compiling the
+  // pattern — see NON_AUTHORITATIVE_PATTERN_FORMATS in src/core/extract/checks.ts
+  // and the corpus in tests/string-format-parity.test.ts.
+  //
+  // Their registry entries stay: `.regex(z.core.regexes.ipv6)` still routes a
+  // literal use of the same source through the dedup path. Drift detection is
+  // kept by reading Zod's live `def.pattern` directly rather than the (now
+  // absent) extracted one.
+  describe("formats delegated to Zod still track its pattern source", () => {
+    const cases = [
+      ["ipv6", z.ipv6(), "__zcReIpv6"],
+      ["base64", z.base64(), "__zcReBase64"],
+      ["base64url", z.base64url(), "__zcReBase64Url"],
+    ] as const;
+
+    for (const [name, schema, expected] of cases) {
+      it(`${name} extracts as a fallback, and Zod's pattern is still ${expected}`, () => {
+        expect(extractSchema(schema, []).type).toBe("fallback");
+        const pattern = schema._zod.def.pattern;
+        expect(pattern).toBeInstanceOf(RegExp);
+        const actual = lookupWellKnownRegex((pattern as RegExp).source);
+        // As above: an unrecognized source means this Zod version diverged.
         if (actual === null) return;
         expect(actual).toBe(expected);
       });
