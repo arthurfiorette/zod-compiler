@@ -336,15 +336,15 @@ describe("stateful custom string format (g/y flag)", () => {
  */
 describe("invalid_format issue fields", () => {
   /**
-   * An issue reduced to comparable form: keys sorted, and keys whose value is
-   * `undefined` dropped. Zod `delete`s `input` during finalization while
-   * `__zcFin` blanks it in place (`e[i].input=undefined`) to avoid the delete's
-   * shape transition — a deliberate divergence owned by issue-shape.test.ts.
+   * An issue reduced to comparable form: keys sorted, nothing dropped. Both
+   * sides now `delete` `input` during finalization (zod in `util.finalizeIssue`,
+   * the compiler in FAIL_CLASS_DECL), so an `input` key surviving on either side
+   * is drift and must fail here rather than be normalized away.
    */
   function normalizeIssue(issue: Record<string, unknown>): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(issue).sort()) {
-      if (issue[key] !== undefined) out[key] = issue[key];
+      out[key] = issue[key];
     }
     return out;
   }

@@ -140,13 +140,18 @@ export const ZC_AB_DECL = `function __zcAb(e,i){for(;i<e.length;i++){var c=e[i].
  * `input` cleared. Their `path` stays RELATIVE to the key or value schema — zod
  * ran it on a fresh payload — so nothing rewrites it.
  *
- * `input` is cleared by assignment rather than `delete`, matching the top-level
- * finalizer and the union's per-option loop.
+ * `input` is `delete`d rather than assigned `undefined`, matching zod's own
+ * `delete full.input` and the top-level finalizer: the key's PRESENCE is
+ * observable (`"input" in issue`, `Object.keys`, spread, a strict deep-equal
+ * against a zod issue), so assigning left a nested issue one key wider than
+ * zod's. Only reached while an error is being built — never on a successful
+ * parse — so the dictionary-mode transition it costs is confined to the path
+ * that then constructs a ZodError anyway.
  */
 export const ZC_FZ_DECL =
   "function __zcFz(e){for(var i=0;i<e.length;i++){var s=e[i];" +
   'if(s.message===undefined&&typeof __zcMsg==="function")s.message=__zcMsg(s);' +
-  "s.input=undefined;}return e;}";
+  "delete s.input;}return e;}";
 
 /**
  * Port of zod's `util.prefixIssues(key, issues)` for a map entry whose key is a

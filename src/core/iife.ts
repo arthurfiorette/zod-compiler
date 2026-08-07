@@ -65,13 +65,26 @@ export const ZOD_MSG_DECLARATION =
  * (zod v4 JSON.stringifies every issue into `message` and captures a stack
  * trace) — stays deferred inside the cached accessor exactly as before, since
  * the issues array is observable solely through `.error`.
+ *
+ * `input` is `delete`d, not assigned `undefined`. Key PRESENCE is observable —
+ * `"input" in issue`, `Object.keys(issue)`, object spread, `toStrictEqual`
+ * against a zod issue — and zod's `util.finalizeIssue` does `delete full.input`
+ * whenever `reportInput` is off, so assignment left every compiled issue one
+ * enumerable key wider than zod's. The delete's dictionary-mode transition is
+ * affordable precisely BECAUSE of the deferral above: it runs only after a
+ * caller asks for `.error` on a failed parse, and is memoised in `_c`. Neither
+ * a successful parse nor a `.success`/`.is()` check on a rejected one reaches
+ * it — measured, the two are unchanged, while the `.error` read itself goes
+ * ~3.95us -> ~4.19us per failure, i.e. ~6% of a path whose cost is already
+ * dominated by the ZodError construction on the next line (stack capture plus a
+ * JSON.stringify of every issue).
  */
 export const FAIL_CLASS_DECL =
   "function __ZcFail(e,f,i){this.success=false;this._e=e;this._f=f;this._i=i;this._c=undefined;}" +
   'Object.defineProperty(__ZcFail.prototype,"error",{configurable:true,get:function(){' +
   "if(this._c)return this._c;" +
   "var e=this._f!==null?this._f(this._i):this._e;" +
-  'for(var i=0;i<e.length;i++){if(e[i].message===undefined&&typeof __zcMsg==="function")e[i].message=__zcMsg(e[i]);e[i].input=undefined;}' +
+  'for(var i=0;i<e.length;i++){if(e[i].message===undefined&&typeof __zcMsg==="function")e[i].message=__zcMsg(e[i]);delete e[i].input;}' +
   "return this._c=new __zcZodError(e);}});";
 
 /** Eager finalizer (mutation / partial-fast-path schemas): issues already

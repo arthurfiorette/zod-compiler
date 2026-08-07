@@ -1286,31 +1286,6 @@ describe("records with a rewriting key schema", () => {
 // the field in question and must not move.
 
 describe("issue fields beyond code and path", () => {
-  /**
-   * One issue with any `input: undefined` key dropped, recursively through an
-   * `invalid_union`'s nested `errors`.
-   *
-   * Zod's `util.finalizeIssue` DELETES `input`; the generated finalizers clear
-   * it by assignment instead (see FAIL_CLASS_DECL), so every compiled issue
-   * carries the key. That difference is universal — it is on the controls too —
-   * and long pre-dates these cases, so it is normalized away rather than pinned.
-   */
-  function stripClearedInput(issue: Record<string, unknown>): Record<string, unknown> {
-    const out: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(issue)) {
-      if (key === "input" && value === undefined) continue;
-      out[key] =
-        key === "errors" && Array.isArray(value)
-          ? value.map((group: unknown) =>
-              Array.isArray(group)
-                ? group.map((nested) => stripClearedInput(nested as Record<string, unknown>))
-                : group,
-            )
-          : value;
-    }
-    return out;
-  }
-
   function firstIssue(result: {
     success: boolean;
     error?: { issues: unknown[] };
@@ -1344,7 +1319,7 @@ describe("issue fields beyond code and path", () => {
       const issue = firstIssue(
         compiled(input) as unknown as { success: boolean; error?: { issues: unknown[] } },
       );
-      expect(stripClearedInput(issue), `${mode} issue fields for ${name}`).toStrictEqual(zodIssue);
+      expect(issue, `${mode} issue fields for ${name}`).toStrictEqual(zodIssue);
     }
   }
 
@@ -1820,5 +1795,121 @@ describe("union option paths inside invalid_union", () => {
     } finally {
       z.config({ customError: previous });
     }
+  });
+});
+
+// ─── Finalized issues carry no `input` key at all ───────────────────────────
+// Zod's `util.finalizeIssue` ends with `delete full.input` whenever the parse
+// context has no `reportInput`, so a finalized issue does not merely read
+// `undefined` at `.input` — it has no such own key. The compiled finalizers
+// used to clear it by ASSIGNMENT, which leaves the key present: `"input" in
+// issue` was true, `Object.keys(issue)` listed it, spreading an issue copied
+// it, and `toStrictEqual` against zod's issue failed on a field both sides
+// agreed was undefined.
+//
+// Every finalization site is covered, because they are separate code paths:
+// the top-level loop in FAIL_CLASS_DECL, `__zcFz` (ZC_FZ_DECL) for issues
+// nested inside an `invalid_key`/`invalid_element` wrapper and for an
+// `invalid_union`'s per-option `errors`, and the hand-rolled loop in
+// slowCatch that finalizes the array a `z.catch()` callback reads. `z.catch`'s
+// OTHER view — the raw `ctx.issues` array — cannot match and is pinned in
+// known-divergences.test.ts instead.
+
+describe("finalized issues omit `input` entirely, as zod does", () => {
+  /** Every issue reachable from `issue`, including nested wrapper payloads. */
+  function flatten(issues: readonly unknown[]): Record<string, unknown>[] {
+    const out: Record<string, unknown>[] = [];
+    for (const raw of issues) {
+      const issue = raw as Record<string, unknown>;
+      out.push(issue);
+      if (Array.isArray(issue["issues"])) out.push(...flatten(issue["issues"]));
+      if (Array.isArray(issue["errors"])) {
+        for (const group of issue["errors"] as unknown[]) {
+          if (Array.isArray(group)) out.push(...flatten(group));
+        }
+      }
+    }
+    return out;
+  }
+
+  function issuesOf(result: unknown, label: string): Record<string, unknown>[] {
+    const r = result as { success: boolean; error?: { issues: unknown[] } };
+    expect(r.success, `${label} must reject`).toBe(false);
+    const all = flatten(r.error?.issues ?? []);
+    expect(all.length, `${label} produced issues`).toBeGreaterThan(0);
+    return all;
+  }
+
+  const CASES: [name: string, schema: ZodLikeSchema, input: unknown, depth: number][] = [
+    // Plain top-level failure — FAIL_CLASS_DECL's loop.
+    ["plain", z.string(), 123, 1],
+    // `invalid_key` wrapper + the key issue nested inside it — __zcFz. A record
+    // key is a string, so zod takes handleRecordResult's non-property-key
+    // branch only for the KEY schema's own issues.
+    ["invalidKey", z.record(z.string().min(3), z.number()), { a: 1 }, 2],
+    // `invalid_element` wrapper + its nested value issue — __zcFz again, via
+    // the map branch a non-property-key key selects.
+    ["invalidElement", z.map(z.boolean(), z.number().min(3)), new Map([[true, 1]]), 2],
+    // `invalid_union` wrapper + one issue per option inside `errors` — __zcFz
+    // on the option arrays, wrapper through the top-level loop.
+    ["invalidUnion", z.object({ a: z.union([z.string(), z.number()]) }), { a: true }, 3],
+  ];
+
+  for (const [name, schema, input, depth] of CASES) {
+    it(`${name}: no issue has an \`input\` key, and the key sets match zod`, () => {
+      const zodIssues = issuesOf(schema.safeParse(input), `zod ${name}`);
+      // The case really does reach the nesting it claims to, so a future shape
+      // change cannot quietly reduce this to the top-level check.
+      expect(zodIssues.length, `${name} reaches ${depth} issue(s)`).toBe(depth);
+      for (const issue of zodIssues) {
+        expect("input" in issue, `zod ${name}: zod itself must delete input`).toBe(false);
+      }
+      for (const [mode, compile] of [
+        ["inline", compileLikeProduction],
+        ["lean", compileLeanLikeProduction],
+      ] as const) {
+        const compiled = issuesOf(compile(schema, `noInput_${name}_${mode}`)(input), `${name}`);
+        expect(compiled.length, `${mode} ${name}: same issue count`).toBe(zodIssues.length);
+        compiled.forEach((issue, i) => {
+          expect("input" in issue, `${mode} ${name}: issue ${i} has no input key`).toBe(false);
+          expect(Object.keys(issue).sort(), `${mode} ${name}: issue ${i} key set`).toStrictEqual(
+            Object.keys(zodIssues[i] as object).sort(),
+          );
+        });
+      }
+    });
+  }
+
+  it("z.catch()'s ctx.error.issues match zod's finalized key set", () => {
+    // slowCatch finalizes its own array — it never reaches FAIL_CLASS_DECL,
+    // since the catch value swallows the failure and the parse succeeds.
+    const seen = (sink: (issues: unknown[]) => void) =>
+      z
+        .string()
+        .min(4)
+        .catch((ctx) => {
+          sink(ctx.error.issues);
+          return "fallback";
+        });
+    let zodIssues: unknown[] = [];
+    let compiledIssues: unknown[] = [];
+    const zodSchema = seen((issues) => {
+      zodIssues = issues;
+    });
+    zodSchema.safeParse(123);
+    compileLikeProduction(
+      seen((issues) => {
+        compiledIssues = issues;
+      }),
+      "noInputCatch",
+    )(123);
+
+    expect(zodIssues, "zod ran the catch callback").toHaveLength(1);
+    expect(compiledIssues, "compiled ran the catch callback").toHaveLength(1);
+    const zodIssue = zodIssues[0] as Record<string, unknown>;
+    const compiledIssue = compiledIssues[0] as Record<string, unknown>;
+    expect("input" in zodIssue, "zod's ctx.error.issues drop input").toBe(false);
+    expect("input" in compiledIssue, "compiled ctx.error.issues drop input").toBe(false);
+    expect(Object.keys(compiledIssue).sort()).toStrictEqual(Object.keys(zodIssue).sort());
   });
 });

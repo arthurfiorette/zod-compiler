@@ -105,3 +105,75 @@ describe("known divergence — a catchall validates inherited keys but cannot re
     expect(ourData["inh"]).toBe("yes");
   });
 });
+
+/**
+ * `z.catch()`'s RAW `ctx.issues` VIEW.
+ *
+ * zod's $ZodCatch hands the catch callback a ctx with two different views of
+ * the same failure: `ctx.error.issues`, finalized by `util.finalizeIssue`
+ * (message filled in, `path` defaulted, `input` deleted), and `ctx.issues`,
+ * which is the RAW `payload.issues` array straight off the inner parse — no
+ * `message`, no `path`, but WITH `input` and with `inst`, the $ZodType instance
+ * that raised the issue. They are distinct arrays holding distinct objects.
+ *
+ * The compiler produces ONE finalized array and passes it as both fields, so
+ * `ctx.issues` gets the finalized shape rather than the raw one. `inst` is what
+ * makes the raw view unreachable: it is the live zod schema object for the
+ * failing node, and compiled code has no such object — a leaf like the inner
+ * `z.string()` is erased into inline type tests at build time, with no runtime
+ * value to name. Synthesizing a stand-in would be a lie an error map could
+ * dereference (`iss.inst._zod.def`) and crash on, so the raw view is left as
+ * the finalized one; the finalized view — the one zod's own docs point at, and
+ * the only one carrying human-readable messages — matches exactly.
+ */
+describe("known divergence — z.catch()'s raw ctx.issues view is the finalized one", () => {
+  const seen = (sink: (ctx: { issues: unknown[]; error: { issues: unknown[] } }) => void) =>
+    z.string().catch((ctx) => {
+      sink(ctx as unknown as { issues: unknown[]; error: { issues: unknown[] } });
+      return "fallback";
+    });
+
+  const capture = (
+    run: (sink: (ctx: { issues: unknown[]; error: { issues: unknown[] } }) => void) => void,
+  ) => {
+    let captured: { issues: unknown[]; error: { issues: unknown[] } } | undefined;
+    run((ctx) => {
+      captured = ctx;
+    });
+    if (!captured) throw new Error("catch callback never ran");
+    return captured;
+  };
+
+  it("zod's ctx.issues is the raw payload (input + inst, no message/path)", () => {
+    const ctx = capture((sink) => {
+      seen(sink).safeParse(123);
+    });
+    expect(Object.keys(ctx.issues[0] as object).sort()).toStrictEqual([
+      "code",
+      "expected",
+      "input",
+      "inst",
+    ]);
+    // ...and it is a DIFFERENT array from the finalized one.
+    expect(ctx.issues).not.toBe(ctx.error.issues);
+    expect(Object.keys(ctx.error.issues[0] as object).sort()).toStrictEqual([
+      "code",
+      "expected",
+      "message",
+      "path",
+    ]);
+  });
+
+  it("the compiler serves the finalized array for both views", () => {
+    const ctx = capture((sink) => {
+      compileLikeProduction(seen(sink), "catchRawView")(123);
+    });
+    expect(ctx.issues).toBe(ctx.error.issues);
+    expect(Object.keys(ctx.issues[0] as object).sort()).toStrictEqual([
+      "code",
+      "expected",
+      "message",
+      "path",
+    ]);
+  });
+});
