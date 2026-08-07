@@ -80,6 +80,12 @@ export interface ZodDef {
   left: ZodSchema;
   right: ZodSchema;
   discriminator: string;
+  /**
+   * `z.discriminatedUnion(disc, opts, { unionFallback: true })` — on a dispatch
+   * miss zod retries every option plain-union style instead of reporting
+   * "No matching discriminator". Forces fallback.
+   */
+  unionFallback?: boolean;
   /** false on z.xor() unions (exactly-one-match semantics). */
   inclusive?: boolean;
   defaultValue: unknown;

@@ -13,6 +13,7 @@ import { z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import type { RefEntry } from "#src/core/extract/index.js";
 import { extractSchema } from "#src/core/extract/index.js";
+import type { ZodLikeSchema } from "./parity-harness.js";
 import { compileLikeProduction, expectParity } from "./parity-harness.js";
 
 /** Extraction produced a real compiled validator, not a delegation to Zod. */
@@ -766,5 +767,275 @@ describe("discriminated-union dispatch on the build path", () => {
     expectCompiled(schema);
     expectParity(schema, [...INPUTS, { t: "a", v: " x " }], "duTrim");
     expect(buildEntryBody(schema), "still dispatches").toContain('switch(input["t"])');
+  });
+});
+
+// ─── Discriminators the compiled dispatch cannot represent ──────────────────
+// Zod resolves a discriminated union through a `Map` built from each option's
+// `propValues`, read as `map.get(input[disc])` — i.e. SameValueZero. Every
+// compiled dispatch form is `===`-shaped instead: the slow walk's `switch`, the
+// fast check's `switch`, the build pass's `switch`, and the ordinal variant's
+// string-keyed property lookup. The two agree on every value but ONE — `NaN`,
+// which SameValueZero matches against itself and `===` does not. So
+// `z.literal(NaN)` contributed a `case NaN:` that is dead code, and the input
+// zod happily routes fell through to the "No matching discriminator" arm: zod
+// ACCEPTED `{t:NaN,v:1}` while the compiled form rejected it, on the fast path,
+// the build path and the slow walk alike. `isSwitchableDiscriminant` already
+// refuses NaN on the plain-union auto-discrimination path for this exact reason;
+// `z.discriminatedUnion` had no such guard, and the `seenValues` Set could only
+// ever have caught a DUPLICATE NaN, not a lone one.
+//
+// `{ unionFallback: true }` is the second shape the discriminated IR cannot
+// hold. On a dispatch MISS zod does not report "No matching discriminator" — it
+// runs `_super(payload, ctx)`, $ZodUnion's own parse, retrying every option.
+// That changes the error SHAPE (a plain `invalid_union` at path `[]` carrying
+// per-option `errors`, versus the discriminator-tagged issue at `[disc]`) and
+// also the VERDICT wherever an option accepts input the dispatch table never
+// routes to it — `z.literal("a").default("a")` contributes only `"a"` to
+// `propValues` while its own parse also accepts a MISSING key, so `{v:"x"}`
+// misses dispatch yet the plain-union retry accepts it and defaults `t`.
+//
+// Both delegate to Zod, which is parity by construction. The controls pin that
+// nothing ELSE started delegating with them.
+
+describe("discriminators the compiled dispatch cannot represent", () => {
+  /** The root IR type — "discriminatedUnion" when it really compiled. */
+  function rootIrType(schema: unknown): string {
+    return (extractSchema(schema, []) as { type: string }).type;
+  }
+
+  const NAN_INPUTS = [
+    { t: NaN, v: 1 },
+    { t: NaN, v: "wrong" },
+    { t: "b", v: "x" },
+    { t: "b", v: 1 },
+    { t: "zzz", v: 1 },
+    { v: 1 },
+    { t: 0, v: 1 },
+    null,
+    "nope",
+    [],
+  ];
+
+  it("a NaN discriminator delegates to zod instead of emitting a dead case arm", () => {
+    const schema = z.discriminatedUnion("t", [
+      z.object({ t: z.literal(NaN), v: z.number() }),
+      z.object({ t: z.literal("b"), v: z.string() }),
+    ]);
+    expect(rootIrType(schema), "NaN cannot be a `===` case label").toBe("fallback");
+    expectParity(schema as unknown as ZodLikeSchema, NAN_INPUTS, "duNaN");
+  });
+
+  it("a NaN discriminator diverges on the FAST path too, nested in containers", () => {
+    // Nesting is what runs the boolean fast check (`__du_N(x)`), which is a
+    // separate `switch` from the slow walk's — both had the dead `case NaN:`.
+    const du = z.discriminatedUnion("t", [
+      z.object({ t: z.literal(NaN), v: z.number() }),
+      z.object({ t: z.literal("b"), v: z.string() }),
+    ]);
+    expectParity(
+      z.object({ u: du as never }),
+      NAN_INPUTS.map((i) => ({ u: i })),
+      "duNaNNested",
+    );
+    expectParity(
+      z.array(du as never),
+      NAN_INPUTS.map((i) => [i]),
+      "duNaNArray",
+    );
+  });
+
+  it("a NaN discriminator alongside 3+ string cases (ordinal-table dispatch)", () => {
+    // With three or more all-string values the fast path switches to a
+    // string-keyed ordinal TABLE — `tbl[t]`, a property lookup, which coerces
+    // NaN to the key `"NaN"` rather than matching it. One non-string value keeps
+    // the plain switch, but the guard has to hold for both shapes.
+    const schema = z.discriminatedUnion("t", [
+      z.object({ t: z.literal(NaN), v: z.number() }),
+      z.object({ t: z.literal("b"), v: z.string() }),
+      z.object({ t: z.literal("c"), v: z.string() }),
+      z.object({ t: z.literal("d"), v: z.string() }),
+    ]);
+    expect(rootIrType(schema)).toBe("fallback");
+    expectParity(
+      schema as unknown as ZodLikeSchema,
+      [...NAN_INPUTS, { t: "c", v: "x" }, { t: "d", v: 1 }],
+      "duNaNTable",
+    );
+  });
+
+  it("NaN reached through an enum-shaped multi-value literal also delegates", () => {
+    // The guard sits inside the per-VALUE loop, not on the option, so a literal
+    // that lists NaN among ordinary values is caught the same way.
+    const schema = z.discriminatedUnion("t", [
+      z.object({ t: z.literal(["a", NaN]), v: z.number() }),
+      z.object({ t: z.literal("b"), v: z.string() }),
+    ]);
+    expect(rootIrType(schema)).toBe("fallback");
+    expectParity(
+      schema as unknown as ZodLikeSchema,
+      [...NAN_INPUTS, { t: "a", v: 1 }, { t: "a", v: "x" }],
+      "duNaNMulti",
+    );
+  });
+
+  it("{ unionFallback: true } delegates — a miss retries every option", () => {
+    const schema = z.discriminatedUnion(
+      "t",
+      [
+        z.object({ t: z.literal("a"), v: z.string() }),
+        z.object({ t: z.literal("b"), v: z.number() }),
+      ],
+      { unionFallback: true },
+    );
+    expect(rootIrType(schema), "the retry has no discriminated-IR form").toBe("fallback");
+    expectParity(
+      schema as unknown as ZodLikeSchema,
+      [
+        { t: "a", v: "x" },
+        { t: "b", v: 1 },
+        // The misses: zod reports a plain `invalid_union` at path `[]` with the
+        // options' own errors, not the "No matching discriminator" issue at `["t"]`.
+        { t: "zzz", v: "x" },
+        { v: "x" },
+        { t: null, v: "x" },
+        { t: "a", v: 1 },
+        null,
+        "nope",
+      ],
+      "duUnionFallback",
+    );
+  });
+
+  it("{ unionFallback: true } changes the VERDICT, not just the message", () => {
+    // `.default()` on the discriminator: `propValues` holds only `"a"`, so `{}`
+    // misses dispatch — but the retry runs option 0's own parse, which defaults
+    // the absent `t` and ACCEPTS. Compiled dispatch alone rejected it outright.
+    const schema = z.discriminatedUnion(
+      "t",
+      [
+        z.object({ t: z.literal("a").default("a"), v: z.string() }),
+        z.object({ t: z.literal("b"), v: z.number() }),
+      ],
+      { unionFallback: true },
+    );
+    expect(rootIrType(schema)).toBe("fallback");
+    expect(schema.safeParse({ v: "x" }), "zod accepts and defaults t").toEqual({
+      success: true,
+      data: { t: "a", v: "x" },
+    });
+    expectParity(
+      schema as unknown as ZodLikeSchema,
+      [{ v: "x" }, { t: "a", v: "x" }, { t: "b", v: 1 }, { t: "zzz", v: "x" }, { v: 1 }],
+      "duUnionFallbackVerdict",
+    );
+  });
+
+  it("CONTROL: every other discriminator kind still compiles to dispatch", () => {
+    const kinds: [string, unknown, unknown[]][] = [
+      [
+        "number",
+        z.discriminatedUnion("t", [
+          z.object({ t: z.literal(1), v: z.number() }),
+          z.object({ t: z.literal(2), v: z.string() }),
+        ]),
+        [
+          { t: 1, v: 1 },
+          { t: 2, v: "x" },
+          { t: 3, v: 1 },
+          { t: 1, v: "x" },
+        ],
+      ],
+      [
+        // -0 and 0 are the SAME key under both SameValueZero and `===`, so a
+        // `case -0:` (emitted as `case 0:`) routes exactly what zod's Map does.
+        "negativeZero",
+        z.discriminatedUnion("t", [
+          z.object({ t: z.literal(-0), v: z.number() }),
+          z.object({ t: z.literal(1), v: z.string() }),
+        ]),
+        [
+          { t: -0, v: 1 },
+          { t: 0, v: 1 },
+          { t: 1, v: "x" },
+          { t: -0, v: "x" },
+          { t: 2, v: 1 },
+        ],
+      ],
+      [
+        "infinity",
+        z.discriminatedUnion("t", [
+          z.object({ t: z.literal(Number.POSITIVE_INFINITY), v: z.number() }),
+          z.object({ t: z.literal(Number.NEGATIVE_INFINITY), v: z.string() }),
+        ]),
+        [
+          { t: Number.POSITIVE_INFINITY, v: 1 },
+          { t: Number.NEGATIVE_INFINITY, v: "x" },
+          { t: 0, v: 1 },
+          { t: Number.POSITIVE_INFINITY, v: "x" },
+        ],
+      ],
+      [
+        "bigint",
+        z.discriminatedUnion("t", [
+          z.object({ t: z.literal(1n), v: z.number() }),
+          z.object({ t: z.literal(2n), v: z.string() }),
+        ]),
+        [
+          { t: 1n, v: 1 },
+          { t: 2n, v: "x" },
+          { t: 3n, v: 1 },
+          { t: 1, v: 1 },
+        ],
+      ],
+      [
+        "boolean",
+        z.discriminatedUnion("t", [
+          z.object({ t: z.literal(true), v: z.number() }),
+          z.object({ t: z.literal(false), v: z.string() }),
+        ]),
+        [
+          { t: true, v: 1 },
+          { t: false, v: "x" },
+          { t: 1, v: 1 },
+          { t: true, v: "x" },
+        ],
+      ],
+      [
+        "null",
+        z.discriminatedUnion("t", [
+          z.object({ t: z.null(), v: z.number() }),
+          z.object({ t: z.literal("b"), v: z.string() }),
+        ]),
+        [
+          { t: null, v: 1 },
+          { t: "b", v: "x" },
+          { t: undefined, v: 1 },
+          { t: null, v: "x" },
+        ],
+      ],
+      [
+        // Truthiness is the test zod itself applies (`if (def.unionFallback)`),
+        // so an explicit `false` must keep dispatching.
+        "unionFallbackFalse",
+        z.discriminatedUnion(
+          "t",
+          [
+            z.object({ t: z.literal("a"), v: z.string() }),
+            z.object({ t: z.literal("b"), v: z.number() }),
+          ],
+          { unionFallback: false },
+        ),
+        [{ t: "a", v: "x" }, { t: "b", v: 1 }, { t: "zzz", v: "x" }, { v: "x" }],
+      ],
+    ];
+
+    for (const [label, schema, inputs] of kinds) {
+      expect(rootIrType(schema), `${label} must still compile to dispatch`).toBe(
+        "discriminatedUnion",
+      );
+      expectCompiled(schema);
+      expectParity(schema as ZodLikeSchema, inputs, `duControl_${label}`);
+    }
   });
 });

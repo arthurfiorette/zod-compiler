@@ -22,6 +22,22 @@ export function extractUnion(def: ZodDef, ctx: ExtractorContext): SchemaIR {
     return ctx.visit(def.options[0], "._zod.def.options[0]");
   }
   if (def.discriminator) {
+    // `z.discriminatedUnion(disc, opts, { unionFallback: true })` means "on a
+    // dispatch miss, behave like a PLAIN union": zod runs `_super(payload, ctx)`
+    // — $ZodUnion's own parse — retrying every option instead of reporting
+    // "No matching discriminator". The compiled discriminated IR has no room for
+    // that retry: its `default:` arm is the terminal no-match. Modelling it would
+    // mean emitting a second, full plain-union walk behind the switch, and the
+    // two arms differ in BOTH directions — the error shape (zod's plain
+    // `invalid_union` at path `[]` carrying per-option `errors`, not the
+    // discriminator-tagged issue at `[disc]`) and the VERDICT, whenever an option
+    // accepts input the dispatch table never routes to it (a `.default()` on the
+    // discriminator contributes only its literal value to `propValues` while its
+    // own parse also accepts a MISSING key, so `{}` misses dispatch yet the
+    // retry accepts it). Delegate to zod — parity by construction.
+    if (def.unionFallback) {
+      return ctx.fallback("unsupported");
+    }
     // zod's `_zod.propValues[discriminator]` is the authoritative dispatch
     // table — it covers literal AND enum discriminators with typed values.
     // An option without resolvable values would be unreachable in the
@@ -50,6 +66,20 @@ export function extractUnion(def: ZodDef, ctx: ExtractorContext): SchemaIR {
           typeof v !== "boolean" &&
           typeof v !== "bigint"
         ) {
+          return ctx.fallback("unsupported");
+        }
+        // NaN is a LIVE dispatch key for zod: its table is a `Map`, and
+        // `Map.prototype.get` matches by SameValueZero, under which NaN equals
+        // itself — so `z.literal(NaN)` really does route. Every compiled dispatch
+        // form is `===`-shaped instead (the slow walk's `switch`, the fast
+        // check's `switch`, the build pass's `switch`, and the ordinal table's
+        // string-keyed lookup), and `NaN === NaN` is false, so `case NaN:` is
+        // dead code and the input falls through to the "No matching
+        // discriminator" arm zod never reaches. A switch label cannot express
+        // SameValueZero, so delegate. (`isSwitchableDiscriminant` refuses NaN on
+        // the plain-union auto-discrimination path for exactly this reason; the
+        // `seenValues` Set below would only have caught a DUPLICATE NaN.)
+        if (typeof v === "number" && Number.isNaN(v)) {
           return ctx.fallback("unsupported");
         }
         if (seenValues.has(v)) {
