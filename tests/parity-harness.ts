@@ -14,9 +14,11 @@ import {
   FIN_DECL,
   FIN_DEFERRED_DECL,
   FINZ_DECL,
+  ZOD_CONFIG_IMPORT,
   ZOD_MSG_DECLARATION,
 } from "#src/core/iife.js";
 import type { SafeParseResult } from "#src/core/types.js";
+import { RESOLVED_RUNTIME_ID, loadVirtual } from "#src/unplugin/virtual.js";
 
 // `__zcMsg` is built from the SAME declaration production emits, not a
 // stand-in: it resolves `config.customError`/`config.localeError` per call, so
@@ -74,6 +76,46 @@ export function compileLikeProduction(
   return factory(z.config, ZodRealError, core, localizedFin, finZ, rf) as (
     input: unknown,
   ) => SafeParseResult<unknown>;
+}
+
+/**
+ * Lean-mode (unplugin) counterpart of {@link compileLikeProduction}. There the
+ * generated code does not inline issue objects at each site — it CALLS the
+ * factories hosted in "virtual:zod-compiler/runtime", so an issue's shape lives
+ * in two places at once and the two can drift.
+ *
+ * The helper bodies come from the real virtual module source rather than a
+ * transcription: `loadVirtual` is the same function the bundler plugins call,
+ * with the `import` line and the `export` keywords stripped so the module body
+ * can be evaluated as a function body. An inline emit and its lean helper that
+ * disagree about an issue's fields therefore cannot both pass.
+ */
+export function compileLeanLikeProduction(
+  schema: unknown,
+  name = "leanParity",
+): (input: unknown) => SafeParseResult<unknown> {
+  const refEntries: RefEntry[] = [];
+  const ir = extractSchema(schema, refEntries);
+  const generated = generateValidator(ir, name, {
+    refCount: refEntries.length,
+    mode: "lean",
+  });
+  const runtime = (loadVirtual(RESOLVED_RUNTIME_ID) ?? "")
+    .replace(ZOD_CONFIG_IMPORT, "")
+    .replaceAll(/^export /gm, "");
+  const factory = new Function(
+    "__zodCompilerConfig",
+    "__zcCore",
+    "__zcZodError",
+    "__rf",
+    `"use strict";${runtime}\n${generated.code}\nreturn ${generated.functionDef};`,
+  );
+  return factory(
+    z.config,
+    core,
+    ZodRealError,
+    refEntries.map((e) => e.schema),
+  ) as (input: unknown) => SafeParseResult<unknown>;
 }
 
 /** JSON.stringify that survives BigInt, symbols, and other non-serializable inputs. */

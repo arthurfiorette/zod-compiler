@@ -7,10 +7,11 @@
  *
  * Argument convention (positional, kept short to minimize call-site bytes):
  *   __zcTS(minimum, origin, inclusive, input, path, msg?)  — too_small
+ *   __zcTSn(minimum, origin, input, path, msg?)            — too_small with NO `inclusive` key
  *   __zcTB(maximum, origin, inclusive, input, path, msg?)  — too_big
  *   __zcIT(expected, input, path, msg?)                    — invalid_type
  *   __zcIF(format, input, path, extra?, msg?)              — invalid_format (extra merged into result)
- *   __zcIV(values, input, path, msg?)                      — invalid_value
+ *   __zcIV(values, input, path, extra?, msg?)              — invalid_value (extra merged into result)
  *   __zcUK(keys, input, path, msg?)                        — unrecognized_keys
  *
  * The trailing msg argument carries a static custom error message; when
@@ -19,6 +20,16 @@
 
 const ZC_TS_DECL =
   'function __zcTS(m,o,i,inp,p,msg){var r={code:"too_small",minimum:m,origin:o,inclusive:i,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
+
+/**
+ * too_small with the `inclusive` key ABSENT, not false. $ZodTuple's under-length
+ * branch pushes `{ code: "too_small", minimum: items.length }` and nothing else
+ * — the over-length branch of the same ternary is the one that spells out
+ * `inclusive: true` — so the tuple's issue must not carry the key at all.
+ * Separate from __zcTS because the value cannot express absence.
+ */
+const ZC_TS_NO_INCLUSIVE_DECL =
+  'function __zcTSn(m,o,inp,p,msg){var r={code:"too_small",minimum:m,origin:o,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
 
 const ZC_TS_EXACT_DECL =
   'function __zcTSx(m,o,inp,p,msg){var r={code:"too_small",minimum:m,origin:o,inclusive:true,exact:true,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
@@ -35,8 +46,13 @@ const ZC_IT_DECL =
 const ZC_IF_DECL =
   'function __zcIF(f,inp,p,extra,msg){var r={code:"invalid_format",format:f,input:inp,path:p};if(extra)Object.assign(r,extra);if(msg!==undefined)r.message=msg;return r;}';
 
+/**
+ * `extra` carries the per-producer fields: enum and literal push `values` only,
+ * while z.stringbool()'s codec transform also pushes `expected: "stringbool"`.
+ * Merged the same way __zcIF merges its own.
+ */
 const ZC_IV_DECL =
-  'function __zcIV(values,inp,p,msg){var r={code:"invalid_value",values:values,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
+  'function __zcIV(values,inp,p,extra,msg){var r={code:"invalid_value",values:values,input:inp,path:p};if(extra)Object.assign(r,extra);if(msg!==undefined)r.message=msg;return r;}';
 
 const ZC_UK_DECL =
   'function __zcUK(k,inp,p,msg){var r={code:"unrecognized_keys",keys:k,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
@@ -44,6 +60,7 @@ const ZC_UK_DECL =
 /** All issue factory declarations indexed by helper name. */
 export const ISSUE_DECLS: Readonly<Record<string, string>> = {
   __zcTS: ZC_TS_DECL,
+  __zcTSn: ZC_TS_NO_INCLUSIVE_DECL,
   __zcTSx: ZC_TS_EXACT_DECL,
   __zcTB: ZC_TB_DECL,
   __zcTBx: ZC_TB_EXACT_DECL,

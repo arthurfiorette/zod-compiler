@@ -21,11 +21,17 @@ function optStart(ir: TupleIR): number {
 
 /**
  * Mirrors $ZodTuple: without rest, over-length input emits a single too_big
- * and `length < optStart - 1` a single too_small (minimum = items.length,
- * non-inclusive phrasing) — both created by the tuple node (schema error
- * applies) and both skip item validation. Anything else validates items;
- * missing required items read as undefined and fail their item schema's type
- * check at the right path.
+ * and `length < optStart - 1` a single too_small (minimum = items.length) —
+ * both created by the tuple node (schema error applies) and both skip item
+ * validation. Anything else validates items; missing required items read as
+ * undefined and fail their item schema's type check at the right path.
+ *
+ * The two halves of zod's ternary are NOT symmetric about `inclusive`:
+ * `tooBig ? { code: "too_big", maximum: items.length, inclusive: true } :
+ * { code: "too_small", minimum: items.length }`. The under-length issue has no
+ * `inclusive` key at all, so it is emitted with `"omit"` rather than `false` —
+ * which would be an invented field. The locale phrases it ">N items" off the
+ * key's absence, which is why the message matched even while the shape did not.
  */
 export function slowTuple(ir: SchemaIR & { type: "tuple" }, g: SlowGen): string {
   const len = ir.items.length;
@@ -66,7 +72,7 @@ export function slowTuple(ir: SchemaIR & { type: "tuple" }, g: SlowGen): string 
       if(${g.input}.length>${len}){
         ${tooBig(g, len, "array", true, { useTypeMsg: true })}
       }else if(${g.input}.length<${start - 1}){
-        ${tooSmall(g, len, "array", false, { useTypeMsg: true })}
+        ${tooSmall(g, len, "array", "omit", { useTypeMsg: true })}
       }else{
         ${itemsCode}
       }`;

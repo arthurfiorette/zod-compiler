@@ -19,6 +19,12 @@ export function slowStringBool(ir: StringBoolIR, g: SlowGen): string {
   if (!ir.caseSensitive) code += `var ${normalized}=${g.input}.toLowerCase();`;
   const allValues = [...ir.truthy, ...ir.falsy];
   const valuesExpr = JSON.stringify(allValues);
+  // z.stringbool() is a Codec whose transform pushes
+  // `{ code: "invalid_value", expected: "stringbool", values: [...] }` — the
+  // only invalid_value producer that carries an `expected` (enum and literal
+  // push `values` alone), and zod's locale keys off it. Both emitted lookups
+  // below share this so the two code paths cannot drift apart.
+  const expectedExtra = 'expected:"stringbool"';
 
   // Compare per-side counts against threshold (not the combined total)
   const useInline = stringBoolUsesInline(ir);
@@ -29,14 +35,14 @@ export function slowStringBool(ir: StringBoolIR, g: SlowGen): string {
     code += emit`
       if(${truthyCondition}){${g.output}=true;}
       else if(${falsyCondition}){${g.output}=false;}
-      else{${invalidValue(g, valuesExpr)}}
+      else{${invalidValue(g, valuesExpr, { extra: expectedExtra })}}
     `;
   } else {
     const value = g.temp("sbv");
     const lookup = emitStringBoolMap(ir, g.ctx);
     code += emit`
       var ${value}=${lookup}.get(${normalized});
-      if(${value}===undefined){${invalidValue(g, valuesExpr)}}
+      if(${value}===undefined){${invalidValue(g, valuesExpr, { extra: expectedExtra })}}
       else{${g.output}=${value};}
     `;
   }

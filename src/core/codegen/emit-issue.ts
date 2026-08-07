@@ -64,7 +64,16 @@ export function tooSmall(
   g: IssueGen,
   minimum: string | number,
   origin: string,
-  inclusive: boolean,
+  /**
+   * `"omit"` leaves the key OFF the issue entirely — not the same as `false`.
+   * $ZodTuple's under-length branch pushes a bare
+   * `{ code: "too_small", minimum: items.length }` (its over-length sibling in
+   * the very same ternary spells out `inclusive: true`), so a tuple issue
+   * carrying `inclusive: false` has a field zod never wrote. Every check-created
+   * size issue (array/string/set/number/bigint/date min) does carry it, `false`
+   * included — that is what `.gt()`/`.lt()` report.
+   */
+  inclusive: boolean | "omit",
   options?: {
     exact?: boolean;
     input?: string;
@@ -86,6 +95,13 @@ export function tooSmall(
         `__zcTSx(${minimum},${escapeString(origin)},${input},${path}${messageArg(m)})`,
       );
     }
+    if (inclusive === "omit") {
+      g.ctx.usedHelpers.add("__zcTSn");
+      return pushIssue(
+        g,
+        `__zcTSn(${minimum},${escapeString(origin)},${input},${path}${messageArg(m)})`,
+      );
+    }
     g.ctx.usedHelpers.add("__zcTS");
     return pushIssue(
       g,
@@ -98,9 +114,10 @@ export function tooSmall(
       `{code:"too_small",minimum:${minimum},origin:${escapeString(origin)},inclusive:true,exact:true${messageProp(m)},input:${input},path:${path}}`,
     );
   }
+  const inclusiveProp = inclusive === "omit" ? "" : `,inclusive:${inclusive}`;
   return pushIssue(
     g,
-    `{code:"too_small",minimum:${minimum},origin:${escapeString(origin)},inclusive:${inclusive}${messageProp(m)},input:${input},path:${path}}`,
+    `{code:"too_small",minimum:${minimum},origin:${escapeString(origin)}${inclusiveProp}${messageProp(m)},input:${input},path:${path}}`,
   );
 }
 
@@ -226,6 +243,15 @@ export function invalidValue(
   options?: {
     input?: string;
     path?: string;
+    /**
+     * Extra issue properties as a source fragment (`'expected:"stringbool"'`),
+     * modelled on {@link invalidFormat}'s option of the same name. Explicitly
+     * `| undefined` so a caller can compute it conditionally: the `invalid_value`
+     * producers do NOT agree on fields — enum and literal push only `values`,
+     * while z.stringbool()'s codec transform also pushes
+     * `expected: "stringbool"`, which zod's locale reads to phrase the message.
+     */
+    extra?: string | undefined;
     message?: string | undefined;
     /** Set to false for check-level issues (file mime) where schema error does not apply. */
     useTypeMsg?: boolean;
@@ -237,10 +263,12 @@ export function invalidValue(
   const m = resolveMessage(g, options?.message, options?.useTypeMsg !== false);
   if (g.ctx.mode === "lean") {
     g.ctx.usedHelpers.add("__zcIV");
-    return pushIssue(g, `__zcIV(${valuesExpr},${input},${path}${messageArg(m)})`);
+    const extraArg = options?.extra ? `,{${options.extra}}` : m !== undefined ? ",undefined" : "";
+    return pushIssue(g, `__zcIV(${valuesExpr},${input},${path}${extraArg}${messageArg(m)})`);
   }
+  const extra = options?.extra ? `,${options.extra}` : "";
   return pushIssue(
     g,
-    `{code:"invalid_value",values:${valuesExpr}${messageProp(m)},input:${input},path:${path}}`,
+    `{code:"invalid_value",values:${valuesExpr}${extra}${messageProp(m)},input:${input},path:${path}}`,
   );
 }

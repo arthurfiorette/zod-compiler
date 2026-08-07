@@ -36,11 +36,15 @@ export function slowDiscriminatedUnion(
         break;`;
   }
 
-  const validValues = ir.cases.map((c) => literalToJs(c.value)).join(",");
   const msgProp = g.typeMsg === undefined ? "" : `,message:${JSON.stringify(g.typeMsg)}`;
+  // Field for field what $ZodDiscriminatedUnion pushes when no option matches:
+  // `{ code, errors: [], note: "No matching discriminator", discriminator,
+  // input, path: [def.discriminator] }`. There is deliberately no `options`
+  // key — zod never enumerates the valid discriminator values here, so adding
+  // them invents a field consumers would find on no real zod issue.
   code += emit`
     default:
-      ${g.issues}.push({code:"invalid_union",errors:[],note:"No matching discriminator",discriminator:${discKey},options:[${validValues}]${msgProp},input:${g.input},path:${extendPath(g.path, discKey)}});
+      ${g.issues}.push({code:"invalid_union",errors:[],note:"No matching discriminator",discriminator:${discKey}${msgProp},input:${g.input},path:${extendPath(g.path, discKey)}});
     }`;
   // Propagate option-applied mutations (defaults, coercions, transforms,
   // overwrite checks, stringbool) back to the output location. Each option is

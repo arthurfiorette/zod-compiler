@@ -11,10 +11,16 @@
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
+import { stringBoolUsesInline } from "#src/core/codegen/schemas/string-bool.js";
 import type { RefEntry } from "#src/core/extract/index.js";
 import { extractSchema } from "#src/core/extract/index.js";
+import type { StringBoolIR } from "#src/core/types.js";
 import type { ZodLikeSchema } from "./parity-harness.js";
-import { compileLikeProduction, expectParity } from "./parity-harness.js";
+import {
+  compileLeanLikeProduction,
+  compileLikeProduction,
+  expectParity,
+} from "./parity-harness.js";
 
 /** Extraction produced a real compiled validator, not a delegation to Zod. */
 function expectCompiled(schema: unknown): void {
@@ -1251,5 +1257,276 @@ describe("records with a rewriting key schema", () => {
       [{ id_1: 1 }, { id_x: 1 }],
       "recTemplateKey",
     );
+  });
+});
+
+// ─── Issue FIELDS, not just code and path ───────────────────────────────────
+// `expectParity` compares each issue's code, its path, and the first message —
+// it never looks at the rest of the issue object. Four field-level divergences
+// shipped under a green suite behind that blind spot:
+//
+//   tuple too_small       invented `inclusive: false`. Zod's $ZodTuple writes
+//                         the two halves of one ternary asymmetrically —
+//                         `{code:"too_big", maximum, inclusive:true}` but a bare
+//                         `{code:"too_small", minimum}` — so the key is ABSENT,
+//                         which is not the same as present-and-false.
+//   z.stringbool()        dropped `expected:"stringbool"`. Its codec transform
+//                         is the only `invalid_value` producer that carries an
+//                         `expected` (enum and literal push `values` alone).
+//   z.templateLiteral()   reported the slash-wrapped `/source/`.
+//                         $ZodTemplateLiteral pushes `pattern.source` BARE;
+//                         only string-format checks use `pattern.toString()`.
+//   discriminated union   invented `options:[...]` on the no-match issue. Zod
+//                         never enumerates the valid discriminator values.
+//
+// Each case pins ZOD's own key set literally, so an upstream field change
+// surfaces here as a failure instead of as a silent shape drift, and then
+// requires the compiled issue — in BOTH emit modes — to equal zod's field for
+// field. The controls are the neighbouring shapes that legitimately DO carry
+// the field in question and must not move.
+
+describe("issue fields beyond code and path", () => {
+  /**
+   * One issue with any `input: undefined` key dropped, recursively through an
+   * `invalid_union`'s nested `errors`.
+   *
+   * Zod's `util.finalizeIssue` DELETES `input`; the generated finalizers clear
+   * it by assignment instead (see FAIL_CLASS_DECL), so every compiled issue
+   * carries the key. That difference is universal — it is on the controls too —
+   * and long pre-dates these cases, so it is normalized away rather than pinned.
+   */
+  function stripClearedInput(issue: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(issue)) {
+      if (key === "input" && value === undefined) continue;
+      out[key] =
+        key === "errors" && Array.isArray(value)
+          ? value.map((group: unknown) =>
+              Array.isArray(group)
+                ? group.map((nested) => stripClearedInput(nested as Record<string, unknown>))
+                : group,
+            )
+          : value;
+    }
+    return out;
+  }
+
+  function firstIssue(result: {
+    success: boolean;
+    error?: { issues: unknown[] };
+  }): Record<string, unknown> {
+    expect(result.success, "input must be rejected for there to be an issue").toBe(false);
+    return result.error?.issues[0] as Record<string, unknown>;
+  }
+
+  /**
+   * Pin zod's key set, then require both emit modes to reproduce zod's issue
+   * field for field. `expectedKeys` is written out literally (sorted) so an
+   * upstream field addition or removal fails loudly rather than propagating.
+   */
+  function expectIssueFields(
+    schema: ZodLikeSchema,
+    input: unknown,
+    name: string,
+    expectedKeys: string[],
+  ): void {
+    const zodIssue = firstIssue(
+      schema.safeParse(input) as { success: boolean; error?: { issues: unknown[] } },
+    );
+    expect(Object.keys(zodIssue).sort(), `zod's own issue keys for ${name}`).toStrictEqual(
+      expectedKeys,
+    );
+    const modes = [
+      ["inline", compileLikeProduction(schema, name)],
+      ["lean", compileLeanLikeProduction(schema, `${name}Lean`)],
+    ] as const;
+    for (const [mode, compiled] of modes) {
+      const issue = firstIssue(
+        compiled(input) as unknown as { success: boolean; error?: { issues: unknown[] } },
+      );
+      expect(stripClearedInput(issue), `${mode} issue fields for ${name}`).toStrictEqual(zodIssue);
+    }
+  }
+
+  it("tuple length issues: too_small omits `inclusive`, too_big keeps it", () => {
+    const pair = z.tuple([z.string(), z.number()]);
+    expectCompiled(pair);
+    // No `inclusive` — zod's under-length branch never writes one. The locale
+    // reads its absence as the exclusive phrasing (">2 items"), which is why the
+    // message matched all along while the shape did not.
+    expectIssueFields(pair, [], "tupleTooSmall", ["code", "message", "minimum", "origin", "path"]);
+    // Its sibling in the same ternary DOES spell out `inclusive: true`.
+    expectIssueFields(pair, ["a", 1, 2], "tupleTooBig", [
+      "code",
+      "inclusive",
+      "maximum",
+      "message",
+      "origin",
+      "path",
+    ]);
+    // An omittable tail moves `optStart`, not the issue's shape.
+    const withOptionalTail = z.tuple([z.string(), z.number(), z.string().optional()]);
+    expectCompiled(withOptionalTail);
+    expectIssueFields(withOptionalTail, [], "tupleOptTailTooSmall", [
+      "code",
+      "message",
+      "minimum",
+      "origin",
+      "path",
+    ]);
+  });
+
+  it("CONTROL: check-created size issues still carry `inclusive`", () => {
+    // These come from $ZodCheckMinLength/$ZodCheckMaxLength etc., which set
+    // `inclusive` unconditionally — the tuple fix must not reach them.
+    expectIssueFields(z.array(z.string()).min(2), ["a"], "arrayMin", [
+      "code",
+      "inclusive",
+      "message",
+      "minimum",
+      "origin",
+      "path",
+    ]);
+    expectIssueFields(z.array(z.string()).max(1), ["a", "b"], "arrayMax", [
+      "code",
+      "inclusive",
+      "maximum",
+      "message",
+      "origin",
+      "path",
+    ]);
+    expectIssueFields(z.array(z.string()).length(2), ["a"], "arrayLengthShort", [
+      "code",
+      "exact",
+      "inclusive",
+      "message",
+      "minimum",
+      "origin",
+      "path",
+    ]);
+    expectIssueFields(z.array(z.string()).length(2), ["a", "b", "c"], "arrayLengthLong", [
+      "code",
+      "exact",
+      "inclusive",
+      "maximum",
+      "message",
+      "origin",
+      "path",
+    ]);
+    // The sharpest control for "omit is not false": `.gt()` reports a real
+    // `inclusive: false`, which the value comparison below pins.
+    expectIssueFields(z.number().gt(5), 5, "numberGt", [
+      "code",
+      "inclusive",
+      "message",
+      "minimum",
+      "origin",
+      "path",
+    ]);
+    expect(
+      (z.number().gt(5).safeParse(5) as { error?: { issues: { inclusive?: unknown }[] } }).error
+        ?.issues[0]?.inclusive,
+      "zod really writes inclusive:false here",
+    ).toBe(false);
+  });
+
+  it("z.stringbool() carries `expected`, on both of its emitted lookups", () => {
+    // The two paths differ only in how the value is looked up (see
+    // stringBoolUsesInline): a Map for the default 6-truthy/6-falsy set, an
+    // `===` chain once each side is at or under ENUM_INLINE_THRESHOLD. Both
+    // build the same issue, so both are pinned — and the path each takes is
+    // asserted, so a threshold change cannot quietly collapse the coverage.
+    const mapPath = z.stringbool();
+    const chainPath = z.stringbool({ truthy: ["yes", "y"], falsy: ["no", "n"] });
+    expectCompiled(mapPath);
+    expectCompiled(chainPath);
+    expect(stringBoolUsesInline(extractSchema(mapPath, []) as StringBoolIR)).toBe(false);
+    expect(stringBoolUsesInline(extractSchema(chainPath, []) as StringBoolIR)).toBe(true);
+
+    const keys = ["code", "expected", "message", "path", "values"];
+    expectIssueFields(mapPath, "nope", "stringBoolMap", keys);
+    expectIssueFields(chainPath, "nope", "stringBoolChain", keys);
+  });
+
+  it("CONTROL: enum and literal invalid_value carry no `expected`", () => {
+    const keys = ["code", "message", "path", "values"];
+    expectIssueFields(z.enum(["a", "b"]), "c", "enumInvalidValue", keys);
+    expectIssueFields(z.literal("a"), "b", "literalInvalidValue", keys);
+  });
+
+  it("z.templateLiteral() reports the bare pattern source", () => {
+    const keys = ["code", "format", "message", "path", "pattern"];
+    // Not rewritten: the emitted regex's own `.source` is the original.
+    const plain = z.templateLiteral(["u_", z.number()]);
+    expectCompiled(plain);
+    expectIssueFields(plain, "nope", "templateLiteralPlain", keys);
+    // Rewritten (the `{n}` repeats unroll), so the ORIGINAL source has to be
+    // carried separately — the runtime regex no longer holds it.
+    const rewritten = z.templateLiteral(["id_", z.uuid()]);
+    expectCompiled(rewritten);
+    expectIssueFields(rewritten, "nope", "templateLiteralRewritten", keys);
+    // Sharpest case: a template literal whose whole pattern IS a well-known
+    // regex source. Lean mode used to short-circuit that to the shared
+    // `<name>Src` export, which holds the SLASH-WRAPPED form that string-format
+    // checks want and a template literal must not have.
+    const wellKnown = z.templateLiteral([z.email()]);
+    expectCompiled(wellKnown);
+    expectIssueFields(wellKnown, "nope", "templateLiteralWellKnown", keys);
+    expect(
+      (
+        z.templateLiteral(["u_", z.number()]).safeParse("nope") as {
+          error?: { issues: { pattern?: unknown }[] };
+        }
+      ).error?.issues[0]?.pattern,
+      "zod's template-literal pattern has no enclosing slashes",
+    ).toBe("^u_-?\\d+(?:\\.\\d+)?$");
+  });
+
+  it("CONTROL: string-format checks keep the slash-wrapped pattern", () => {
+    // These report `def.pattern.toString()`, i.e. WITH slashes — the opposite
+    // convention, and the reason the shared source helper cannot serve both.
+    const keys = ["code", "format", "message", "origin", "path", "pattern"];
+    expectIssueFields(z.email(), "nope", "emailFormat", keys);
+    expectIssueFields(z.string().regex(/^a+$/), "b", "regexFormat", keys);
+    expect(
+      (z.email().safeParse("nope") as { error?: { issues: { pattern?: unknown }[] } }).error
+        ?.issues[0]?.pattern,
+      "zod's format pattern is slash-wrapped",
+    ).toMatch(/^\/.*\/$/);
+  });
+
+  it("discriminated-union no-match issue carries no `options`", () => {
+    const keys = ["code", "discriminator", "errors", "message", "note", "path"];
+    const du = z.discriminatedUnion("t", [
+      z.object({ t: z.literal("a"), a: z.string() }),
+      z.object({ t: z.literal("b"), b: z.number() }),
+    ]);
+    expectCompiled(du);
+    expectIssueFields(du, { t: "z" }, "duNoMatch", keys);
+    // Same issue, unchanged, when the union sits under a container — the path
+    // gains the parent segments and nothing else.
+    expectIssueFields(z.object({ v: du }), { v: { t: "z" } }, "duNoMatchInObject", keys);
+    expectIssueFields(z.array(du), [{ t: "z" }], "duNoMatchInArray", keys);
+    // Enough cases to take the ordinal dispatch table rather than the string
+    // switch; the no-match default is shared, but pin it on both.
+    const wide = z.discriminatedUnion("t", [
+      z.object({ t: z.literal("a"), a: z.string() }),
+      z.object({ t: z.literal("b"), b: z.number() }),
+      z.object({ t: z.literal("c"), c: z.number() }),
+      z.object({ t: z.literal("d"), d: z.number() }),
+    ]);
+    expectCompiled(wide);
+    expectIssueFields(wide, { t: "z" }, "duWideNoMatch", keys);
+  });
+
+  it("CONTROL: a plain union's invalid_union is unchanged", () => {
+    // The other producer of `invalid_union`, which reports the per-option
+    // errors rather than a discriminator note.
+    expectIssueFields(z.union([z.string(), z.number()]), true, "plainUnion", [
+      "code",
+      "errors",
+      "message",
+      "path",
+    ]);
   });
 });
