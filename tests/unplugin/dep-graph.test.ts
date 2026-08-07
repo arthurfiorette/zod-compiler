@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vite-plus/test";
-import { collectStaticDeps } from "#src/unplugin/dep-graph.js";
+import { collectStaticDeps, transformDependencies } from "#src/unplugin/dep-graph.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Inside the repo so bare specifiers (zod) resolve through node_modules.
@@ -245,5 +245,70 @@ describe("collectStaticDeps()", () => {
     const fsMod = require("node:fs") as typeof import("node:fs");
     fsMod.utimesSync(entry, future, future);
     expect(collectStaticDeps(entry).deps).toEqual([]);
+  });
+});
+
+describe("transformDependencies()", () => {
+  it("reports the entry first, then its static closure", () => {
+    const dir = project({
+      "entry.ts": `import { a } from "./a";\nexport const x = a;`,
+      "a.ts": `export const a = 1;`,
+    });
+    const entry = path.join(dir, "entry.ts");
+
+    const result = transformDependencies(entry);
+    expect(result.complete).toBe(true);
+    expect(result.files[0]).toBe(entry);
+    expect(result.files).toEqual([entry, path.join(dir, "a.ts")]);
+  });
+
+  it("resolves a relative id before crawling", () => {
+    const dir = project({ "entry.ts": `export const x = 1;` });
+    const entry = path.join(dir, "entry.ts");
+    const relative = path.relative(process.cwd(), entry);
+
+    expect(transformDependencies(relative)).toEqual({ files: [entry], complete: true });
+  });
+
+  /**
+   * The point of the flag: an unanalyzable graph must not be reported as a
+   * usable dependency list. Papering over it with the process-global executed
+   * -modules superset would be unsound — that set is point-in-time, so an
+   * unrelated file's discovery can leave it describing the wrong graph.
+   */
+  it("reports complete: false rather than guessing when the graph is unanalyzable", () => {
+    const dir = project({
+      "entry.ts": `const which = process.env.WHICH;\nexport const m = import(which!);`,
+    });
+    const entry = path.join(dir, "entry.ts");
+
+    expect(collectStaticDeps(entry).complete).toBe(false);
+    expect(transformDependencies(entry)).toEqual({ files: [entry], complete: false });
+  });
+
+  it("never repeats the entry, whatever spelling the caller used", () => {
+    const dir = project({
+      "entry.ts": `import { a } from "./a";\nexport const x = a;`,
+      "a.ts": `import { x } from "./entry";\nexport const a = 1;`,
+    });
+    const entry = path.join(dir, "entry.ts");
+
+    // a.ts imports back, so the entry is reachable from its own closure.
+    const { files } = transformDependencies(entry);
+    expect(files).toEqual([...new Set(files)]);
+    expect(files.filter((f) => f === entry)).toHaveLength(1);
+  });
+
+  it("normalizes a symlinked entry to the same spelling the closure uses", () => {
+    const dir = project({
+      "entry.ts": `import { a } from "./a";\nexport const x = a;`,
+      "a.ts": `export const a = 1;`,
+    });
+    const link = path.join(ROOT, `link${n++}`);
+    symlinkSync(dir, link, "dir");
+
+    const { files } = transformDependencies(path.join(link, "entry.ts"));
+    // Every path realpath'd through the symlink, so no file appears twice.
+    expect(files).toEqual([path.join(dir, "entry.ts"), path.join(dir, "a.ts")]);
   });
 });

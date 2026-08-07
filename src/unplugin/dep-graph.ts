@@ -1,5 +1,6 @@
 /**
- * Static per-file dependency graphs for disk-cache invalidation.
+ * Static per-file dependency graphs, for disk-cache invalidation and for the
+ * watch dependencies a loader host has to declare (see transformDependencies).
  *
  * The disk cache used to record `getFirstPartyModulePaths()` — the superset
  * of EVERY first-party module the loader had executed so far — as each
@@ -310,4 +311,55 @@ export function collectStaticDeps(entryFile: string): StaticDeps {
 
   visited.delete(entry);
   return { deps: [...visited], complete: true };
+}
+
+export interface TransformDependencies {
+  /**
+   * Files to declare as watch dependencies, entry first and deduped. Complete
+   * only when `complete` is true — otherwise it is just the entry.
+   */
+  files: string[];
+  /**
+   * False when the import graph could not be fully analyzed. `files` is then
+   * NOT sufficient, and the host has to reach for a coarser signal (a context
+   * dependency over the project, or refusing to cache the result) instead of
+   * trusting it.
+   */
+  complete: boolean;
+}
+
+/**
+ * Files whose contents can change what `id`'s transform produces — the set a
+ * host must declare as watch dependencies.
+ *
+ * Discovery EXECUTES the file's import graph, so a compiled validator reflects
+ * every constant, enum and helper that graph contributed. A host that keys its
+ * cache on `id`'s own content alone therefore serves a stale validator after an
+ * edit to any of them.
+ *
+ * Bundler plugins do not need this: their `watchChange` hook fires for every
+ * file in the project, so the plugin invalidates wholesale. Loader hosts
+ * (Turbopack, plain webpack loaders) have no such hook — their only lever is
+ * declaring dependencies per file, which is what this returns.
+ *
+ * The entry is always included, for the reason the disk cache records it too: a
+ * host keys on the content it PASSED, but discovery executed the file from disk.
+ *
+ * Deliberately NOT backed by `getFirstPartyModulePaths()` when the crawl comes
+ * up incomplete, unlike the disk cache's fallback. That superset is
+ * point-in-time, not cumulative — `invalidateModuleCache()` empties it — so
+ * after an unrelated file's discovery repopulates it, it describes THAT file's
+ * graph and can silently omit this one's. The disk cache survives that because
+ * `watchChange` invalidates wholesale and deferred entries flush against one
+ * end-of-build snapshot; a loader host has neither backstop, so a plausible but
+ * wrong list would go undetected. Reporting `complete: false` lets the caller
+ * do the sound thing instead.
+ */
+export function transformDependencies(id: string): TransformDependencies {
+  // realpath, matching how the crawl records every dep — otherwise a symlinked
+  // or differently-cased spelling of the entry appears twice in one list.
+  const entry = realpathOf(path.resolve(id));
+  const staticDeps = collectStaticDeps(entry);
+  if (!staticDeps.complete) return { files: [entry], complete: false };
+  return { files: [entry, ...staticDeps.deps.filter((d) => d !== entry)], complete: true };
 }
