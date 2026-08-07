@@ -6,6 +6,20 @@ export const extractIntersection: Extractor = (def, ctx) => {
   const left = ctx.visit(def.left, "._zod.def.left");
   const right = ctx.visit(def.right, "._zod.def.right");
 
+  // Zod RECONCILES the two sides' unrecognized_keys issues instead of taking
+  // their union: handleIntersectionResults pulls every unrecognized_keys issue
+  // out of both result lists, records which side named each key, and re-emits
+  // one issue holding only the keys "unrecognized by BOTH sides". Nothing in a
+  // sequential two-pass run pairs those key sets, so a strict side's complaint
+  // that zod would cancel becomes a compiled rejection — and on the merged
+  // path below it becomes a rejection with an EMPTY issue list, because the
+  // cold path re-asks zod, which accepts. Delegate whenever either side can
+  // raise the issue at all; this has to precede the merge, whose own strict
+  // bail only inspects the two top-level objects.
+  if (canReportUnrecognizedKeys(left) || canReportUnrecognizedKeys(right)) {
+    return ctx.fallback("unsupported");
+  }
+
   // The everyday `.and()` case: two default z.object() shapes with disjoint
   // keys. Zod parses each against the original input, strips each side to its
   // own keys, then merges the two outputs. A single object over the union of
@@ -28,6 +42,76 @@ export const extractIntersection: Extractor = (def, ctx) => {
   }
   return { type: "intersection", left, right };
 };
+
+/**
+ * Can this side of an intersection produce an `unrecognized_keys` issue?
+ *
+ * Zod pairs the two sides' unrecognized keys by NAME ONLY, with no regard for
+ * the path the complaint came from: `handleIntersectionResults` walks each
+ * side's FLAT issue list, unions the bare `iss.keys` strings into one map, and
+ * emits `[...unrecKeys].filter(([, f]) => f.l && f.r)` — "Report only keys
+ * unrecognized by BOTH sides" — under the first LEFT issue's path. A strict
+ * object nested in a property or an array element therefore participates in
+ * the reconciliation exactly like a top-level one, so a strict object ANYWHERE
+ * in a side disqualifies the compiled sequential run and the merged single
+ * pass alike.
+ *
+ * Mirrors {@link hasMutation}'s recursion for which node kinds hold children.
+ * Only `object.strict` reaches zod's `handleCatchall` unrecognized-keys push;
+ * the sole other producer — a record over a finite key set — already falls back
+ * at extraction, so a compiled `record` cannot raise it.
+ */
+function canReportUnrecognizedKeys(ir: SchemaIR): boolean {
+  switch (ir.type) {
+    case "object":
+      return (
+        ir.strict === true ||
+        (ir.catchall !== undefined && canReportUnrecognizedKeys(ir.catchall)) ||
+        Object.values(ir.properties).some((p) => canReportUnrecognizedKeys(p))
+      );
+    case "array":
+      return canReportUnrecognizedKeys(ir.element);
+    case "tuple":
+      return (
+        ir.items.some(canReportUnrecognizedKeys) ||
+        (ir.rest !== null && canReportUnrecognizedKeys(ir.rest))
+      );
+    case "record":
+    case "set":
+      return canReportUnrecognizedKeys(ir.valueType);
+    case "map":
+      return canReportUnrecognizedKeys(ir.keyType) || canReportUnrecognizedKeys(ir.valueType);
+    case "catch":
+    case "default":
+    case "effect":
+    case "nullable":
+    case "optional":
+    case "readonly":
+    case "recursionTarget":
+    case "zodDelegate":
+      return canReportUnrecognizedKeys(ir.inner);
+    case "discriminatedUnion":
+    case "union":
+      return ir.options.some(canReportUnrecognizedKeys);
+    case "intersection":
+      return canReportUnrecognizedKeys(ir.left) || canReportUnrecognizedKeys(ir.right);
+    case "pipe":
+      return canReportUnrecognizedKeys(ir.in) || canReportUnrecognizedKeys(ir.out);
+    // Zod runs the original sub-schema here, which may be (or contain) a strict
+    // object that no IR node records.
+    case "fallback":
+      return true;
+    // A back-edge whose target can sit OUTSIDE this side's IR — refId 0 points
+    // at the compiled root, which may be an enclosing strict object. Unknowable
+    // locally, so assume the worst.
+    case "recursiveRef":
+      return true;
+    default:
+      // Leaves and predicate nodes: primitives, literals, enums, templateLiteral,
+      // stringBool, file, and custom (which emits `custom` issues only).
+      return false;
+  }
+}
 
 /** Merge only the object-intersection shape whose equivalence is statically obvious. */
 function mergeDisjointStripObjects(left: SchemaIR, right: SchemaIR): ObjectIR | null {

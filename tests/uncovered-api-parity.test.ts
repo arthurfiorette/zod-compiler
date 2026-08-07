@@ -1039,3 +1039,131 @@ describe("discriminators the compiled dispatch cannot represent", () => {
     }
   });
 });
+
+// ─── Intersections that can report unrecognized keys ────────────────────────
+// Zod does NOT take the union of the two sides' unrecognized_keys issues. Its
+// `handleIntersectionResults` collects the bare key NAMES each side reported,
+// then emits `[...unrecKeys].filter(([, f]) => f.l && f.r)` — "Report only keys
+// unrecognized by BOTH sides". A strict side's complaint about `b` is therefore
+// CANCELLED by the other side declaring or tolerating `b`. The compiled two-pass
+// run applied each side's strictness on its own, with nothing pairing the key
+// sets, so it rejected input Zod accepts. Worse on the merged single-object
+// path, where the cold walk re-asks Zod and agrees — yielding a rejection with
+// an EMPTY issue list. The pairing is path-blind (it matches names across the
+// flat issue lists), so a nested strict object counts too.
+
+describe("intersections that can report unrecognized keys", () => {
+  it("a strict side's complaint is cancelled by a loose side declaring the key", () => {
+    expectParity(
+      z.intersection(z.strictObject({ a: z.string() }), z.looseObject({ b: z.number() })),
+      [{ a: "x", b: 1 }, { a: "x" }, { a: "x", b: 1, c: true }, { b: 1 }, "nope"],
+      "strictLoose",
+    );
+    // Side order must not matter: the reconciliation is symmetric.
+    expectParity(
+      z.intersection(z.looseObject({ b: z.number() }), z.strictObject({ a: z.string() })),
+      [{ a: "x", b: 1 }, { a: "x", b: 1, c: true }, { a: "x" }],
+      "looseStrict",
+    );
+  });
+
+  it("strict ∩ strict still rejects a key NEITHER side declares", () => {
+    const both = z.intersection(
+      z.strictObject({ a: z.string(), b: z.number() }),
+      z.strictObject({ a: z.string(), b: z.number() }),
+    );
+    // `c` is unrecognized by both sides, so it survives reconciliation — as ONE
+    // issue, not one per side.
+    expect(both.safeParse({ a: "x", b: 1, c: true }).success).toBe(false);
+    expectParity(
+      both,
+      [
+        { a: "x", b: 1 },
+        { a: "x", b: 1, c: true },
+        { a: "x", b: 1, c: true, d: 1 },
+      ],
+      "strictStrict",
+    );
+    // Disjoint strict shapes cancel each other out entirely: each side's only
+    // complaint is a key the other side declares, so Zod ACCEPTS.
+    const disjoint = z.intersection(
+      z.strictObject({ a: z.string() }),
+      z.strictObject({ b: z.number() }),
+    );
+    expect(disjoint.safeParse({ a: "x", b: 1 }).success).toBe(true);
+    expectParity(
+      disjoint,
+      [
+        { a: "x", b: 1 },
+        { a: "x", b: 1, c: true },
+      ],
+      "strictDisjoint",
+    );
+  });
+
+  it("a strict object NESTED in a property participates in the reconciliation", () => {
+    expectParity(
+      z.intersection(
+        z.looseObject({ n: z.strictObject({ a: z.string() }) }),
+        z.looseObject({ n: z.looseObject({ b: z.number() }) }),
+      ),
+      [{ n: { a: "x", b: 1 } }, { n: { a: "x" } }, { n: { a: "x", b: 1, zz: 1 } }],
+      "nestedStrictProp",
+    );
+    // Same shape on the merged-object path: two disjoint STRIP objects clear
+    // mergeDisjointStripObjects' top-level strict bail, so only a deep walk
+    // catches the nested strict.
+    expectParity(
+      z.intersection(
+        z.object({ n: z.strictObject({ a: z.string() }) }),
+        z.object({ m: z.number() }),
+      ),
+      [
+        { m: 2, n: { a: "x", extra: 1 } },
+        { m: 2, n: { a: "x" } },
+      ],
+      "mergedNestedStrict",
+    );
+  });
+
+  it("a strict object NESTED in an array element participates too", () => {
+    expectParity(
+      z.intersection(
+        z.looseObject({ list: z.array(z.strictObject({ a: z.string() })) }),
+        z.looseObject({ list: z.array(z.looseObject({ b: z.number() })) }),
+      ),
+      [{ list: [{ a: "x", b: 1 }] }, { list: [] }, { list: [{ a: "x" }] }],
+      "nestedStrictArray",
+    );
+    expectParity(
+      z.intersection(
+        z.object({ l: z.array(z.strictObject({ a: z.string() })) }),
+        z.object({ m: z.number() }),
+      ),
+      [
+        { l: [{ a: "x", extra: 1 }], m: 2 },
+        { l: [{ a: "x" }], m: 2 },
+      ],
+      "mergedNestedStrictArray",
+    );
+  });
+
+  it("a plain non-strict intersection still compiles", () => {
+    const schema = z.intersection(
+      z.looseObject({ a: z.string() }),
+      z.looseObject({ b: z.number() }),
+    );
+    const ir = extractSchema(schema, []) as { type: string };
+    expect(ir.type, "no side can report unrecognized keys").toBe("intersection");
+    expectCompiled(schema);
+    expectParity(
+      schema,
+      [
+        { a: "x", b: 1, c: true },
+        { a: "x", b: 1 },
+        { a: 1, b: 1 },
+      ],
+      "plainAnd",
+    );
+  });
+});
