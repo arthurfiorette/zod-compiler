@@ -231,9 +231,9 @@ Set `output: "bag"` to also drop the retained Zod schema when you don't need `.s
 
 ### Next.js (Turbopack)
 
-Turbopack — the default bundler since Next.js 16 — [runs webpack loaders but no webpack
-plugins](https://nextjs.org/docs/app/api-reference/turbopack#webpack-plugins), so it needs the
-loader entry point rather than `zod-compiler/webpack`:
+Turbopack — the default since Next.js 16 — [runs webpack loaders but no webpack
+plugins](https://nextjs.org/docs/app/api-reference/turbopack#webpack-plugins), so use the loader
+entry point:
 
 ```typescript
 // next.config.ts
@@ -258,37 +258,24 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
-Automatic mode, unchanged sources, in both `next dev` and `next build`. Set no `as` or `type` on the
-rule: the loader emits TypeScript and Turbopack's own SWC pass handles it.
+Automatic mode, unchanged sources, `next dev` and `next build`. Options go in the object form —
+`loaders: [{ loader: "zod-compiler/turbopack", options: { verbose: true } }]` — and must be plain
+JSON, so `hoist.schemaNamePattern` takes a string, not a RegExp.
 
-The `condition` clauses stand in for the plugin's internal file filters — without them the loader
-runs on every `.ts` in the project. Keep `content` this loose, though: narrowing it to `"zod"`
-silently skips `zod/v4`, `zod/mini` and the `zod-compiler` import behind `schemas: "explicit"`. Drop
-it entirely if you set a custom `hoist.schemaNamePattern`, which promotes identifiers in files that
-need never mention zod.
+Three things worth knowing:
 
-Options take the object form — `loaders: [{ loader: "zod-compiler/turbopack", options: { verbose: true } }]` —
-and must be plain JSON, so `hoist.schemaNamePattern` takes a string rather than a RegExp. There is no
-`cache` option: Turbopack caches loader results itself, keyed on content plus the dependencies the
-loader declares, so cache `.next/cache` in CI rather than `node_modules/.cache/zod-compiler`.
+- **Keep the `content` pattern loose.** Narrowing it to `"zod"` skips `zod/v4`, `zod/mini` and the
+  `zod-compiler` import behind `schemas: "explicit"` — those files just quietly stay uncompiled.
+- **`codegenMode: "lean"` is App-Router-only.** It shares one copy of the helpers across the bundle,
+  but Pages Router server code externalizes `node_modules` imports unless
+  [`bundlePagesRouterDependencies`](https://nextjs.org/docs/pages/api-reference/config/next-config-js/bundlePagesRouterDependencies)
+  is on, so a devDependency install throws `ERR_MODULE_NOT_FOUND` in production.
+- **A `"use server"` file can only export async functions**, so keep schemas there inside a function —
+  [hoisting](#schema-hoisting) still compiles them. `"use client"` modules need nothing special.
 
-Helpers are emitted per file. `codegenMode: "lean"` shares one copy across the bundle instead, but
-only opt in on an App-Router-only app: Pages Router server code externalizes `node_modules` imports
-unless [`bundlePagesRouterDependencies`](https://nextjs.org/docs/pages/api-reference/config/next-config-js/bundlePagesRouterDependencies)
-is on, and if `zod-compiler` is a devDependency the route then throws `ERR_MODULE_NOT_FOUND` in
-production with nothing failing at build time.
-
-A file reachable from both client and server components is transformed more than once — loaders run
-per output environment, in a worker pool that shares the discovery cache only within a worker.
-
-Schemas in a `"use client"` module compile like any other. A `"use server"` file is different, and
-not because of zod-compiler: Next.js allows only async function exports there, so a schema has to
-stay inside a function, where [hoisting](#schema-hoisting) still compiles it. Server components also
-cannot import a _value_ from a `"use client"` module — that yields a client reference rather than the
-schema, with or without zod-compiler.
-
-`next dev --webpack` / `next build --webpack` remain available, with `zod-compiler/webpack` in a
-`webpack()` config as usual.
+Turbopack caches loader results itself, so cache `.next/cache` in CI rather than
+`node_modules/.cache/zod-compiler`. `next dev --webpack` / `next build --webpack` still work, with
+`zod-compiler/webpack` in a `webpack()` config as usual.
 
 ### SWC
 
