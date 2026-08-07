@@ -213,12 +213,11 @@ Validators share a runtime helper layer imported from one module, so each helper
 bundle. Schemas in a file sharing a structurally identical sub-shape emit its error walk once —
 **19-28% raw / 10-18% gzipped**, scaling with how much the file repeats.
 
-Build plugins serve that module from their own resolve hook — as `virtual:zod-compiler/runtime`, or
-`__zod-compiler-runtime__` on webpack and rspack, which reject the `virtual:` scheme. A host without
-hooks — a webpack loader such as [Turbopack](#nextjs-turbopack) — can instead import the same code
-from `zod-compiler/runtime`, a real package subpath that plain module resolution finds. That only
-pays off where the host bundles the import rather than leaving it external, which is why it is
-opt-in there.
+Build plugins serve that module from a resolve hook (`virtual:zod-compiler/runtime`, or
+`__zod-compiler-runtime__` on webpack and rspack, which reject the `virtual:` scheme). A loader host
+has no hook, so [Turbopack](#nextjs-turbopack) imports the same code from the real subpath
+`zod-compiler/runtime` instead — opt-in there, since it only pays off where the host bundles that
+import rather than leaving it external.
 
 **Transpile-only esbuild builds** (no `--bundle`) never fire the bundler's resolve hooks, so the
 `virtual:` specifier would survive into `dist/` and fail at runtime. Set `codegenMode: "inline"` to emit
@@ -259,70 +258,37 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
-Pass options with the object form — `loaders: [{ loader: "zod-compiler/turbopack", options: { verbose: true } }]`.
-Next.js serializes them into its config, so they have to be plain JSON. That rules out a RegExp
-`hoist.schemaNamePattern` (pass the pattern as a string instead), and `apply` is Vite-only as always.
-There is no `cache` option either: the loader keeps no disk cache of its own, because
-Turbopack already caches loader results persistently, keyed on file content plus the dependencies
-the loader declares. Nothing lands in `node_modules/.cache/zod-compiler`, so the CI cache step under
-[Large projects and CI](#large-projects-and-ci) does not apply — cache `.next/cache` instead.
+Automatic mode, unchanged sources, in both `next dev` and `next build`. Set no `as` or `type` on the
+rule: the loader emits TypeScript and Turbopack's own SWC pass handles it.
 
-The two `condition` clauses are the Turbopack equivalent of the plugin's own file filters — without
-them the loader is invoked on every `.ts` in the project. Keep the `content` pattern this loose:
-narrowing it to `"zod"` silently skips `zod/v4`, `zod/mini` and the `zod-compiler` import behind
-`schemas: "explicit"`, and skipped files just quietly stay uncompiled. Drop the `content` clause
-entirely if you set a custom `hoist.schemaNamePattern`, which makes schema roots out of identifiers
-(`UserModel`) in files that need never mention zod at all.
+The `condition` clauses stand in for the plugin's internal file filters — without them the loader
+runs on every `.ts` in the project. Keep `content` this loose, though: narrowing it to `"zod"`
+silently skips `zod/v4`, `zod/mini` and the `zod-compiler` import behind `schemas: "explicit"`. Drop
+it entirely if you set a custom `hoist.schemaNamePattern`, which promotes identifiers in files that
+need never mention zod.
 
-Set no `as` or `type` on the rule. The loader emits TypeScript and Turbopack's own SWC pass handles
-it, so there is no second transpile and no `@swc/core` dependency.
+Options take the object form — `loaders: [{ loader: "zod-compiler/turbopack", options: { verbose: true } }]` —
+and must be plain JSON, so `hoist.schemaNamePattern` takes a string rather than a RegExp. There is no
+`cache` option: Turbopack caches loader results itself, keyed on content plus the dependencies the
+loader declares, so cache `.next/cache` in CI rather than `node_modules/.cache/zod-compiler`.
 
-Helpers are emitted per file by default. `codegenMode: "lean"` imports them from
-`zod-compiler/runtime` instead — a real package subpath, resolvable without the hook a loader
-doesn't have — so one copy is shared across every transformed file:
+Helpers are emitted per file. `codegenMode: "lean"` shares one copy across the bundle instead, but
+only opt in on an App-Router-only app: Pages Router server code externalizes `node_modules` imports
+unless [`bundlePagesRouterDependencies`](https://nextjs.org/docs/pages/api-reference/config/next-config-js/bundlePagesRouterDependencies)
+is on, and if `zod-compiler` is a devDependency the route then throws `ERR_MODULE_NOT_FOUND` in
+production with nothing failing at build time.
 
-```typescript
-loaders: [{ loader: "zod-compiler/turbopack", options: { codegenMode: "lean" } }],
-```
+A file reachable from both client and server components is transformed more than once — loaders run
+per output environment, in a worker pool that shares the discovery cache only within a worker.
 
-It is opt-in because it only holds where the host **bundles** that import. Next.js does for client
-and App Router server code. Pages Router server code externalizes `node_modules` imports unless
-[`bundlePagesRouterDependencies`](https://nextjs.org/docs/pages/api-reference/config/next-config-js/bundlePagesRouterDependencies)
-is on — and `zod-compiler` is usually a devDependency, so a production install prunes it and the
-route throws `ERR_MODULE_NOT_FOUND` on the first request, with nothing failing at build time. Use
-lean for an App-Router-only app, or move `zod-compiler` to `dependencies`.
+Schemas in a `"use client"` module compile like any other. A `"use server"` file is different, and
+not because of zod-compiler: Next.js allows only async function exports there, so a schema has to
+stay inside a function, where [hoisting](#schema-hoisting) still compiles it. Server components also
+cannot import a _value_ from a `"use client"` module — that yields a client reference rather than the
+schema, with or without zod-compiler.
 
-Expect a file reachable from both client and server components to be transformed more than once —
-Turbopack applies loaders per output environment, and runs them in a worker pool, so the cache of
-executed modules that makes discovery cheap is only shared within a worker. The first build of a
-large schema set is the expensive one.
-
-`next dev --webpack` / `next build --webpack` remain available, where `zod-compiler/webpack` applies
-unchanged:
-
-```typescript
-// next.config.ts — webpack only
-import type { NextConfig } from "next";
-import zodCompiler from "zod-compiler/webpack";
-
-const nextConfig: NextConfig = {
-  webpack: (config) => {
-    config.plugins?.push(zodCompiler({ verbose: true }));
-    return config;
-  },
-};
-
-export default nextConfig;
-```
-
-Schemas exported from a `"use client"` module compile like any other — the generated runtime is
-emitted below the directive so it stays the first statement. A `"use server"` file is different, and
-not because of zod-compiler: Next.js only allows async function exports there, so a schema in one
-has to stay inside a function, where [hoisting](#schema-hoisting) still lifts and compiles it.
-
-Note also the React Server Components rule that a server component may not import a _value_ from a
-`"use client"` module — that yields a client reference rather than the schema, with or without
-zod-compiler.
+`next dev --webpack` / `next build --webpack` remain available, with `zod-compiler/webpack` in a
+`webpack()` config as usual.
 
 ### SWC
 
