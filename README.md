@@ -145,7 +145,7 @@ Turbopack takes a loader rather than a plugin — see [Next.js (Turbopack)](#nex
 | `verbose`     | `boolean`                        | `false`         | Log per-schema compilation status                                                                           |
 | `hoist`       | `boolean`                        | `true`          | Move schemas built inside functions to module scope — see [Schema Hoisting](#schema-hoisting)               |
 | `apply`       | `"build" \| "serve" \| "all"`    | builds + Vitest | **Vite only**: when the plugin runs                                                                         |
-| `codegenMode` | `"lean" \| "inline"`             | auto            | `"inline"` emits helpers per file; forced for Turbopack and transpile-only esbuild — see [SWC](#swc)        |
+| `codegenMode` | `"lean" \| "inline"`             | auto            | `"inline"` emits helpers per file; needed for transpile-only esbuild — see [SWC](#swc)                      |
 | `cache`       | `boolean \| string`              | `true`          | Persistent transform cache in `node_modules/.cache/zod-compiler`                                            |
 
 ```typescript
@@ -213,6 +213,13 @@ Validators share a runtime helper layer imported from one module, so each helper
 bundle. Schemas in a file sharing a structurally identical sub-shape emit its error walk once —
 **19-28% raw / 10-18% gzipped**, scaling with how much the file repeats.
 
+Build plugins serve that module from their own resolve hook — as `virtual:zod-compiler/runtime`, or
+`__zod-compiler-runtime__` on webpack and rspack, which reject the `virtual:` scheme. A host without
+hooks — a webpack loader such as [Turbopack](#nextjs-turbopack) — can instead import the same code
+from `zod-compiler/runtime`, a real package subpath that plain module resolution finds. That only
+pays off where the host bundles the import rather than leaving it external, which is why it is
+opt-in there.
+
 **Transpile-only esbuild builds** (no `--bundle`) never fire the bundler's resolve hooks, so the
 `virtual:` specifier would survive into `dist/` and fail at runtime. Set `codegenMode: "inline"` to emit
 helpers per file instead:
@@ -254,9 +261,8 @@ export default nextConfig;
 
 Pass options with the object form — `loaders: [{ loader: "zod-compiler/turbopack", options: { verbose: true } }]`.
 Next.js serializes them into its config, so they have to be plain JSON. That rules out a RegExp
-`hoist.schemaNamePattern` (pass the pattern as a string instead), `apply` is Vite-only as always,
-and `codegenMode` is fixed at `"inline"` — a loader has no resolve hook to answer the lean runtime
-import with. There is no `cache` option either: the loader keeps no disk cache of its own, because
+`hoist.schemaNamePattern` (pass the pattern as a string instead), and `apply` is Vite-only as always.
+There is no `cache` option either: the loader keeps no disk cache of its own, because
 Turbopack already caches loader results persistently, keyed on file content plus the dependencies
 the loader declares. Nothing lands in `node_modules/.cache/zod-compiler`, so the CI cache step under
 [Large projects and CI](#large-projects-and-ci) does not apply — cache `.next/cache` instead.
@@ -270,6 +276,21 @@ entirely if you set a custom `hoist.schemaNamePattern`, which makes schema roots
 
 Set no `as` or `type` on the rule. The loader emits TypeScript and Turbopack's own SWC pass handles
 it, so there is no second transpile and no `@swc/core` dependency.
+
+Helpers are emitted per file by default. `codegenMode: "lean"` imports them from
+`zod-compiler/runtime` instead — a real package subpath, resolvable without the hook a loader
+doesn't have — so one copy is shared across every transformed file:
+
+```typescript
+loaders: [{ loader: "zod-compiler/turbopack", options: { codegenMode: "lean" } }],
+```
+
+It is opt-in because it only holds where the host **bundles** that import. Next.js does for client
+and App Router server code. Pages Router server code externalizes `node_modules` imports unless
+[`bundlePagesRouterDependencies`](https://nextjs.org/docs/pages/api-reference/config/next-config-js/bundlePagesRouterDependencies)
+is on — and `zod-compiler` is usually a devDependency, so a production install prunes it and the
+route throws `ERR_MODULE_NOT_FOUND` on the first request, with nothing failing at build time. Use
+lean for an App-Router-only app, or move `zod-compiler` to `dependencies`.
 
 Expect a file reachable from both client and server components to be transformed more than once —
 Turbopack applies loaders per output environment, and runs them in a worker pool, so the cache of

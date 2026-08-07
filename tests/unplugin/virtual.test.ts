@@ -1,12 +1,20 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vite-plus/test";
 import {
   ALL_HELPER_NAMES,
   loadVirtual,
   RESOLVED_RUNTIME_ID,
   resolveVirtualId,
+  RUNTIME_PACKAGE_ID,
+  RUNTIME_SOURCE,
   VIRTUAL_RUNTIME_ID,
   WP_RUNTIME_ID,
 } from "#src/unplugin/virtual.js";
+import pkg from "../../package.json" with { type: "json" };
+
+const distRuntime = path.resolve(import.meta.dirname, "../../dist/runtime.js");
 
 describe("unplugin/virtual", () => {
   describe("resolveVirtualId", () => {
@@ -65,6 +73,55 @@ describe("unplugin/virtual", () => {
           new RegExp(`export const ${name}=new RegExp\\(`),
         );
       }
+    });
+  });
+
+  describe("RUNTIME_PACKAGE_ID", () => {
+    it("is the real package subpath, resolvable without any bundler hook", () => {
+      // Lean-mode output emits this verbatim; if it stops matching the exports
+      // map, every loader-host bundle fails to resolve it.
+      expect(RUNTIME_PACKAGE_ID).toBe("zod-compiler/runtime");
+      const exports = pkg.exports as Record<string, { import?: string }>;
+      expect(exports["./runtime"]?.import).toBe("./dist/runtime.js");
+    });
+
+    it("is NOT intercepted by the resolveId hook", () => {
+      // The other two ids resolve to nothing without the hook, so answering
+      // them is free. This one already resolves — and to a specific copy, which
+      // may be a newer nested zod-compiler whose runtime exports helpers this
+      // version has never heard of. Hijacking it would fail that build.
+      expect(resolveVirtualId(RUNTIME_PACKAGE_ID)).toBeNull();
+    });
+
+    /**
+     * The shipped file is a BUILD ARTIFACT: vite.config.ts writes it from
+     * RUNTIME_SOURCE during `vp pack`. Comparing RUNTIME_SOURCE to itself would
+     * prove nothing, so this reads dist — skipped on a tree that was never
+     * built, and always present in CI, where `vp pack` precedes `vp test`.
+     */
+    describe.skipIf(!existsSync(distRuntime))("dist/runtime.js", () => {
+      it("is the source the virtual module serves", () => {
+        expect(readFileSync(distRuntime, "utf8").trimEnd()).toBe(RUNTIME_SOURCE.trimEnd());
+      });
+
+      it("exports every helper codegen can import, and nothing more", async () => {
+        // The __zcUK incident in reverse: the file ships separately from the
+        // registries that name the imports, so it gets its own skew check.
+        const runtime = (await import(pathToFileURL(distRuntime).href)) as Record<string, unknown>;
+        const exported = new Set(Object.keys(runtime).filter((name) => name !== "default"));
+        expect(exported).toEqual(new Set(ALL_HELPER_NAMES));
+        for (const name of ALL_HELPER_NAMES) {
+          expect(runtime[name], `helper is undefined at runtime: ${name}`).toBeDefined();
+        }
+      });
+
+      it("declares the same names in its .d.ts", () => {
+        const source = readFileSync(distRuntime.replace(/\.js$/, ".d.ts"), "utf8");
+        const declared = new Set(
+          [...source.matchAll(/export declare const ([\w$]+):/g)].map((m) => m[1] as string),
+        );
+        expect(declared).toEqual(new Set(ALL_HELPER_NAMES));
+      });
     });
   });
 

@@ -12,6 +12,11 @@
  * already was, so Turbopack's own SWC pass handles the syntax — there is no
  * second transpile here and no @swc/core dependency.
  *
+ * `codegenMode: "lean"` is available here — it imports the shared helpers from
+ * `zod-compiler/runtime`, a real package subpath, rather than the `virtual:` id
+ * the build plugins answer from a resolve hook that a loader does not have. It
+ * is opt-in; see the option's doc for why.
+ *
  *   // next.config.ts
  *   export default {
  *     turbopack: {
@@ -42,6 +47,7 @@ import {
   transformCodeWithMap,
 } from "./unplugin/transform.js";
 import type { ZodCompilerPluginOptions } from "./unplugin/types.js";
+import { RUNTIME_PACKAGE_ID } from "./unplugin/virtual.js";
 
 /**
  * Plugin options minus the ones a loader host cannot express.
@@ -61,12 +67,24 @@ export type ZodCompilerTurbopackOptions = Omit<
 > & {
   hoist?: boolean | { schemaNamePattern?: string | null | undefined } | undefined;
   /**
-   * A loader has no `resolveId`/`load` hook, so the `virtual:` runtime specifier
-   * lean mode emits would reach the host unresolved. Inline is the only mode
-   * that stands on its own.
+   * `"inline"` (default) emits the shared helpers into every transformed file.
+   *
+   * `"lean"` imports them from `zod-compiler/runtime` instead, so a bundle
+   * carries one copy however many files were transformed. That specifier is a
+   * real package subpath, which is what makes it usable from a loader at all —
+   * the `virtual:` id the build plugins emit needs a `resolveId` hook, and a
+   * loader has none.
+   *
+   * Opt-in rather than the default because it only holds when the host BUNDLES
+   * the import. Next.js does for client and App Router server code, but Pages
+   * Router server code externalizes node_modules imports unless
+   * `bundlePagesRouterDependencies` is set — and `zod-compiler` is normally a
+   * devDependency, so a production install prunes it and the route throws
+   * ERR_MODULE_NOT_FOUND on the first request. A bigger bundle is the better
+   * default than a runtime failure that no build step reports.
    * @default "inline"
    */
-  codegenMode?: "inline" | undefined;
+  codegenMode?: "lean" | "inline" | undefined;
 };
 
 /**
@@ -237,6 +255,7 @@ async function run(
   let discoveryRan = false;
   const result = await transformCodeWithMap(source, id, {
     mode: options.codegenMode ?? "inline",
+    runtimeId: RUNTIME_PACKAGE_ID,
     verbose: options.verbose,
     // "compact" keeps the Zod schema (its safeParse IS the cold error path), so
     // only "bag" drops Zod compatibility.

@@ -72,10 +72,23 @@ describe("zod-compiler/turbopack", () => {
     const result = await runLoader(path.join(fixturesDir, "auto-discover-simple.ts"));
 
     expect(result.code).toContain("safeParse_UserSchema");
-    // A loader has no resolveId hook, so the virtual runtime specifier would
-    // reach the host unresolved.
     expect(result.code).toContain("function __zcMkv(");
+    // Nothing to resolve: the default output stands alone even where the host
+    // externalizes node_modules imports rather than bundling them.
+    expect(result.code).not.toContain('from "zod-compiler/runtime"');
     expect(result.code).not.toContain("virtual:zod-compiler/runtime");
+  });
+
+  it("imports helpers from the real runtime module in lean mode", async () => {
+    const result = await runLoader(path.join(fixturesDir, "auto-discover-simple.ts"), {
+      codegenMode: "lean",
+    });
+
+    // A loader has no resolveId hook, so the specifier has to be one plain node
+    // resolution can find — never the `virtual:` id the build plugins serve.
+    expect(result.code).toContain('from "zod-compiler/runtime"');
+    expect(result.code).not.toContain("virtual:zod-compiler/runtime");
+    expect(result.code).not.toContain("function __zcMkv(");
   });
 
   it("returns a sourcemap alongside the transformed code", async () => {

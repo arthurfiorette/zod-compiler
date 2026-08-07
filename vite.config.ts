@@ -1,8 +1,41 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
+import { ALL_HELPER_NAMES, RUNTIME_SOURCE } from "./src/unplugin/virtual.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Ships the lean-mode runtime as a real module at `dist/runtime.js`.
+ *
+ * Lean-mode output imports its shared helpers from one module so a bundle holds
+ * one copy. Hosts with resolve hooks answer that import from memory, but a
+ * webpack loader (Turbopack) has none — for it the specifier has to resolve as
+ * an ordinary package subpath, which means a file on disk.
+ *
+ * Emitted rather than committed: the source comes from the same decl registries
+ * inline mode emits, so there is one producer and no second copy to drift. It
+ * has to land during the build, not after, because publint checks every
+ * `exports` target before the build finishes. A one-shot build is the only thing
+ * this covers — `vp pack --watch` reuses the source captured when the config was
+ * evaluated, so a registry edit needs a full rebuild to reach dist.
+ */
+function emitRuntimeModule() {
+  const declarations = [
+    "// Generated at build time from zod-compiler's helper registries.",
+    "// Imported by lean-mode generated code, never written by hand — `any`",
+    "// because a caller would otherwise have to cast every helper to call it.",
+    ...ALL_HELPER_NAMES.map((name) => `export declare const ${name}: any;`),
+  ].join("\n");
+
+  return {
+    name: "zod-compiler:emit-runtime",
+    generateBundle(this: { emitFile: (file: Record<string, string>) => void }) {
+      this.emitFile({ type: "asset", fileName: "runtime.js", source: `${RUNTIME_SOURCE}\n` });
+      this.emitFile({ type: "asset", fileName: "runtime.d.ts", source: `${declarations}\n` });
+    },
+  };
+}
 
 export default defineConfig({
   resolve: {
@@ -27,6 +60,7 @@ export default defineConfig({
   },
   pack: {
     entry: ["src/**/*.ts"],
+    plugins: [emitRuntimeModule()],
     format: ["esm"],
     unbundle: true,
     sourcemap: true,

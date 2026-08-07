@@ -29,6 +29,27 @@ import {
 export const VIRTUAL_RUNTIME_ID = "virtual:zod-compiler/runtime";
 /** Bare-specifier alias for webpack/rspack, which reject the `virtual:` URI scheme. */
 export const WP_RUNTIME_ID = "__zod-compiler-runtime__";
+/**
+ * Real package subpath, shipped as `dist/runtime.js` (emitted at build time from
+ * RUNTIME_SOURCE — see the `emit-runtime` plugin in vite.config.ts).
+ *
+ * The ids above only resolve inside a host that runs zod-compiler's resolveId
+ * hook. A webpack loader has none, so lean mode was unavailable to it: the
+ * specifier would survive into the output unresolved. This one needs no hook —
+ * plain node resolution finds it — which is what lets a loader host dedup
+ * helpers across files.
+ *
+ * Deliberately NOT intercepted by resolveVirtualId, unlike the two ids above.
+ * They resolve to nothing without the hook, so answering them is free. This one
+ * already resolves, and to a SPECIFIC copy: intercepting would override a
+ * nested or newer zod-compiler whose runtime exports helpers this version has
+ * never heard of, turning a working build into an unresolvable-import error
+ * naming an id the user never wrote. A build that ends up with both this file
+ * and the virtual module carries two copies of the helpers, which is wasteful
+ * but correct — every result crosses module boundaries structurally, never by
+ * identity.
+ */
+export const RUNTIME_PACKAGE_ID = "zod-compiler/runtime";
 /** Resolved id (Rollup convention: leading null byte hides the module from other plugins). */
 export const RESOLVED_RUNTIME_ID = "\0zod-compiler-runtime";
 
@@ -71,7 +92,12 @@ function buildRuntimeSource(): string {
   return parts.join("\n");
 }
 
-const RUNTIME_SOURCE = buildRuntimeSource();
+/**
+ * The runtime module's ESM source. Exported because the package build writes it
+ * to `dist/runtime.js` — the file and the virtual module must be the same bytes,
+ * so there is exactly one producer.
+ */
+export const RUNTIME_SOURCE = buildRuntimeSource();
 
 /**
  * Anchored, literal-safe pattern for an exact id match. Hook filters take

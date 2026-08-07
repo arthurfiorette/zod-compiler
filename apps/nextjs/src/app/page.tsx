@@ -31,7 +31,7 @@ export default function Home() {
 
   return (
     <main style={{ padding: "2rem", fontFamily: "monospace" }}>
-      <h1>zod-compiler + Next.js (webpack)</h1>
+      <h1>zod-compiler + Next.js</h1>
 
       <section>
         <h2>User</h2>

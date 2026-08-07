@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --webpack",
     "build": "next build --webpack",
+    "build:turbopack": "next build",
     "start": "next start",
     "test": "vp test run",
     "test:e2e": "node --import tsx tests/e2e.ts"

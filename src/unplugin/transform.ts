@@ -612,7 +612,11 @@ function computeRuntimePrefix(
 ): string | null {
   if (mode === "lean") {
     if (usedHelpers.size === 0) return null;
-    if (code.includes(runtimeId)) return null;
+    // Match the import STATEMENT, not the bare id. `zod-compiler/runtime` is a
+    // plain package specifier and a substring of `virtual:zod-compiler/runtime`,
+    // so a file merely mentioning either — a comment, a docs snippet — would
+    // suppress the import while codegen still emits calls to the helpers.
+    if (code.includes(`from "${runtimeId}"`)) return null;
     const names = [...usedHelpers].sort().join(", ");
     return `import { ${names} } from "${runtimeId}";\n`;
   }
