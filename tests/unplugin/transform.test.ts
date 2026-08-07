@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { z } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
 import { extractSchema } from "#src/core/extract/index.js";
+import { moduleHeadOffset } from "#src/unplugin/edits.js";
 import { SCHEMA_NAME_PATTERN, ZOD_MODULES } from "#src/unplugin/hoist.js";
 import {
   findExpressionEnd,
@@ -1259,5 +1260,115 @@ describe("transform output — downstream CSE/dedup safety (field incident)", ()
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("directive prologue", () => {
+  /**
+   * A directive is only a directive while it is still part of the prologue.
+   * Anything the transform prepends at offset 0 demotes it to a plain string
+   * expression, and RSC bundlers reject that outright ("The \"use client\"
+   * directive must be placed before other expressions") — which broke every
+   * Next.js file that exported a schema.
+   */
+  it("keeps 'use client' first when injecting the runtime prologue", async () => {
+    const fixturePath = path.join(fixturesDir, "directive-use-client.ts");
+    const code = fs.readFileSync(fixturePath, "utf8");
+
+    const result = await transformCode(code, fixturePath, {
+      mode: "inline",
+      autoDiscover: true,
+      zodCompat: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toContain("safeParse_SignupSchema");
+    expect(result).toContain("function __zcMkv(");
+    expect((result as string).startsWith('"use client";')).toBe(true);
+  });
+
+  it("keeps 'use server' first on the hoist-only path", async () => {
+    const fixturePath = path.join(fixturesDir, "directive-hoist-only.ts");
+    const code = fs.readFileSync(fixturePath, "utf8");
+
+    const result = await transformCode(code, fixturePath, {
+      mode: "inline",
+      autoDiscover: true,
+      zodCompat: true,
+    });
+
+    expect(result).not.toBeNull();
+    // Hoisted out of the function body and compiled, so the runtime helpers
+    // are injected even though the file exports no schema.
+    expect(result).toContain("function __zcMkv(");
+    expect((result as string).startsWith('"use server";')).toBe(true);
+  });
+
+  it("preserves a shebang, comments and a multi-directive prologue", async () => {
+    const fixturePath = path.join(fixturesDir, "directive-prologue-edges.ts");
+    const code = fs.readFileSync(fixturePath, "utf8");
+
+    const result = await transformCode(code, fixturePath, {
+      mode: "inline",
+      autoDiscover: true,
+      zodCompat: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toContain("safeParse_TaskSchema");
+    const out = result as string;
+    expect(out.startsWith("#!/usr/bin/env node\n")).toBe(true);
+    // Both directives stay ahead of everything the transform emitted.
+    expect(out.indexOf('"use strict";')).toBeLessThan(out.indexOf("function __zcMkv("));
+    expect(out.indexOf('"use server";')).toBeLessThan(out.indexOf("function __zcMkv("));
+    expect(out.indexOf('"use strict";')).toBeLessThan(out.indexOf('"use server";'));
+  });
+});
+
+describe("moduleHeadOffset()", () => {
+  it("returns 0 when there is no prologue", () => {
+    expect(moduleHeadOffset('import { z } from "zod";')).toBe(0);
+  });
+
+  it("skips a shebang", () => {
+    const code = "#!/usr/bin/env node\nconst a = 1;";
+    expect(moduleHeadOffset(code)).toBe("#!/usr/bin/env node\n".length);
+  });
+
+  it("skips consecutive directives and the comments between them", () => {
+    const code = '"use strict";\n// between\n"use client";\nconst a = 1;';
+    expect(code.slice(moduleHeadOffset(code))).toBe("const a = 1;");
+  });
+
+  it("stops at the first statement, so a later string literal is not a directive", () => {
+    const code = 'const a = 1;\n"use client";';
+    expect(moduleHeadOffset(code)).toBe(0);
+  });
+
+  it.each([
+    ["single quotes", "'use strict';\nconst a = 1;", "const a = 1;"],
+    ["directives sharing a line", '"use strict"; "use client";\nconst a = 1;', "const a = 1;"],
+    ["no semicolon (ASI)", '"use client"\nconst a = 1;', "const a = 1;"],
+    ["CRLF", '"use client";\r\nconst a = 1;', "const a = 1;"],
+    ["a leading block comment", '/* license */\n"use client";\nconst a = 1;', "const a = 1;"],
+    ["an unrecognized directive", '"use cache";\nconst a = 1;', "const a = 1;"],
+    ["a template literal", "`use client`;\nconst a = 1;", "`use client`;\nconst a = 1;"],
+    ["a non-directive string", '"hello";\nconst a = 1;', '"hello";\nconst a = 1;'],
+    // Only LOOKS like a directive: an expression statement whose first operand
+    // is a "use " string. Treating it as one would insert on the `+`.
+    ["a concatenation", '"use " + mode;\nconst a = 1;', '"use " + mode;\nconst a = 1;'],
+    // Escaped quotes end the match early, which would insert mid-literal.
+    ["an escaped quote", '"use \\"strict\\"";\nconst a = 1;', '"use \\"strict\\"";\nconst a = 1;'],
+  ])("handles %s", (_label, code, rest) => {
+    expect(code.slice(moduleHeadOffset(code))).toBe(rest);
+  });
+
+  it("returns the full length for a file that is only a prologue", () => {
+    const code = '"use client";\n';
+    expect(moduleHeadOffset(code)).toBe(code.length);
+  });
+
+  it("returns 0 for an empty file", () => {
+    expect(moduleHeadOffset("")).toBe(0);
   });
 });

@@ -1,6 +1,7 @@
 import { AdminSchema } from "@/lib/admin";
 import { LoginForm, LoginSchema } from "@/lib/login-form";
 import { CreateUserSchema, ProductSchema } from "@/lib/schemas";
+import { SignupStatus } from "@/lib/signup-status";
 
 export default function Home() {
   const userResult = CreateUserSchema.safeParse({
@@ -46,6 +47,11 @@ export default function Home() {
         <h2>Login (JSX — skipped by autoDiscover)</h2>
         <LoginForm />
         <pre>{JSON.stringify(loginResult, null, 2)}</pre>
+      </section>
+
+      <section>
+        <h2>Signup (&quot;use client&quot; module — directive prologue guard)</h2>
+        <SignupStatus />
       </section>
 
       <section>

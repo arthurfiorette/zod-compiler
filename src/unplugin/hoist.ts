@@ -1,6 +1,6 @@
 import type { AnyNode, Expression, Options } from "acorn";
 import { Parser } from "acorn";
-import { applyEdits, type Edit, type Insertion } from "./edits.js";
+import { applyEdits, type Edit, type Insertion, moduleHeadOffset } from "./edits.js";
 
 /**
  * Hoist Zod schema construction out of functions to module scope —
@@ -881,35 +881,6 @@ function analyzeCaptures(expr: Expression): CaptureAnalysis {
   return { eagerFree, deferredFree, impure };
 }
 
-/** Offset after the shebang and directive prologue ("use client", ...). */
-function insertionOffset(code: string): number {
-  let i = 0;
-  if (code.startsWith("#!")) {
-    const nl = code.indexOf("\n");
-    i = nl === -1 ? code.length : nl + 1;
-  }
-  while (true) {
-    // Skip whitespace and comments between directives
-    while (i < code.length) {
-      const ch = code[i] as string;
-      if (/\s/.test(ch)) {
-        i++;
-      } else if (ch === "/" && code[i + 1] === "/") {
-        const nl = code.indexOf("\n", i);
-        i = nl === -1 ? code.length : nl + 1;
-      } else if (ch === "/" && code[i + 1] === "*") {
-        const end = code.indexOf("*/", i + 2);
-        i = end === -1 ? code.length : end + 2;
-      } else {
-        break;
-      }
-    }
-    const directive = code.slice(i).match(/^(["'])use [^"'\n]*\1\s*;?[^\S\n]*\n?/);
-    if (!directive) return i;
-    i += directive[0].length;
-  }
-}
-
 /** Keywords that precede `( ... ) {` without binding anything. */
 const NON_BINDING_KEYWORDS =
   "if|for|while|switch|return|typeof|await|yield|new|do|else|case|in|of|delete|void";
@@ -1335,7 +1306,7 @@ export function hoistZodSchemasMeta(code: string, options?: HoistOptions): Hoist
   // directive prologue precedes every statement, and all hoist replacements
   // sit inside statements.
   const edits: Edit[] = hoists.map((h) => ({ start: h.start, end: h.end, text: h.name }));
-  const insert: Insertion = { offset: insertionOffset(code), text: `${decls}\n` };
+  const insert: Insertion = { offset: moduleHeadOffset(code), text: `${decls}\n` };
   return {
     code: applyEdits(code, edits, insert),
     schemas: [...declByText.entries()].map(([text, name]) => ({ name, text })),

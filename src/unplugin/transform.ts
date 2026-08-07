@@ -20,7 +20,7 @@ import type { DiscoveredSchema } from "../core/types.js";
 import { discoverSchemas } from "../discovery.js";
 import { ProcessExitDuringLoadError } from "../loader.js";
 import { mayExportSchemas } from "../static-filter.js";
-import { applyEdits, type Edit, type Insertion } from "./edits.js";
+import { applyEdits, type Edit, type Insertion, moduleHeadOffset } from "./edits.js";
 import { hoistZodSchemasMeta } from "./hoist.js";
 import { compileHoistedSchemas } from "./hoist-compile.js";
 import type { TransformOptions, ZodCompilerPluginOptions } from "./types.js";
@@ -54,26 +54,58 @@ class StagedTransform {
   }
 
   apply(edits: readonly Edit[], insert?: Insertion): void {
-    this.applyThen(edits, insert === undefined ? undefined : () => insert);
+    this.stage(edits, (s) => {
+      if (insert === undefined) return false;
+      s.appendLeft(insert.offset, insert.text);
+      return true;
+    });
   }
 
   /**
-   * Apply `edits`, then let `deferred` derive one more insertion from the
-   * resulting text — both inside ONE stage.
+   * Apply `edits`, then prepend `deferred`'s text to the module head — both
+   * inside ONE stage.
    *
    * The head injection (runtime import + shared dedup block) has to be decided
    * from the REWRITTEN source, because `computeRuntimePrefix` probes it for
    * already-present markers. Staging it separately made a whole second
    * `generateMap` over the full generated output — for what is only a prepend at
-   * offset 0 — and then forced `remapping` to compose the two. Together those
-   * were the dominant cost of a transform: on a 320-schema project they ran to
-   * 64% of total wall time, more than discovery and codegen combined. Deferring
+   * the module head — and then forced `remapping` to compose the two. Together
+   * those were the dominant cost of a transform: on a 320-schema project they ran
+   * to 64% of total wall time, more than discovery and codegen combined. Deferring
    * the insertion into the same MagicString buys byte-identical output and an
    * equivalent map for one generation and no composition — 1.6x (small schemas)
    * to 3.4x (large ones) on the transform, scaling with how much code a file
    * emits, since that is what both costs are proportional to.
+   *
+   * `deferred` returns TEXT, not an `Insertion`: `appendLeft` resolves offsets
+   * against the PRE-edit text while `deferred` is shown the POST-edit text, so a
+   * callback-supplied offset would be in the wrong coordinate system. Deriving it
+   * here from `this.current` keeps the two in step by construction.
    */
-  applyThen(edits: readonly Edit[], deferred?: (rewritten: string) => Insertion | undefined): void {
+  applyThen(edits: readonly Edit[], deferred?: (rewritten: string) => string | undefined): void {
+    this.stage(edits, (s, rewritten) => {
+      // `?.()` short-circuits its arguments, so a stage with no deferred step
+      // never materializes the rewritten text.
+      const head = deferred?.(rewritten());
+      if (head === undefined) return false;
+      s.appendLeft(moduleHeadOffset(this.current), head);
+      return true;
+    });
+  }
+
+  /**
+   * One stage: apply `edits` to a fresh MagicString, let `inject` add at most
+   * one insertion, then commit the text and its map. `inject` reports whether
+   * it inserted, so a no-op stage can be skipped entirely.
+   *
+   * `rewritten` is a thunk, not a string: materializing it costs a full
+   * `toString()` over generated-code-sized input, and the injectors that do not
+   * read it (every `apply()` call) must not pay for it.
+   */
+  private stage(
+    edits: readonly Edit[],
+    inject: (s: MagicString, rewritten: () => string) => boolean,
+  ): void {
     const s = new MagicString(this.current);
     for (const e of edits) {
       if (e.start === e.end) {
@@ -84,11 +116,8 @@ class StagedTransform {
     }
     // `toString()` is the only way to show the deferred step what the rewrite
     // produced; it measured well under 1% of a transform.
-    const insert = deferred?.(edits.length === 0 ? this.current : s.toString());
-    if (insert !== undefined) {
-      s.appendLeft(insert.offset, insert.text);
-    }
-    if (edits.length === 0 && insert === undefined) return;
+    const inserted = inject(s, () => (edits.length === 0 ? this.current : s.toString()));
+    if (edits.length === 0 && !inserted) return;
     this.current = s.toString();
     // `hires: "boundary"` is load-bearing, not a tuning knob: without it every
     // mapping collapses to column 0, so a stack frame or debugger breakpoint in
@@ -349,7 +378,7 @@ export async function transformCodeWithMap(
       });
       const prefix = computeRuntimePrefix(staged.current, hoistHelpers, mode, options.runtimeId);
       if (prefix !== null) {
-        staged.apply([], { offset: 0, text: prefix });
+        staged.applyThen([], () => prefix);
       }
     }
     return { code: staged.current, map: staged.map() };
@@ -556,7 +585,7 @@ export async function transformCodeWithMap(
     const prefix = computeRuntimePrefix(rewritten, usedHelpers, mode, options.runtimeId);
     const needsShared = shared.code !== "" && !rewritten.includes(SHARED_BLOCK_MARKER);
     const head = (prefix ?? "") + (needsShared ? `${shared.code}\n` : "");
-    return head === "" ? undefined : { offset: 0, text: head };
+    return head === "" ? undefined : head;
   });
   return { code: staged.current, map: staged.map() };
 }

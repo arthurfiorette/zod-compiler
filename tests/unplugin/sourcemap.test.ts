@@ -103,6 +103,41 @@ describe("transformCodeWithMap() sourcemaps", () => {
     expect(traceBack(code, map, "export const UserSchema")).toBe(3);
   });
 
+  /**
+   * With a directive prologue the head injection no longer starts at offset 0,
+   * and `appendLeft` resolves offsets against the PRE-edit text while the
+   * deferred step is shown the POST-edit text. A drift between those two
+   * coordinate systems still emits plausible-looking CODE — only the MAP goes
+   * wrong — so it needs its own case.
+   */
+  it("maps correctly when a directive prologue offsets the head injection", async () => {
+    const source = [
+      `"use client";`, // L1
+      ``,
+      `import { z } from "zod";`, // L3
+      ``,
+      `export const UserSchema = z.object({ name: z.string().min(1) });`, // L5
+      ``,
+      `export function checkUser(value: unknown) {`, // L7
+      `  return UserSchema.safeParse(value).success;`, // L8
+      `}`,
+    ].join("\n");
+    const id = write("directive.ts", source);
+
+    const out = await transformCodeWithMap(source, id, { mode: "lean", autoDiscover: true });
+    expect(out).not.toBeNull();
+    const { code, map } = out as { code: string; map: ConstructorParameters<typeof TraceMap>[0] };
+    expect(map).not.toBeNull();
+    // The directive survived as the first statement — the whole point.
+    expect(code.startsWith(`"use client";`)).toBe(true);
+    expect(positionOf(code, "checkUser").line).toBeGreaterThan(7);
+
+    expect(traceBack(code, map, "checkUser")).toBe(7);
+    expect(traceBack(code, map, "UserSchema.safeParse")).toBe(8);
+    expect(traceBack(code, map, "export const UserSchema")).toBe(5);
+    expect(traceBack(code, map, `"use client";`)).toBe(1);
+  });
+
   it("returns null map only when nothing changed", async () => {
     const source = `export const plain = 1;\n`;
     const id = write("plain.ts", source);
