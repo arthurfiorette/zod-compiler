@@ -695,6 +695,23 @@ function hasSuperRefine(checks: readonly { kind: string }[] | undefined): boolea
  * input), by generateValidator to keep such schemas off the by-reference fast
  * path, and by the shared-walk dedup + intersection extractor to exclude them.
  */
+/**
+ * Can this tuple's output be LONGER than its input?
+ *
+ * `handleTupleResult` assigns `final.value[i] = result.value` for every item it
+ * runs, and $ZodTuple runs every item below `optStart` even when the input is
+ * shorter — so a required slot past the end is written with the `undefined` its
+ * schema returned, extending the array. `z.tuple([z.any(), z.any()])` therefore
+ * answers `["x"]` with `["x", undefined]`, length 2. A required item that
+ * REJECTS undefined can't produce that: the parse fails and the value is never
+ * read. So the extension is possible exactly when some required item accepts
+ * `undefined` — which also makes the tuple a mutating node, since its output is
+ * then not its input.
+ */
+export function tuplePadsShortInput(ir: SchemaIR & { type: "tuple" }): boolean {
+  return ir.items.some((item, index) => index < ir.optStart && !rejectsUndefined(item));
+}
+
 export function hasMutation(ir: SchemaIR): boolean {
   switch (ir.type) {
     case "string":
@@ -735,7 +752,11 @@ export function hasMutation(ir: SchemaIR): boolean {
     case "array":
       return hasSuperRefine(ir.checks) || hasMutation(ir.element);
     case "tuple":
-      return ir.items.some(hasMutation) || (ir.rest !== null && hasMutation(ir.rest));
+      return (
+        ir.items.some(hasMutation) ||
+        (ir.rest !== null && hasMutation(ir.rest)) ||
+        tuplePadsShortInput(ir)
+      );
     case "record":
       return hasMutation(ir.valueType);
     case "optional":

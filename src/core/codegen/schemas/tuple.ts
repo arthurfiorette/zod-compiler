@@ -1,23 +1,15 @@
 import type { SchemaIR, TupleIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { declareFastTemps, extendPath, extendStaticPathIndex, hasMutation } from "../context.js";
+import {
+  declareFastTemps,
+  extendPath,
+  extendStaticPathIndex,
+  hasMutation,
+  tuplePadsShortInput,
+} from "../context.js";
 import { orderByRuntimeCost } from "../fast-size.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
-
-/**
- * Index where the omittable tail begins (zod's `optStart`): trailing
- * optional/default items have `optin === "optional"` and may be absent.
- */
-function optStart(ir: TupleIR): number {
-  let start = ir.items.length;
-  for (let i = ir.items.length - 1; i >= 0; i--) {
-    const itemType = (ir.items[i] as SchemaIR).type;
-    if (itemType !== "optional" && itemType !== "default") break;
-    start--;
-  }
-  return start;
-}
 
 /**
  * Mirrors $ZodTuple: without rest, over-length input emits a single too_big
@@ -46,11 +38,30 @@ export function slowTuple(ir: SchemaIR & { type: "tuple" }, g: SlowGen): string 
     itemsCode += `${g.output}=${g.input}.slice();`;
   }
 
+  // Pad a short input up to `optStart`. zod runs every item below that index
+  // whatever the input's length and writes each result back
+  // (`final.value[i] = result.value`), so a required slot past the end lands as
+  // an own `undefined` and the output array is LONGER than the input — visible
+  // only when that item accepts undefined, which is what tuplePadsShortInput
+  // tests (`z.tuple([z.any(), z.any()]).parse(["x"])` is `["x", undefined]`).
+  // Guarded on the length, so a well-formed input never allocates: this runs
+  // only where the item loop is about to read past the end anyway.
+  if (tuplePadsShortInput(ir)) {
+    const padVar = g.temp("tp");
+    itemsCode += emit`
+      if(${g.input}.length<${ir.optStart}){
+        ${g.output}=${g.input}.slice();
+        for(var ${padVar}=${g.input}.length;${padVar}<${ir.optStart};${padVar}++){
+          ${g.input}[${padVar}]=undefined;
+        }
+      }`;
+  }
+
   for (let i = 0; i < len; i++) {
     const itemIR = ir.items[i] as SchemaIR;
     const elemExpr = `${g.input}[${i}]`;
     const elemPath = extendStaticPathIndex(g.path, i);
-    const skipMissingOptional = i >= optStart(ir);
+    const skipMissingOptional = i >= ir.optStart;
     const itemCode = g.visit(itemIR, { input: elemExpr, output: elemExpr, path: elemPath });
     // Zod skips absent omittable items entirely (no default materialization).
     itemsCode += skipMissingOptional ? emit`if(${i}<${g.input}.length){${itemCode}}` : itemCode;
@@ -67,12 +78,12 @@ export function slowTuple(ir: SchemaIR & { type: "tuple" }, g: SlowGen): string 
   }
 
   if (ir.rest === null) {
-    const start = optStart(ir);
+    const start = ir.optStart;
     code += emit`
       if(${g.input}.length>${len}){
-        ${tooBig(g, len, "array", true, { useTypeMsg: true })}
+        ${tooBig(g, len, "array", true, { useTypeMsg: true, layout: "tuple", aborts: true })}
       }else if(${g.input}.length<${start - 1}){
-        ${tooSmall(g, len, "array", "omit", { useTypeMsg: true })}
+        ${tooSmall(g, len, "array", "omit", { useTypeMsg: true, aborts: true })}
       }else{
         ${itemsCode}
       }`;
@@ -88,7 +99,7 @@ export function fastTuple(ir: TupleIR, g: FastGen): string | null {
   const x = g.input;
   const parts: string[] = [`Array.isArray(${x})`];
 
-  const required = optStart(ir);
+  const required = ir.optStart;
   if (ir.rest === null) {
     if (required === ir.items.length) {
       parts.push(`${x}.length===${ir.items.length}`);
@@ -107,7 +118,14 @@ export function fastTuple(ir: TupleIR, g: FastGen): string | null {
   for (const { index, itemIR } of orderByRuntimeCost(indexed, (e) => e.itemIR, g.ctx)) {
     const itemCheck = g.visit(itemIR, { input: `${x}[${index}]` });
     if (itemCheck === null) return null;
-    if (itemCheck !== "true") parts.push(itemCheck);
+    if (itemCheck === "true") continue;
+    // An item in the omittable tail is not merely allowed to be `undefined` —
+    // zod does not run its schema AT ALL when the input is that short
+    // (`if (i >= input.length) if (i >= optStart) continue`). Reading `x[i]` and
+    // testing it would demand that the item's own check accept `undefined`,
+    // which the fast forms of `z.undefined()` and `.optional()` happen to do but
+    // a pipe or a union arm need not — so gate on presence the way zod does.
+    parts.push(index >= ir.optStart ? `(${x}.length<=${index}||${itemCheck})` : itemCheck);
   }
 
   // Rest element validation via preamble helper (avoids .slice().every()

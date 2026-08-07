@@ -146,6 +146,7 @@ describe("slow-path — no input mutation", () => {
           { type: "string", checks: [] },
         ],
         rest: null,
+        optStart: 2,
       };
       const input = ["42", "hello"];
       const safeParse = compileIR(ir);

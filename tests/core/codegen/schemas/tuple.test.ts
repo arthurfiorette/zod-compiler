@@ -11,6 +11,7 @@ describe("slow-path — tuple", () => {
         { type: "number", checks: [] },
       ],
       rest: null,
+      optStart: 2,
     };
     const safeParse = compileIR(ir);
     expect(safeParse(["hello", 42]).success).toBe(true);
@@ -21,6 +22,7 @@ describe("slow-path — tuple", () => {
       type: "tuple",
       items: [{ type: "string", checks: [] }],
       rest: null,
+      optStart: 1,
     };
     const safeParse = compileIR(ir);
     expect(safeParse("not array").success).toBe(false);
@@ -36,6 +38,7 @@ describe("slow-path — tuple", () => {
         { type: "number", checks: [] },
       ],
       rest: null,
+      optStart: 2,
     };
     const safeParse = compileIR(ir);
     expect(safeParse([42, "hello"]).success).toBe(false);
@@ -46,6 +49,7 @@ describe("slow-path — tuple", () => {
       type: "tuple",
       items: [{ type: "string", checks: [] }],
       rest: null,
+      optStart: 1,
     };
     const safeParse = compileIR(ir);
     expect(safeParse(["a", "b"]).success).toBe(false);
@@ -56,6 +60,7 @@ describe("slow-path — tuple", () => {
       type: "tuple",
       items: [{ type: "string", checks: [] }],
       rest: { type: "number", checks: [] },
+      optStart: 1,
     };
     const safeParse = compileIR(ir);
     expect(safeParse(["a", 1, 2, 3]).success).toBe(true);
@@ -66,6 +71,7 @@ describe("slow-path — tuple", () => {
       type: "tuple",
       items: [{ type: "string", checks: [] }],
       rest: { type: "number", checks: [] },
+      optStart: 1,
     };
     const safeParse = compileIR(ir);
     expect(safeParse(["a", 1, "bad"]).success).toBe(false);
@@ -79,6 +85,7 @@ describe("slow-path — tuple", () => {
         { type: "number", checks: [] },
       ],
       rest: null,
+      optStart: 2,
     };
     const safeParse = compileIR(ir);
     const result = safeParse(["hello", "not a number"]);
@@ -95,6 +102,7 @@ describe("slow-path — tuple", () => {
         { type: "number", checks: [] },
       ],
       rest: null,
+      optStart: 2,
     };
     const safeParse = compileIR(ir);
     // Missing second element — should fail
@@ -110,6 +118,7 @@ describe("slow-path — tuple", () => {
       type: "tuple",
       items: [{ type: "string", checks: [] }],
       rest: null,
+      optStart: 1,
     };
     const safeParse = compileIR(ir);
     const result = safeParse([]);
@@ -124,6 +133,7 @@ describe("slow-path — tuple", () => {
         { type: "number", checks: [] },
       ],
       rest: { type: "boolean" },
+      optStart: 2,
     };
     const safeParse = compileIR(ir);
     // Even with rest, the required items must be present
@@ -141,6 +151,7 @@ describe("fast-path — Tuple", () => {
         { type: "number", checks: [] },
       ],
       rest: null,
+      optStart: 2,
     });
     expect(fn?.(["a", 1])).toBe(true);
     expect(fn?.(["a", "b"])).toBe(false);
@@ -151,6 +162,7 @@ describe("fast-path — Tuple", () => {
       type: "tuple",
       items: [{ type: "string", checks: [] }],
       rest: null,
+      optStart: 1,
     });
     expect(fn?.(["a"])).toBe(true);
     expect(fn?.(["a", "b"])).toBe(false);
@@ -161,6 +173,7 @@ describe("fast-path — Tuple", () => {
       type: "tuple",
       items: [{ type: "string", checks: [] }],
       rest: { type: "number", checks: [] },
+      optStart: 1,
     });
     expect(fn?.(["a", 1, 2])).toBe(true);
     expect(fn?.(["a", 1, "b"])).toBe(false);
@@ -171,6 +184,7 @@ describe("fast-path — Tuple", () => {
       type: "tuple",
       items: [{ type: "any" }, { type: "string", checks: [] }],
       rest: null,
+      optStart: 2,
     });
     expect(fn?.([42, "hello"])).toBe(true);
     expect(fn?.([42, 123])).toBe(false);
@@ -181,6 +195,7 @@ describe("fast-path — Tuple", () => {
       type: "tuple",
       items: [{ type: "string", checks: [] }],
       rest: { type: "any" },
+      optStart: 1,
     });
     expect(fn?.(["a", 1, true, null])).toBe(true);
     expect(fn?.([42, 1, true])).toBe(false);
@@ -192,6 +207,7 @@ describe("fast-path — Tuple", () => {
         type: "tuple",
         items: [{ type: "string", checks: [] }],
         rest: { type: "fallback", reason: "transform" },
+        optStart: 1,
       }),
     ).toBeNull();
   });
@@ -202,6 +218,7 @@ describe("fast-path — Tuple", () => {
         type: "tuple",
         items: [{ type: "fallback", reason: "transform" }],
         rest: null,
+        optStart: 1,
       }),
     ).toBeNull();
   });

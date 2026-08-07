@@ -1913,3 +1913,307 @@ describe("finalized issues omit `input` entirely, as zod does", () => {
     expect(Object.keys(compiledIssue).sort()).toStrictEqual(Object.keys(zodIssue).sort());
   });
 });
+
+// ─── Records validate only PLAIN objects ────────────────────────────────────
+// `$ZodRecord` gates on `util.isPlainObject`, which is strictly narrower than
+// the `util.isObject` (`typeof "object"`, not null, not an array) that
+// `$ZodObject` uses. Sharing the object guard was a validation hole in the one
+// direction that matters: compiled output ACCEPTED a Date, a Map, a RegExp, an
+// Error, a File and any class instance, none of which has own enumerable string
+// keys for the value schema to catch, while zod rejects all of them.
+
+describe("records accept only plain objects, as $ZodRecord does", () => {
+  const NON_PLAIN: [string, () => unknown][] = [
+    ["Date", () => new Date(0)],
+    ["Map", () => new Map([["a", 1]])],
+    ["Set", () => new Set(["a"])],
+    ["RegExp", () => /re/],
+    ["Error", () => new Error("boom")],
+    ["class instance", () => new (class Foo {})()],
+    ["File", () => new File(["x"], "a.txt")],
+    ["own constructor that is a function", () => ({ constructor: class Bar {} })],
+  ];
+  const PLAIN: [string, () => unknown][] = [
+    ["plain literal", () => ({ a: "x" })],
+    ["null prototype", () => Object.create(null) as object],
+    ["inherits from a plain object", () => Object.create({ inherited: 1 }) as object],
+    ["own constructor that is NOT a function", () => ({ constructor: 1 })],
+  ];
+  const inputs = [...NON_PLAIN, ...PLAIN].map(([, make]) => make());
+
+  it("rejects every non-plain object and keeps accepting the plain ones", () => {
+    expectParity(z.record(z.string(), z.unknown()), inputs);
+    expectParity(z.record(z.string(), z.string()), inputs);
+    expectParity(z.looseRecord(z.string(), z.unknown()), inputs);
+    expectParity(z.partialRecord(z.string(), z.unknown()), inputs);
+  });
+
+  it("holds wherever the record is nested", () => {
+    expectParity(
+      z.object({ r: z.record(z.string(), z.unknown()) }),
+      inputs.map((value) => ({ r: value })),
+    );
+    expectParity(z.array(z.record(z.string(), z.unknown())), [inputs]);
+    expectParity(z.union([z.record(z.string(), z.unknown()), z.number()]), inputs);
+    expectParity(z.json(), inputs);
+  });
+
+  it("holds on the rebuilding (mutating-value) path too", () =>
+    expectParity(z.record(z.string(), z.string().trim()), inputs));
+
+  it("CONTROL: z.object() keeps the LOOSER isObject guard", () =>
+    expectParity(z.object({}), inputs));
+});
+
+// ─── `__proto__` is not a record key ────────────────────────────────────────
+// zod's record walk opens with `if (key === "__proto__") continue`, so an own
+// `__proto__` data property — which `JSON.parse` creates, and which is how
+// prototype-pollution payloads arrive — is neither key-validated nor
+// value-validated. The compiled walk validated it and reported issues zod never
+// raises.
+
+describe("records skip an own `__proto__` key, as zod does", () => {
+  // Inputs are chosen so BOTH sides reject: on success the comparison would be
+  // dominated by the record's by-reference output, which keeps the `__proto__`
+  // key zod's fresh object drops (pinned in known-divergences.test.ts). What is
+  // asserted here is the ISSUE LIST — that the skipped key contributes none.
+  const withProto = (a: unknown) =>
+    JSON.parse(`{"a":${JSON.stringify(a)},"__proto__":{"polluted":true}}`) as unknown;
+  const badProtoValue = () => JSON.parse('{"a":"bad","__proto__":"not-a-number"}') as unknown;
+
+  it("raises no issue for the key itself", () =>
+    expectParity(z.record(z.string().min(20), z.unknown()), [withProto("x")]));
+
+  it("raises no issue for its VALUE, even one the value schema rejects", () =>
+    expectParity(z.record(z.string(), z.number()), [badProtoValue()]));
+
+  it("holds on the rebuilding path", () =>
+    expectParity(z.record(z.string(), z.string().trim().min(20)), [badProtoValue()]));
+
+  it("CONTROL: an object catchall has no such exemption", () =>
+    expectParity(z.object({ a: z.number() }).catchall(z.number()), [badProtoValue()]));
+});
+
+// ─── Tuple `optStart` comes from zod's `optin`, not from the IR shape ───────
+// $ZodTuple computes the start of its omittable tail from each item's
+// `_zod.optin`, SKIPS those items entirely when the input is shorter, and moves
+// the under-length `too_small` threshold with it. Inferring that from the
+// extracted IR recognised only `optional` and `default`, so every other
+// optional-in shape — all of which extract to something else — lost its
+// omittable tail.
+
+describe("tuple items that zod treats as omittable", () => {
+  const OPTIONAL_IN: [string, () => z.ZodType][] = [
+    ["optional", () => z.string().optional()],
+    ["exactOptional", () => z.exactOptional(z.string())],
+    ["default", () => z.string().default("d")],
+    ["prefault", () => z.string().prefault("d")],
+    ["z.undefined()", () => z.undefined()],
+    ["nullable over optional", () => z.string().optional().nullable()],
+    ["readonly over optional", () => z.string().optional().readonly()],
+    ["lazy over optional", () => z.lazy(() => z.string().optional())],
+    ["union with an optional option", () => z.union([z.string().optional(), z.number()])],
+    ["nonoptional over optional", () => z.string().optional().nonoptional()],
+    ["pipe from an optional", () => z.string().optional().pipe(z.string().optional())],
+    ["prefault whose inner check fails", () => z.string().min(5).prefault("ab")],
+    ["default whose inner check fails", () => z.string().min(5).default("ab")],
+  ];
+
+  for (const [label, make] of OPTIONAL_IN) {
+    it(`${label}: absent trailing item is skipped, not validated`, () => {
+      expectParity(z.tuple([make()]), [[], [undefined], ["s"], ["abcdef"], [1]]);
+      expectParity(z.tuple([make()]).rest(z.number()), [[], ["s"], ["s", 1]]);
+    });
+
+    it(`${label}: shifts the under-length threshold when it trails a required item`, () =>
+      expectParity(z.tuple([z.string(), make()]), [[], ["a"], ["a", undefined], ["a", "s"]]));
+
+    it(`${label}: is still required when a required item follows it`, () =>
+      expectParity(z.tuple([make(), z.string()]), [[], ["a"], ["a", "b"]]));
+  }
+});
+
+// A required slot past the end of a short input is RUN by zod, and
+// `handleTupleResult` writes its result back — so the output array is longer
+// than the input whenever that item accepts `undefined`.
+describe("tuple output is padded up to optStart, as handleTupleResult does", () => {
+  it("a required any/unknown slot past the end lands as an own undefined", () => {
+    expectParity(z.tuple([z.any(), z.any()]), [["x"], ["x", "y"], []]);
+    expectParity(z.tuple([z.unknown(), z.unknown()]), [["x"], []]);
+    expectParity(z.tuple([z.any(), z.string().default("d")]), [[], ["x"], ["x", "y"]]);
+  });
+
+  it("with a rest element, where no length gate hides the short input", () =>
+    expectParity(z.tuple([z.any(), z.any()]).rest(z.number()), [[], ["x"], ["x", "y", 1]]));
+
+  it("CONTROL: a required slot that REJECTS undefined fails instead of padding", () =>
+    expectParity(z.tuple([z.string(), z.string()]), [["x"], []]));
+});
+
+// ─── `.optional()` over an optional-IN inner ────────────────────────────────
+// `$ZodOptional.parse` takes a different branch when `innerType._zod.optin ===
+// "optional"`: it RUNS the inner on `undefined` (so a `.default()`/`.prefault()`
+// underneath fires) instead of short-circuiting, then discards the failure only
+// if the value is still undefined. The compiled short-circuit models the other
+// branch, and the `.default()` case explicitly; everything else delegates.
+
+describe("optional() wrapping a schema that consumes undefined itself", () => {
+  it("prefault fires through the optional", () =>
+    expectParity(z.string().prefault("d").optional(), [undefined, "x", 1]));
+
+  it("a prefault whose value fails its own checks keeps the failure", () =>
+    expectParity(z.string().min(5).prefault("ab").optional(), [undefined, "abcdef", "ab"]));
+
+  it("default fires through the optional, including under a nullable", () => {
+    expectParity(z.string().default("d").optional(), [undefined, "x", 1]);
+    expectParity(z.string().default("d").nullable().optional(), [undefined, null, "x"]);
+    expectParity(z.string().default("d").optional().optional(), [undefined, "x"]);
+  });
+
+  it("a union option that consumes undefined fires through the optional", () =>
+    expectParity(z.union([z.string().default("d"), z.number()]).optional(), [undefined, "x", 1]));
+
+  it("shapes that only pass undefined through still short-circuit", () => {
+    expectParity(z.string().optional().optional(), [undefined, "x", 1]);
+    expectParity(z.exactOptional(z.string()).optional(), [undefined, "x", 1]);
+    expectParity(z.undefined().optional(), [undefined, "x"]);
+    expectParity(z.string().optional().nullable().optional(), [undefined, null, "x", 1]);
+  });
+});
+
+// ─── Absent-key issue suppression follows `optout`, not the IR shape ────────
+// `handlePropertyResult` drops a property's issues when the schema is
+// optional-OUT and the key is missing. Keying that off "the property extracted
+// to a fallback" was one wrapper too narrow.
+
+describe("optional-out properties whose key is absent", () => {
+  const OPTOUT: [string, () => z.ZodType][] = [
+    ["exactOptional", () => z.exactOptional(z.string())],
+    ["nullable over exactOptional", () => z.exactOptional(z.string()).nullable()],
+    ["readonly over exactOptional", () => z.exactOptional(z.string()).readonly()],
+    ["nullable over optional", () => z.string().min(5).optional().nullable()],
+    ["z.undefined()", () => z.undefined()],
+  ];
+  for (const [label, make] of OPTOUT) {
+    it(`${label}: absent key raises nothing, explicit undefined still does`, () => {
+      const inputs = [{}, { a: undefined }, { a: "abcdef" }, { a: 1 }];
+      expectParity(z.object({ a: make() }), inputs);
+      expectParity(z.object({ a: make(), b: z.number() }), inputs);
+      expectParity(z.strictObject({ a: make(), b: z.number() }), inputs);
+      expectParity(z.looseObject({ a: make(), b: z.number() }), inputs);
+      expectParity(z.object({ a: make() }).catchall(z.number()), inputs);
+    });
+  }
+});
+
+// ─── Length/size checks run even after the type check failed ────────────────
+// `runChecks` consults a check's `when` predicate INSTEAD of the abort flag, and
+// the length/size families install one (`!nullish(value) && value.length/size
+// !== undefined`). So they fire on any input carrying that property, of any
+// type, and report an `origin` derived from the INPUT.
+
+describe("length and size checks reached through their `when` predicate", () => {
+  it("string length checks fire on a non-string that has a length", () => {
+    expectParity(z.string().min(2), [[], [1, 2, 3], "a", { length: 5 }, 1, null, undefined]);
+    expectParity(z.string().max(2), [[1, 2, 3], [], "abc"]);
+    expectParity(z.string().length(2), [[1, 2, 3], [], "abc"]);
+    expectParity(z.string().min(2).max(3), [[], [1, 2, 3, 4]]);
+  });
+
+  it("array length checks fire on a string", () => {
+    expectParity(z.array(z.string()).min(3), ["ab", "abcd", 1, []]);
+    expectParity(z.array(z.string()).max(1), ["ab", []]);
+    expectParity(z.array(z.string()).length(2), ["a", "abc", ["a", "b"]]);
+  });
+
+  it("set size checks fire on a Map, and file size checks on a Set", () => {
+    expectParity(z.set(z.string()).min(2), [new Map([["a", 1]]), new Map(), "ab", new Set(["a"])]);
+    expectParity(z.set(z.string()).max(1), [
+      new Map([
+        ["a", 1],
+        ["b", 2],
+      ]),
+      new Set(),
+    ]);
+    expectParity(z.set(z.string()).size(2), [new Map(), new Set(["a", "b"])]);
+    expectParity(z.file().min(2), [new Set(["a"]), new Set(), new Map()]);
+  });
+
+  it("carries the custom message and nests at the right path", () => {
+    expectParity(z.string().min(2, "at least two"), [[]]);
+    expectParity(z.object({ a: z.string().min(2) }), [{ a: [] }]);
+    expectParity(z.array(z.string().min(2)), [[[]]]);
+  });
+
+  it("CONTROL: checks without a `when` stay gated by the abort", () => {
+    expectParity(z.string().regex(/^a/), [[], 1]);
+    expectParity(z.number().gt(2), ["x", []]);
+    expectParity(z.string().includes("q"), [[]]);
+  });
+});
+
+// ─── A tuple's length issue aborts its union option ─────────────────────────
+// zod prunes union options with `util.aborted` — "any issue with `continue !==
+// true`" — and a tuple's length issue is pushed by the NODE, so it carries no
+// `continue` and aborts, unlike the identically-coded issue from a
+// `.min()`/`.max()` CHECK.
+
+describe("union pruning treats a tuple's length issue as aborting", () => {
+  it("wraps both options instead of surfacing the tuple's own issue", () => {
+    expectParity(z.union([z.tuple([z.string(), z.string()]), z.number()]), [
+      [],
+      ["a"],
+      ["a", "b", "c"],
+      1,
+    ]);
+    expectParity(
+      z.union([
+        z.tuple([z.bigint(), z.record(z.string(), z.string())]),
+        z.record(z.string(), z.tuple([z.string(), z.date()])),
+      ]),
+      [[], [1n]],
+    );
+  });
+
+  it("holds when the tuple is nested inside the option", () =>
+    expectParity(z.union([z.object({ t: z.tuple([z.string(), z.string()]) }), z.number()]), [
+      { t: [] },
+      { t: ["a", "b"] },
+    ]));
+
+  it("also gates a following refine on the same node", () =>
+    expectParity(
+      z.tuple([z.string(), z.string()]).refine(() => false, "never runs"),
+      [[], ["a", "b"]],
+    ));
+
+  it("CONTROL: an array's min() issue is continuable and does NOT abort", () =>
+    expectParity(z.union([z.array(z.string()).min(2), z.number()]), [[], ["a"], 1]));
+});
+
+// ─── A union option that rewrites forbids the by-reference shortcut ─────────
+// The fast form of a plain union is an `||` chain, which reports that SOME
+// option accepts the input; zod returns the value produced by the FIRST option
+// that succeeds. A `.catch()` option can never fail, so it claims every input.
+
+describe("unions whose options rewrite the value", () => {
+  it("a catch option claims every input", () => {
+    expectParity(z.union([z.string().catch("c"), z.number()]), [1, "x", true, null, {}]);
+    expectParity(z.union([z.string().catch("c"), z.literal(999), z.boolean(), z.null()]), [
+      999,
+      1,
+      true,
+      null,
+    ]);
+    expectParity(z.object({ u: z.union([z.string().catch("c"), z.number()]) }), [{ u: 1 }]);
+    expectParity(z.array(z.union([z.string().catch("c"), z.number()])), [[1], ["x"], [1, "x"]]);
+  });
+
+  it("an earlier rewriting option wins over a later exact match", () => {
+    expectParity(z.union([z.string().trim(), z.string()]), [" x ", "x"]);
+    expectParity(z.union([z.coerce.number(), z.string()]), ["5", "x"]);
+  });
+
+  it("CONTROL: a union of pure validators still takes the fast path", () =>
+    expectParity(z.union([z.string(), z.number()]), ["x", 1, true]));
+});

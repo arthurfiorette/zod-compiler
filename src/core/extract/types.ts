@@ -113,6 +113,15 @@ export interface ZodSchema {
     traits?: Set<string>;
     /** "optional" when the key may be absent in object output (zod optout). */
     optout?: string;
+    /**
+     * "optional" when the schema ACCEPTS an absent/undefined input — zod's
+     * `optin`. Set outright by `z.optional()`, `z.exactOptional()`,
+     * `z.undefined()`, `.default()` and `.prefault()`, and propagated by
+     * `.nullable()`, `.readonly()`, `.nonoptional()`, `z.lazy()`, a pipe (from
+     * its `in`) and a union (when ANY option has it). Drives which tuple items
+     * may be omitted and which branch `$ZodOptional` takes.
+     */
+    optin?: string;
     /** Discriminator dispatch values per property key (discriminated unions). */
     propValues?: Record<string, Set<unknown> | undefined>;
   };

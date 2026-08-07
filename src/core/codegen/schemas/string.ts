@@ -12,6 +12,7 @@ import { emit } from "../emit.js";
 import { invalidFormat, invalidType, tooBig, tooSmall } from "../emit-issue.js";
 import { EMAIL_REGEX_SOURCE, fastTestSource, UUID_REGEX_SOURCE } from "../well-known-regex.js";
 import { refineCheck, superRefineCheck, superRefineFastTest } from "./effect.js";
+import { whenGatedSizeChecks } from "./sizeable.js";
 
 /** `re.lastIndex=0;` reset statement for stateful (g/y-flagged) regexes. */
 function lastIndexReset(regexVar: string, flags: string | undefined): string {
@@ -76,6 +77,7 @@ export function slowString(ir: StringIR, g: SlowGen): string {
   code += emit`
     if(typeof ${g.input}!=="string"){
       ${invalidType(g, "string")}
+      ${whenGatedSizeChecks(ir.checks, g, "length")}
     }`;
 
   if (ir.checks.length > 0) {
@@ -112,19 +114,19 @@ export function slowString(ir: StringIR, g: SlowGen): string {
         case "includes":
           code += emit`
             if(!${g.input}.includes(${escapeString(check.includes)}${check.position !== undefined ? `,${check.position}` : ""})){
-              ${invalidFormat(g, "includes", { extra: `includes:${escapeString(check.includes)},origin:"string"`, message: check.message })}
+              ${invalidFormat(g, "includes", { origin: "string", extra: `includes:${escapeString(check.includes)}`, message: check.message })}
             }`;
           break;
         case "starts_with":
           code += emit`
             if(!${g.input}.startsWith(${escapeString(check.prefix)})){
-              ${invalidFormat(g, "starts_with", { extra: `prefix:${escapeString(check.prefix)},origin:"string"`, message: check.message })}
+              ${invalidFormat(g, "starts_with", { origin: "string", extra: `prefix:${escapeString(check.prefix)}`, message: check.message })}
             }`;
           break;
         case "ends_with":
           code += emit`
             if(!${g.input}.endsWith(${escapeString(check.suffix)})){
-              ${invalidFormat(g, "ends_with", { extra: `suffix:${escapeString(check.suffix)},origin:"string"`, message: check.message })}
+              ${invalidFormat(g, "ends_with", { origin: "string", extra: `suffix:${escapeString(check.suffix)}`, message: check.message })}
             }`;
           break;
         case "refine_effect":
@@ -187,12 +189,12 @@ export function slowString(ir: StringIR, g: SlowGen): string {
             const patternExpr = rewritten
               ? emitRegexSourceString(g.ctx, pattern)
               : `${regexVar}.toString()`;
-            extra = `pattern:${patternExpr},origin:"string"`;
+            extra = `pattern:${patternExpr}`;
           }
           code += emit`
             ${lastIndexReset(regexVar, check.patternFlags)}
             if(!${regexVar}.test(${g.input})){
-              ${invalidFormat(g, { expr: escapeString(check.format) }, { extra, message: check.message })}
+              ${invalidFormat(g, { expr: escapeString(check.format) }, { origin: check.bareIssue ? undefined : "string", extra, message: check.message })}
             }`;
           break;
         }

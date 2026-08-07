@@ -23,6 +23,20 @@
  * accept `useTypeMsg: true` for node-level uses (tuple), and invalidValue
  * accepts `useTypeMsg: false` for check-level uses (file mime).
  * When no message lands, the __zcFin finalizer applies the locale default.
+ *
+ * KEY ORDER MATTERS, and is reproduced from zod issue by issue. `ZodError`
+ * builds its `message` as `JSON.stringify(issues, …, 2)`, so insertion order is
+ * printed text in a property consumers log, snapshot and serialize — an issue
+ * carrying the right fields in the wrong order still renders a different error.
+ * zod's own orders are irregular (`too_small` leads with `origin` from a check
+ * but with `code` from a tuple's length branch; `invalid_format` carries
+ * `origin` for a pattern check and omits it for `z.url()`), so each emitter
+ * below mirrors one `payload.issues.push({…})` rather than a house style.
+ *
+ * `message` is written LAST everywhere, after `path`: zod never puts it in the
+ * literal — `finalizeIssue` assigns `full.message` afterwards — and that holds
+ * for a baked custom message too, since the custom error map is consulted from
+ * inside that same assignment.
  */
 
 import type { CodeGenContext } from "./context.js";
@@ -51,6 +65,28 @@ function resolveMessage(
 }
 
 /** `,message:"..."` fragment for inline object literals ("" when no message). */
+/**
+ * `,continue:false` — the marker that makes an issue ABORT its union option.
+ *
+ * zod prunes union options with `util.aborted`, which asks whether any issue has
+ * `continue !== true`. Compiled issues carry no `continue` at all, so the union
+ * generator classifies by CODE instead — sound for every issue a schema node
+ * raises (`invalid_type`, `unrecognized_keys`, …) but blind to the one
+ * exception: `$ZodTuple`'s length branch pushes a `too_small`/`too_big` from the
+ * NODE, with no `continue`, where the identically-coded issue from an
+ * `.min()`/`.max()` CHECK carries `continue: true` and does not abort. Without
+ * this, `z.union([z.tuple([a, b]), z.number()])` handed `[]` surfaced the
+ * tuple's `too_small` directly instead of wrapping both options in an
+ * `invalid_union`.
+ *
+ * Stripped during finalization exactly as zod strips its own (`delete
+ * full.continue`), so it never reaches a reported issue — see FAIL_CLASS_DECL
+ * and ZC_FZ_DECL.
+ */
+function abortsProp(aborts: boolean | undefined): string {
+  return aborts === true ? ",continue:false" : "";
+}
+
 function messageProp(m: string | undefined): string {
   return m === undefined ? "" : `,message:${escapeString(m)}`;
 }
@@ -60,10 +96,21 @@ function messageArg(m: string | undefined): string {
   return m === undefined ? "" : `,${escapeString(m)}`;
 }
 
+/**
+ * `origin` as source: a bare string is a literal (`"string"`), `{ expr }` is an
+ * expression evaluated at runtime — what a `when`-gated length/size check needs,
+ * since zod derives its origin from the INPUT (`getLengthableOrigin`).
+ */
+type Origin = string | { expr: string };
+
+function originExpr(origin: Origin): string {
+  return typeof origin === "string" ? escapeString(origin) : origin.expr;
+}
+
 export function tooSmall(
   g: IssueGen,
   minimum: string | number,
-  origin: string,
+  origin: Origin,
   /**
    * `"omit"` leaves the key OFF the issue entirely — not the same as `false`.
    * $ZodTuple's under-length branch pushes a bare
@@ -81,6 +128,8 @@ export function tooSmall(
     message?: string | undefined;
     /** Set for node-level issues (tuple length) where schema error applies. */
     useTypeMsg?: boolean;
+    /** Emit the union-abort marker; see {@link abortsProp}. */
+    aborts?: boolean;
   },
 ): string {
   const input = options?.input ?? g.input;
@@ -92,39 +141,46 @@ export function tooSmall(
       g.ctx.usedHelpers.add("__zcTSx");
       return pushIssue(
         g,
-        `__zcTSx(${minimum},${escapeString(origin)},${input},${path}${messageArg(m)})`,
+        `__zcTSx(${minimum},${originExpr(origin)},${input},${path}${messageArg(m)})`,
       );
     }
     if (inclusive === "omit") {
       g.ctx.usedHelpers.add("__zcTSn");
       return pushIssue(
         g,
-        `__zcTSn(${minimum},${escapeString(origin)},${input},${path}${messageArg(m)})`,
+        `__zcTSn(${minimum},${originExpr(origin)},${input},${path}${messageArg(m)})`,
       );
     }
     g.ctx.usedHelpers.add("__zcTS");
     return pushIssue(
       g,
-      `__zcTS(${minimum},${escapeString(origin)},${inclusive},${input},${path}${messageArg(m)})`,
+      `__zcTS(${minimum},${originExpr(origin)},${inclusive},${input},${path}${messageArg(m)})`,
     );
   }
   if (exact) {
     return pushIssue(
       g,
-      `{code:"too_small",minimum:${minimum},origin:${escapeString(origin)},inclusive:true,exact:true${messageProp(m)},input:${input},path:${path}}`,
+      `{origin:${originExpr(origin)},code:"too_small",minimum:${minimum},inclusive:true,exact:true,input:${input},path:${path}${messageProp(m)}}`,
     );
   }
-  const inclusiveProp = inclusive === "omit" ? "" : `,inclusive:${inclusive}`;
+  // The tuple's under-length branch is the only caller that omits `inclusive`,
+  // and it also puts `origin` last — see __zcTSn.
+  if (inclusive === "omit") {
+    return pushIssue(
+      g,
+      `{code:"too_small",minimum:${minimum},origin:${originExpr(origin)},input:${input},path:${path}${messageProp(m)}${abortsProp(options?.aborts)}}`,
+    );
+  }
   return pushIssue(
     g,
-    `{code:"too_small",minimum:${minimum},origin:${escapeString(origin)}${inclusiveProp}${messageProp(m)},input:${input},path:${path}}`,
+    `{origin:${originExpr(origin)},code:"too_small",minimum:${minimum},inclusive:${inclusive},input:${input},path:${path}${messageProp(m)}}`,
   );
 }
 
 export function tooBig(
   g: IssueGen,
   maximum: string | number,
-  origin: string,
+  origin: Origin,
   inclusive: boolean,
   options?: {
     exact?: boolean;
@@ -133,6 +189,16 @@ export function tooBig(
     message?: string | undefined;
     /** Set for node-level issues (tuple length) where schema error applies. */
     useTypeMsg?: boolean;
+    /**
+     * `"tuple"` selects $ZodTuple's over-length key order — `code, maximum,
+     * inclusive, origin` — where a check-created size issue leads with `origin`.
+     * zod builds the tuple issue by spreading `{code, maximum, inclusive}` and
+     * appending `origin` after `input`/`inst`, and that ordering is visible in
+     * `ZodError.message`.
+     */
+    layout?: "tuple";
+    /** Emit the union-abort marker; see {@link abortsProp}. */
+    aborts?: boolean;
   },
 ): string {
   const input = options?.input ?? g.input;
@@ -144,45 +210,79 @@ export function tooBig(
       g.ctx.usedHelpers.add("__zcTBx");
       return pushIssue(
         g,
-        `__zcTBx(${maximum},${escapeString(origin)},${input},${path}${messageArg(m)})`,
+        `__zcTBx(${maximum},${originExpr(origin)},${input},${path}${messageArg(m)})`,
+      );
+    }
+    if (options?.layout === "tuple") {
+      g.ctx.usedHelpers.add("__zcTBt");
+      return pushIssue(
+        g,
+        `__zcTBt(${maximum},${originExpr(origin)},${input},${path}${messageArg(m)})`,
       );
     }
     g.ctx.usedHelpers.add("__zcTB");
     return pushIssue(
       g,
-      `__zcTB(${maximum},${escapeString(origin)},${inclusive},${input},${path}${messageArg(m)})`,
+      `__zcTB(${maximum},${originExpr(origin)},${inclusive},${input},${path}${messageArg(m)})`,
     );
   }
   if (exact) {
     return pushIssue(
       g,
-      `{code:"too_big",maximum:${maximum},origin:${escapeString(origin)},inclusive:true,exact:true${messageProp(m)},input:${input},path:${path}}`,
+      `{origin:${originExpr(origin)},code:"too_big",maximum:${maximum},inclusive:true,exact:true,input:${input},path:${path}${messageProp(m)}}`,
+    );
+  }
+  if (options?.layout === "tuple") {
+    return pushIssue(
+      g,
+      `{code:"too_big",maximum:${maximum},inclusive:${inclusive},origin:${originExpr(origin)},input:${input},path:${path}${messageProp(m)}${abortsProp(options?.aborts)}}`,
     );
   }
   return pushIssue(
     g,
-    `{code:"too_big",maximum:${maximum},origin:${escapeString(origin)},inclusive:${inclusive}${messageProp(m)},input:${input},path:${path}}`,
+    `{origin:${originExpr(origin)},code:"too_big",maximum:${maximum},inclusive:${inclusive},input:${input},path:${path}${messageProp(m)}}`,
   );
 }
 
 export function invalidType(
   g: IssueGen,
   expected: string,
-  options?: { input?: string; path?: string; extra?: string; message?: string | undefined },
+  options?: {
+    input?: string;
+    path?: string;
+    extra?: string;
+    message?: string | undefined;
+    /**
+     * Put `extra` BEFORE `code` rather than after it. $ZodCheckNumberFormat's
+     * non-integer issue is `{expected, format, code}` while the `received` a
+     * number/date schema adds trails `code` — two orders for one issue code, both
+     * printed verbatim in `ZodError.message`.
+     */
+    extraBeforeCode?: boolean;
+    /**
+     * Lead with `code` instead of `expected`. Only `$ZodDiscriminatedUnion`'s
+     * non-object guard writes the issue that way; every other schema in zod puts
+     * `expected` first.
+     */
+    codeFirst?: boolean;
+  },
 ): string {
   const input = options?.input ?? g.input;
   const path = options?.path ?? g.path;
   // invalid_type is always created by the schema node — schema error applies.
   const m = resolveMessage(g, options?.message, true);
   if (g.ctx.mode === "lean" && !options?.extra) {
-    g.ctx.usedHelpers.add("__zcIT");
-    return pushIssue(g, `__zcIT(${escapeString(expected)},${input},${path}${messageArg(m)})`);
+    const helper = options?.codeFirst ? "__zcITc" : "__zcIT";
+    g.ctx.usedHelpers.add(helper);
+    return pushIssue(g, `${helper}(${escapeString(expected)},${input},${path}${messageArg(m)})`);
   }
-  const extra = options?.extra ? `,${options.extra}` : "";
-  return pushIssue(
-    g,
-    `{code:"invalid_type",expected:${escapeString(expected)}${extra}${messageProp(m)},input:${input},path:${path}}`,
-  );
+  const extra = options?.extra ?? "";
+  const head = options?.codeFirst
+    ? `code:"invalid_type",expected:${escapeString(expected)}${extra ? `,${extra}` : ""}`
+    : options?.extraBeforeCode
+      ? `expected:${escapeString(expected)}${extra ? `,${extra}` : ""},code:"invalid_type"`
+      : `expected:${escapeString(expected)},code:"invalid_type"${extra ? `,${extra}` : ""}`;
+  return pushIssue(g, `{${head},input:${input},path:${path}${messageProp(m)}}`);
 }
 
 export function invalidFormat(
@@ -192,10 +292,17 @@ export function invalidFormat(
     input?: string;
     path?: string;
     /**
-     * Extra issue properties as a source fragment
-     * (`'pattern:"…",origin:"string"'`). Explicitly `| undefined` so a caller
-     * can compute it conditionally: zod's `invalid_format` carries different
-     * fields per format, and the bare-issue formats carry none.
+     * Leading `origin`, present only where zod's push carries one:
+     * `$ZodCheckStringFormat`'s default pattern check and the regex / includes /
+     * starts_with / ends_with checks lead with `origin: "string"`, while
+     * `z.url()`'s own issues and every `$ZodCustomStringFormat` omit it.
+     */
+    origin?: string | undefined;
+    /**
+     * Extra issue properties as a source fragment (`'pattern:"…"'`), emitted
+     * right after `format` where zod writes them. Explicitly `| undefined` so a
+     * caller can compute it conditionally: zod's `invalid_format` carries
+     * different fields per format, and the bare-issue formats carry none.
      */
     extra?: string | undefined;
     message?: string | undefined;
@@ -208,13 +315,18 @@ export function invalidFormat(
   const m = options?.message;
   if (g.ctx.mode === "lean") {
     g.ctx.usedHelpers.add("__zcIF");
+    const originArg = options?.origin === undefined ? "undefined" : escapeString(options.origin);
     const extraArg = options?.extra ? `,{${options.extra}}` : m !== undefined ? ",undefined" : "";
-    return pushIssue(g, `__zcIF(${formatExpr},${input},${path}${extraArg}${messageArg(m)})`);
+    return pushIssue(
+      g,
+      `__zcIF(${originArg},${formatExpr},${input},${path}${extraArg}${messageArg(m)})`,
+    );
   }
+  const originProp = options?.origin === undefined ? "" : `origin:${escapeString(options.origin)},`;
   const extra = options?.extra ? `,${options.extra}` : "";
   return pushIssue(
     g,
-    `{code:"invalid_format",format:${formatExpr}${extra}${messageProp(m)},input:${input},path:${path}}`,
+    `{${originProp}code:"invalid_format",format:${formatExpr}${extra},input:${input},path:${path}${messageProp(m)}}`,
   );
 }
 
@@ -233,7 +345,7 @@ export function unrecognizedKeys(
   }
   return pushIssue(
     g,
-    `{code:"unrecognized_keys",keys:${keysExpr}${messageProp(m)},input:${input},path:${path}}`,
+    `{code:"unrecognized_keys",keys:${keysExpr},input:${input},path:${path}${messageProp(m)}}`,
   );
 }
 
@@ -266,9 +378,11 @@ export function invalidValue(
     const extraArg = options?.extra ? `,{${options.extra}}` : m !== undefined ? ",undefined" : "";
     return pushIssue(g, `__zcIV(${valuesExpr},${input},${path}${extraArg}${messageArg(m)})`);
   }
+  // `expected` precedes `values` in z.stringbool()'s push, so extras go between
+  // `code` and `values` rather than after them.
   const extra = options?.extra ? `,${options.extra}` : "";
   return pushIssue(
     g,
-    `{code:"invalid_value",values:${valuesExpr}${extra}${messageProp(m)},input:${input},path:${path}}`,
+    `{code:"invalid_value"${extra},values:${valuesExpr},input:${input},path:${path}${messageProp(m)}}`,
   );
 }

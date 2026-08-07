@@ -288,3 +288,128 @@ describe("jit() — degradation", () => {
     }
   });
 });
+
+/**
+ * The whole installed surface, not just `safeParse`.
+ *
+ * `__zcMkv` gives `parse()`, `parseAsync()` and `~standard.validate()` their own
+ * by-reference shortcut over the hosted fast check (`fc`), and wraps the SYNC
+ * validator for the two async methods. Both shortcuts carry contracts that
+ * `safeParse` alone never exercises, and both were violated:
+ *
+ *  - `fc` promises that a passing check means the parse returns its INPUT. A
+ *    stripping object whose build pass declined it (a `.catch()` field, say)
+ *    still published one, so `z.object({a: z.number().catch(0)}).parse({a:1,b:2})`
+ *    handed back the UNSTRIPPED input while its own `safeParse` returned `{a:1}`.
+ *  - the async pair wrapped a validator that, for a schema the compiler cannot
+ *    reproduce, calls Zod's SYNCHRONOUS safeParse — which raises
+ *    `$ZodAsyncError` by design. So any schema containing an `async` refinement
+ *    or a `z.promise()` rejected on `parseAsync` for EVERY input, valid ones
+ *    included.
+ */
+describe("jit — every installed method agrees with Zod, not just safeParse", () => {
+  const render = (run: () => unknown): string => {
+    try {
+      const value = run();
+      return `ok:${JSON.stringify(value)}`;
+    } catch (error) {
+      if (error instanceof z.ZodError) return `throw:ZodError:${JSON.stringify(error.issues)}`;
+      return `throw:${error instanceof Error ? error.constructor.name : String(error)}`;
+    }
+  };
+
+  const expectSurfaceParity = (make: () => z.ZodType, inputs: unknown[]): void => {
+    const plain = make();
+    const compiled = jit(make(), { eager: true });
+    for (const input of inputs) {
+      expect(
+        render(() => compiled.parse(input)),
+        `parse ${String(input)}`,
+      ).toBe(render(() => plain.parse(input)));
+      expect(
+        render(() => (compiled as unknown as StandardSchema)["~standard"].validate(input)),
+        `~standard ${String(input)}`,
+      ).toBe(render(() => (plain as unknown as StandardSchema)["~standard"].validate(input)));
+      expect(
+        render(() => (compiled as { is: (v: unknown) => boolean }).is(input)),
+        `is ${String(input)}`,
+      ).toBe(render(() => plain.safeParse(input).success));
+    }
+  };
+
+  interface StandardSchema {
+    "~standard": { validate: (value: unknown) => unknown };
+  }
+
+  it("a strip object with a catch field does not hand back the unstripped input", () =>
+    expectSurfaceParity(
+      () => z.object({ a: z.number().catch(0) }),
+      [{ a: 1, b: 2 }, { a: "x", b: 2 }, {}],
+    ));
+
+  it("a union whose option rewrites does not hand back the input", () => {
+    expectSurfaceParity(() => z.union([z.string().catch("c"), z.number()]), [1, "x", true]);
+    expectSurfaceParity(
+      () => z.object({ u: z.union([z.string().catch("c"), z.number()]) }),
+      [{ u: 1, extra: 9 }],
+    );
+    expectSurfaceParity(
+      () => z.record(z.string(), z.union([z.string().catch("c"), z.number()])),
+      [{ k: 1 }],
+    );
+  });
+
+  it("stripping, defaults and rewrites reach parse() as they reach safeParse()", () => {
+    expectSurfaceParity(() => z.object({ a: z.string() }), [{ a: "x", b: 2 }, { a: 1 }]);
+    expectSurfaceParity(() => z.object({ a: z.number().default(5) }), [{ a: 1, b: 2 }, {}]);
+    expectSurfaceParity(() => z.object({ a: z.string().trim() }), [{ a: " x ", b: 2 }]);
+    expectSurfaceParity(
+      () => z.union([z.object({ a: z.string() }), z.object({ b: z.number() })]),
+      [{ a: "x", extra: 1 }],
+    );
+  });
+
+  const ASYNC: [string, () => z.ZodType, unknown[]][] = [
+    ["async refinement", () => z.string().refine(async (v) => v.length > 1), ["ab", "a", 1]],
+    ["z.promise()", () => z.promise(z.string()), [Promise.resolve("x"), "x"]],
+    ["async transform", () => z.string().transform(async (v) => v.length), ["ab", 1]],
+    [
+      "an object with one async field",
+      () => z.object({ a: z.string().refine(async (v) => v.length > 1), b: z.number() }),
+      [{ a: "ab", b: 1 }, { a: "a", b: 1 }, { a: 1, b: 1 }, 1],
+    ],
+    [
+      "an array of async elements",
+      () => z.array(z.string().refine(async () => true)),
+      [["a"], [1]],
+    ],
+  ];
+
+  for (const [label, make, inputs] of ASYNC) {
+    it(`${label}: parseAsync/safeParseAsync still work`, async () => {
+      const plain = make();
+      const compiled = jit(make(), { eager: true });
+      const settle = async (run: () => Promise<unknown>): Promise<string> => {
+        try {
+          return `resolved:${JSON.stringify(await run())}`;
+        } catch (error) {
+          if (error instanceof z.ZodError)
+            return `rejected:ZodError:${JSON.stringify(error.issues)}`;
+          return `rejected:${error instanceof Error ? error.constructor.name : String(error)}`;
+        }
+      };
+      for (const input of inputs) {
+        expect(await settle(() => compiled.parseAsync(input))).toBe(
+          await settle(() => plain.parseAsync(input)),
+        );
+        expect(
+          await settle(async () => normalize(await compiled.safeParseAsync(input))),
+        ).toStrictEqual(await settle(async () => normalize(await plain.safeParseAsync(input))));
+      }
+    });
+
+    it(`${label}: the synchronous surface is unchanged`, () => {
+      expectSurfaceParity(make, inputs);
+    });
+  }
+});

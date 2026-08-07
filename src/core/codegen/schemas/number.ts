@@ -85,16 +85,16 @@ export function slowNumber(ir: NumberIR, g: SlowGen): string {
             const msgProp = message !== undefined ? `,message:${JSON.stringify(message)}` : "";
             code += emit`
               if(!Number.isInteger(${g.input})){
-                ${invalidType(g, "int", { extra: 'format:"safeint"', message })}
+                ${invalidType(g, "int", { extra: 'format:"safeint"', extraBeforeCode: true, message })}
               }else if(${g.input}<-9007199254740991){
-                ${g.issues}.push({code:"too_small",minimum:-9007199254740991,origin:"int",${note},inclusive:true${msgProp},input:${g.input},path:${g.path}});
+                ${g.issues}.push({code:"too_small",minimum:-9007199254740991,${note},origin:"int",inclusive:true,input:${g.input},path:${g.path}${msgProp}});
               }else if(${g.input}>9007199254740991){
-                ${g.issues}.push({code:"too_big",maximum:9007199254740991,origin:"int",${note},inclusive:true${msgProp},input:${g.input},path:${g.path}});
+                ${g.issues}.push({code:"too_big",maximum:9007199254740991,${note},origin:"int",inclusive:true,input:${g.input},path:${g.path}${msgProp}});
               }`;
           } else if (check.format === "int32") {
             code += emit`
               if(!Number.isInteger(${g.input})){
-                ${invalidType(g, "int", { extra: 'format:"int32"', message })}
+                ${invalidType(g, "int", { extra: 'format:"int32"', extraBeforeCode: true, message })}
               }else if(${g.input}<-2147483648){
                 ${tooSmall(g, -2147483648, "number", true, { message })}
               }else if(${g.input}>2147483647){
@@ -103,7 +103,7 @@ export function slowNumber(ir: NumberIR, g: SlowGen): string {
           } else if (check.format === "uint32") {
             code += emit`
               if(!Number.isInteger(${g.input})){
-                ${invalidType(g, "int", { extra: 'format:"uint32"', message })}
+                ${invalidType(g, "int", { extra: 'format:"uint32"', extraBeforeCode: true, message })}
               }else if(${g.input}<0){
                 ${tooSmall(g, 0, "number", true, { message })}
               }else if(${g.input}>4294967295){
@@ -127,7 +127,7 @@ export function slowNumber(ir: NumberIR, g: SlowGen): string {
           const fsr = emitRuntimeHelper(g.ctx, "__zcFsr", ZC_FSR_DECL);
           code += emit`
             if(${fsr}(${g.input},${check.value})!==0){
-              ${g.issues}.push({code:"not_multiple_of",divisor:${check.value},origin:"number"${msgProp},input:${g.input},path:${g.path}});
+              ${g.issues}.push({origin:"number",code:"not_multiple_of",divisor:${check.value},input:${g.input},path:${g.path}${msgProp}});
             }`;
           break;
         }

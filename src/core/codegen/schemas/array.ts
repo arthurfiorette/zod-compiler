@@ -12,11 +12,13 @@ import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
 import { ZC_AB_DECL } from "../issue-decls.js";
 import { refineCheck, superRefineCheck, superRefineFastTest } from "./effect.js";
+import { whenGatedSizeChecks } from "./sizeable.js";
 
 export function slowArray(ir: SchemaIR & { type: "array" }, g: SlowGen): string {
   let code = emit`
     if(!Array.isArray(${g.input})){
       ${invalidType(g, "array")}
+      ${whenGatedSizeChecks(ir.checks, g, "length")}
     }else{`;
 
   if (hasMutation(ir.element)) {

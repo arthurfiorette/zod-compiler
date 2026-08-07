@@ -406,6 +406,33 @@ export interface TupleIR {
   type: "tuple";
   items: SchemaIR[];
   rest: SchemaIR | null;
+  /**
+   * Index where the omittable tail begins — zod's `optStart`, captured from the
+   * live schemas at extraction time:
+   *
+   * ```js
+   * const reversedIndex = [...items].reverse().findIndex((i) => i._zod.optin !== "optional");
+   * const optStart = reversedIndex === -1 ? 0 : items.length - reversedIndex;
+   * ```
+   *
+   * An item at or past this index is SKIPPED ENTIRELY when the input is shorter
+   * than the tuple — zod never runs its schema, so no default/prefault fires for
+   * it — and it also moves the under-length `too_small` threshold
+   * (`input.length < optStart - 1`).
+   *
+   * Read from `_zod.optin` rather than inferred from the item's IR type because
+   * "optional-in" is a property of the ZOD schema, not of the shape the compiler
+   * managed to compile: `z.exactOptional()`, `z.prefault()`, `.nonoptional()`
+   * and pipes all extract to an opaque `fallback` leaf, `z.undefined()` and
+   * `z.nullable(z.string().optional())` extract to nodes named nothing like
+   * "optional", and a union is optional-in when ANY option is. The IR-type
+   * inference this replaced recognised only `optional` and `default`, so every
+   * other shape lost its omittable tail — `z.tuple([z.exactOptional(z.string())])`
+   * rejected `[]` that zod accepts, `z.tuple([z.string().prefault("d")])` turned
+   * `[]` into `["d"]`, and `z.tuple([z.string(), z.undefined()])` answered a
+   * one-element input with a `too_small` where zod reports nothing.
+   */
+  optStart: number;
 }
 
 export interface RecordIR {

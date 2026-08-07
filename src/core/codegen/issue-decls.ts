@@ -8,18 +8,30 @@
  * Argument convention (positional, kept short to minimize call-site bytes):
  *   __zcTS(minimum, origin, inclusive, input, path, msg?)  — too_small
  *   __zcTSn(minimum, origin, input, path, msg?)            — too_small with NO `inclusive` key
+ *   __zcTBt(maximum, origin, input, path, msg?)            — too_big, tuple key order
  *   __zcTB(maximum, origin, inclusive, input, path, msg?)  — too_big
  *   __zcIT(expected, input, path, msg?)                    — invalid_type
- *   __zcIF(format, input, path, extra?, msg?)              — invalid_format (extra merged into result)
+ *   __zcITc(expected, input, path, msg?)                   — invalid_type, `code` first
+ *   __zcIF(origin, format, input, path, extra?, msg?)      — invalid_format (extra merged into result)
  *   __zcIV(values, input, path, extra?, msg?)              — invalid_value (extra merged into result)
  *   __zcUK(keys, input, path, msg?)                        — unrecognized_keys
  *
  * The trailing msg argument carries a static custom error message; when
  * absent, the __zcFin finalizer applies the configured locale default.
+ *
+ * KEY ORDER IS PART OF THE CONTRACT. `ZodError.message` is
+ * `JSON.stringify(issues, …, 2)`, so the order these factories insert keys in is
+ * printed verbatim in the message every consumer logs, snapshots or serializes.
+ * Each literal below therefore reproduces the order of the corresponding
+ * `payload.issues.push({…})` in zod, which is irregular by type — `too_small`
+ * from a check leads with `origin` while the same code from a tuple's length
+ * branch leads with `code` — and every factory writes `message` LAST, because
+ * zod's `finalizeIssue` assigns it after the fact (`full.message = …`) even for
+ * a custom message baked into the check's error map.
  */
 
 const ZC_TS_DECL =
-  'function __zcTS(m,o,i,inp,p,msg){var r={code:"too_small",minimum:m,origin:o,inclusive:i,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
+  'function __zcTS(m,o,i,inp,p,msg){var r={origin:o,code:"too_small",minimum:m,inclusive:i,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
 
 /**
  * too_small with the `inclusive` key ABSENT, not false. $ZodTuple's under-length
@@ -29,22 +41,49 @@ const ZC_TS_DECL =
  * Separate from __zcTS because the value cannot express absence.
  */
 const ZC_TS_NO_INCLUSIVE_DECL =
-  'function __zcTSn(m,o,inp,p,msg){var r={code:"too_small",minimum:m,origin:o,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
+  'function __zcTSn(m,o,inp,p,msg){var r={code:"too_small",minimum:m,origin:o,input:inp,path:p,continue:false};if(msg!==undefined)r.message=msg;return r;}';
 
 const ZC_TS_EXACT_DECL =
-  'function __zcTSx(m,o,inp,p,msg){var r={code:"too_small",minimum:m,origin:o,inclusive:true,exact:true,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
+  'function __zcTSx(m,o,inp,p,msg){var r={origin:o,code:"too_small",minimum:m,inclusive:true,exact:true,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
 
 const ZC_TB_DECL =
-  'function __zcTB(m,o,i,inp,p,msg){var r={code:"too_big",maximum:m,origin:o,inclusive:i,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
+  'function __zcTB(m,o,i,inp,p,msg){var r={origin:o,code:"too_big",maximum:m,inclusive:i,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
+
+/**
+ * too_big in the TUPLE over-length key order. $ZodTuple spreads
+ * `{ code, maximum, inclusive }` and appends `origin` after `input`/`inst`, so
+ * its `origin` trails `inclusive` where every check-created size issue leads
+ * with it. Its under-length sibling is __zcTSn.
+ */
+const ZC_TB_TUPLE_DECL =
+  'function __zcTBt(m,o,inp,p,msg){var r={code:"too_big",maximum:m,inclusive:true,origin:o,input:inp,path:p,continue:false};if(msg!==undefined)r.message=msg;return r;}';
 
 const ZC_TB_EXACT_DECL =
-  'function __zcTBx(m,o,inp,p,msg){var r={code:"too_big",maximum:m,origin:o,inclusive:true,exact:true,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
+  'function __zcTBx(m,o,inp,p,msg){var r={origin:o,code:"too_big",maximum:m,inclusive:true,exact:true,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
 
 const ZC_IT_DECL =
-  'function __zcIT(e,inp,p,msg){var r={code:"invalid_type",expected:e,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
+  'function __zcIT(e,inp,p,msg){var r={expected:e,code:"invalid_type",input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
 
+/**
+ * invalid_type with `code` ahead of `expected`. Every schema in zod spells this
+ * issue `{ expected, code }` — except `$ZodDiscriminatedUnion`, whose
+ * non-object guard writes `{ code, expected }`. One literal, one key order, and
+ * it shows up in `ZodError.message`.
+ */
+const ZC_IT_CODE_FIRST_DECL =
+  'function __zcITc(e,inp,p,msg){var r={code:"invalid_type",expected:e,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
+
+/**
+ * `o` is the leading `origin`, present only for the formats whose issue carries
+ * one: `$ZodCheckStringFormat`'s default pattern check and the regex /
+ * includes / starts_with / ends_with checks all lead with `origin: "string"`,
+ * while `z.url()`'s own pushes and every `$ZodCustomStringFormat` omit it
+ * entirely. `extra` holds the per-format tail (`pattern`, `includes`, `prefix`,
+ * `suffix`, `note`) and is merged BEFORE input/path so it lands where zod
+ * writes it.
+ */
 const ZC_IF_DECL =
-  'function __zcIF(f,inp,p,extra,msg){var r={code:"invalid_format",format:f,input:inp,path:p};if(extra)Object.assign(r,extra);if(msg!==undefined)r.message=msg;return r;}';
+  'function __zcIF(o,f,inp,p,extra,msg){var r=o===undefined?{code:"invalid_format",format:f}:{origin:o,code:"invalid_format",format:f};if(extra)Object.assign(r,extra);r.input=inp;r.path=p;if(msg!==undefined)r.message=msg;return r;}';
 
 /**
  * `extra` carries the per-producer fields: enum and literal push `values` only,
@@ -52,7 +91,7 @@ const ZC_IF_DECL =
  * Merged the same way __zcIF merges its own.
  */
 const ZC_IV_DECL =
-  'function __zcIV(values,inp,p,extra,msg){var r={code:"invalid_value",values:values,input:inp,path:p};if(extra)Object.assign(r,extra);if(msg!==undefined)r.message=msg;return r;}';
+  'function __zcIV(values,inp,p,extra,msg){var r={code:"invalid_value"};if(extra)Object.assign(r,extra);r.values=values;r.input=inp;r.path=p;if(msg!==undefined)r.message=msg;return r;}';
 
 const ZC_UK_DECL =
   'function __zcUK(k,inp,p,msg){var r={code:"unrecognized_keys",keys:k,input:inp,path:p};if(msg!==undefined)r.message=msg;return r;}';
@@ -63,8 +102,10 @@ export const ISSUE_DECLS: Readonly<Record<string, string>> = {
   __zcTSn: ZC_TS_NO_INCLUSIVE_DECL,
   __zcTSx: ZC_TS_EXACT_DECL,
   __zcTB: ZC_TB_DECL,
+  __zcTBt: ZC_TB_TUPLE_DECL,
   __zcTBx: ZC_TB_EXACT_DECL,
   __zcIT: ZC_IT_DECL,
+  __zcITc: ZC_IT_CODE_FIRST_DECL,
   __zcIF: ZC_IF_DECL,
   __zcIV: ZC_IV_DECL,
   __zcUK: ZC_UK_DECL,
@@ -88,6 +129,64 @@ export const ZC_FSR_DECL =
  * per call would not.
  */
 export const ZC_HOP_DECL = "const __zcHop=Object.prototype.hasOwnProperty;";
+
+/**
+ * Port of zod's `util.isPlainObject` — the guard `$ZodRecord` applies to its
+ * input, and a STRICTLY narrower test than the `util.isObject` (`typeof
+ * "object"`, not null, not an array) that `$ZodObject` uses.
+ *
+ * The distinction is load-bearing and was a validation hole while records shared
+ * the object guard: `z.record(z.string(), z.string())` accepted a `Date`, a
+ * `Map`, a `RegExp`, an `Error`, a `File` and any class instance — every one of
+ * which zod rejects with `invalid_type`/`expected: "record"`, and none of which
+ * has own enumerable string keys for the value schema to catch. Compiled output
+ * therefore said "valid" to inputs zod refuses, which is the one direction a
+ * validator must never diverge in.
+ *
+ * The algorithm is zod's, step for step, because the answer is observable and
+ * the edge cases are deliberate:
+ *   - `constructor === undefined` (a null-prototype object) is PLAIN;
+ *   - a non-function own `constructor` (`{ constructor: 1 }`) is PLAIN;
+ *   - otherwise the constructor's `prototype` must be an object carrying its OWN
+ *     `isPrototypeOf` — which `Object.prototype` does and `Date.prototype`,
+ *     `Map.prototype` and every user class prototype do not. Testing that rather
+ *     than `Object.getPrototypeOf(o) === Object.prototype` is what lets a plain
+ *     object from another realm (a vm context, an iframe) still count as plain.
+ *
+ * Self-contained (`Object.prototype.hasOwnProperty` spelled out rather than
+ * reusing `__zcHop`) so inline mode can emit this decl alone: `emitRuntimeHelper`
+ * pushes only the decl it is asked for, and a helper that closed over another
+ * name would dangle wherever that one was not also emitted.
+ */
+export const ZC_PLAIN_DECL =
+  'function __zcPlain(o){if(typeof o!=="object"||o===null||Array.isArray(o))return false;' +
+  'var c=o.constructor;if(c===undefined||typeof c!=="function")return true;' +
+  'var p=c.prototype;if(typeof p!=="object"||p===null||Array.isArray(p))return false;' +
+  'return Object.prototype.hasOwnProperty.call(p,"isPrototypeOf");}';
+
+/**
+ * Ports of `util.getLengthableOrigin` / `util.getSizableOrigin` — the `origin` a
+ * length/size check puts on its issue, computed from the RUNTIME INPUT rather
+ * than from the schema.
+ *
+ * They only matter because those checks declare a `when` predicate
+ * (`!nullish(value) && value.length/size !== undefined`), which bypasses zod's
+ * abort gate: `z.string().min(2)` handed `[]` reports the `invalid_type` AND a
+ * `too_small` whose origin is `"array"`, because the empty array satisfies the
+ * `when`. Inside the matching type branch the origin is statically known and
+ * these are not used; they exist for the type-MISMATCH branch, where the input
+ * can be anything with a `.length` or a `.size`.
+ *
+ * `File` is probed through `typeof` first: zod tests `input instanceof File`
+ * unguarded, which throws where the global is absent — an environment zod does
+ * not run in, and not one worth reproducing a crash for.
+ */
+export const ZC_LENGTH_ORIGIN_DECL =
+  'function __zcLo(v){return Array.isArray(v)?"array":typeof v==="string"?"string":"unknown";}';
+
+export const ZC_SIZE_ORIGIN_DECL =
+  'function __zcSo(v){return v instanceof Set?"set":v instanceof Map?"map":' +
+  '(typeof File!=="undefined"&&v instanceof File)?"file":"unknown";}';
 
 /**
  * Issue codes zod raises from a schema's `_zod.parse` rather than from a check,
@@ -130,7 +229,7 @@ export function abortingCodeTest(codeExpr: string): string {
  * bypasses the abort gate — so generated code leaves those ungated and only
  * wraps the refine/superRefine effects.
  */
-export const ZC_AB_DECL = `function __zcAb(e,i){for(;i<e.length;i++){var c=e[i].code;if(${abortingCodeTest("c")})return true;}return false;}`;
+export const ZC_AB_DECL = `function __zcAb(e,i){for(;i<e.length;i++){var s=e[i];if(s.continue===false)return true;var c=s.code;if(${abortingCodeTest("c")})return true;}return false;}`;
 
 /**
  * Port of zod's `util.finalizeIssue` for issues NESTED inside an
@@ -151,7 +250,7 @@ export const ZC_AB_DECL = `function __zcAb(e,i){for(;i<e.length;i++){var c=e[i].
 export const ZC_FZ_DECL =
   "function __zcFz(e){for(var i=0;i<e.length;i++){var s=e[i];" +
   'if(s.message===undefined&&typeof __zcMsg==="function")s.message=__zcMsg(s);' +
-  "delete s.input;}return e;}";
+  "delete s.input;delete s.continue;}return e;}";
 
 /**
  * Port of zod's `util.prefixIssues(key, issues)` for a map entry whose key is a
@@ -241,6 +340,9 @@ export const RUNTIME_HELPER_DECLS: Readonly<Record<string, string>> = {
   __zcFsr: ZC_FSR_DECL,
   __zcFz: ZC_FZ_DECL,
   __zcHop: ZC_HOP_DECL,
+  __zcLo: ZC_LENGTH_ORIGIN_DECL,
+  __zcSo: ZC_SIZE_ORIGIN_DECL,
+  __zcPlain: ZC_PLAIN_DECL,
   __zcPfx: ZC_PFX_DECL,
   __zcCu: ZC_CUSTOM_OK_DECL,
   __zcSr: ZC_SR_DECL,

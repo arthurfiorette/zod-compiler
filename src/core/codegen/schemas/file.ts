@@ -3,11 +3,13 @@ import type { FastGen, SlowGen } from "../context.js";
 import { emitSet, escapeString } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, invalidValue, tooBig, tooSmall } from "../emit-issue.js";
+import { whenGatedSizeChecks } from "./sizeable.js";
 
 export function slowFile(ir: FileIR, g: SlowGen): string {
   let code = emit`
     if(!(${g.input} instanceof File)){
       ${invalidType(g, "file")}
+      ${whenGatedSizeChecks(ir.checks ?? [], g, "size")}
     }else{`;
 
   if (ir.checks) {

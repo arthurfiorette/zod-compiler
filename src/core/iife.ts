@@ -84,7 +84,7 @@ export const FAIL_CLASS_DECL =
   'Object.defineProperty(__ZcFail.prototype,"error",{configurable:true,get:function(){' +
   "if(this._c)return this._c;" +
   "var e=this._f!==null?this._f(this._i):this._e;" +
-  'for(var i=0;i<e.length;i++){if(e[i].message===undefined&&typeof __zcMsg==="function")e[i].message=__zcMsg(e[i]);delete e[i].input;}' +
+  'for(var i=0;i<e.length;i++){if(e[i].message===undefined&&typeof __zcMsg==="function")e[i].message=__zcMsg(e[i]);delete e[i].input;delete e[i].continue;}' +
   "return this._c=new __zcZodError(e);}});";
 
 /** Eager finalizer (mutation / partial-fast-path schemas): issues already
@@ -183,6 +183,23 @@ export const FINZ_DECL = "function __zcFinZ(z,i){return new __ZcFailZ(z,i);}";
  * rejection (a default/catch may still succeed), so it would be unsound as a
  * standalone guard.
  *
+ * parseAsync/safeParseAsync wrap the SYNC validator, which is right for every
+ * schema the compiler can reproduce — none of them are async. It is wrong for
+ * the ones it cannot: an `async` refinement or a `z.promise()` extracts to a
+ * Zod delegate, and delegating means calling Zod's SYNCHRONOUS safeParse, which
+ * raises `$ZodAsyncError` by design. Wrapping that gave the compiled schema an
+ * async pair that rejected with `$ZodAsyncError` for EVERY input — including
+ * valid ones — where Zod resolves normally, so `await UserSchema.parseAsync(x)`
+ * stopped working the moment any part of the schema went async.
+ *
+ * So both are guarded: a synchronous throw hands off to the schema's ORIGINAL
+ * async method, captured before these are installed — the same escape hatch
+ * `~standard` already uses for its throw path, and for the same reason (the
+ * compiled validator has no async mode to offer, and Zod's is exact). It also
+ * fixes the smaller wart that a throwing `fn` made `parseAsync` throw
+ * SYNCHRONOUSLY rather than return a rejected promise. With `zodCompat: false`
+ * there is no schema to delegate to and the throw propagates as before.
+ *
  * `~standard` is REPLACED, not merely preserved. Zod builds it lazily as
  * `validate: (v) => safeParse(inst, v)` — the core FUNCTION, which goes straight
  * to `inst._zod.run`. It never reads the schema's own `safeParse` property, so
@@ -202,7 +219,7 @@ export const FINZ_DECL = "function __zcFinZ(z,i){return new __ZcFailZ(z,i);}";
  * object — two exports aliasing one schema — would throw under ESM strict mode.
  */
 export const MK_VALIDATOR_DECL =
-  "function __zcMkv(fn,schema,fc,is){var w=schema||{};w.parse=fc?function(input){if(fc(input))return input;var r=fn(input);if(r.success)return r.data;throw r.error;}:function(input){var r=fn(input);if(r.success)return r.data;throw r.error;};w.safeParse=fn;w.safeParseAsync=function(input){return Promise.resolve(fn(input));};w.parseAsync=fc?function(input){if(fc(input))return Promise.resolve(input);var r=fn(input);if(r.success)return Promise.resolve(r.data);return Promise.reject(r.error);}:function(input){var r=fn(input);if(r.success)return Promise.resolve(r.data);return Promise.reject(r.error);};w.is=is||function(input){return fn(input).success;};" +
+  "function __zcMkv(fn,schema,fc,is){var w=schema||{};var zpa=w.parseAsync,zspa=w.safeParseAsync;w.parse=fc?function(input){if(fc(input))return input;var r=fn(input);if(r.success)return r.data;throw r.error;}:function(input){var r=fn(input);if(r.success)return r.data;throw r.error;};w.safeParse=fn;w.safeParseAsync=function(input){try{return Promise.resolve(fn(input));}catch(e){if(zspa)return zspa(input);throw e;}};w.parseAsync=fc?function(input){try{if(fc(input))return Promise.resolve(input);var r=fn(input);if(r.success)return Promise.resolve(r.data);return Promise.reject(r.error);}catch(e){if(zpa)return zpa(input);throw e;}}:function(input){try{var r=fn(input);if(r.success)return Promise.resolve(r.data);return Promise.reject(r.error);}catch(e){if(zpa)return zpa(input);throw e;}};w.is=is||function(input){return fn(input).success;};" +
   'var s=w["~standard"],zv=s&&s.validate;' +
   'Object.defineProperty(w,"~standard",{configurable:true,value:{version:1,vendor:(s&&s.vendor)||"zod",validate:function(input){var r;try{if(fc&&fc(input))return{value:input};r=fn(input);}catch(e){if(zv)return zv(input);throw e;}return r.success?{value:r.data}:{issues:r.error.issues};}}});' +
   "return w;}";

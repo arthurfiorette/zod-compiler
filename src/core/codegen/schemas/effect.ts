@@ -81,7 +81,7 @@ export function refineCheck(check: RefineEffectCheckIR, expr: string, g: SlowGen
       : `,params:${emitConstant(g.ctx, "rpa", `__rf[${check.paramsRefIndex}]`)}`;
   return emit`
     if(!${emitEffectCallable(g.ctx, check)}(${expr})){
-      ${g.issues}.push({code:"custom",path:${path}${paramsProp}${messageProp},input:${expr}});
+      ${g.issues}.push({code:"custom",path:${path}${paramsProp},input:${expr}${messageProp}});
     }`;
 }
 

@@ -22,7 +22,7 @@ export function slowDiscriminatedUnion(
 
   let code = emit`
     if(typeof ${g.input}!=="object"||${g.input}===null||Array.isArray(${g.input})){
-      ${invalidType(g, "object")}
+      ${invalidType(g, "object", { codeFirst: true })}
     }else{`;
 
   const objVar = g.temp("du");
@@ -44,7 +44,7 @@ export function slowDiscriminatedUnion(
   // them invents a field consumers would find on no real zod issue.
   code += emit`
     default:
-      ${g.issues}.push({code:"invalid_union",errors:[],note:"No matching discriminator",discriminator:${discKey}${msgProp},input:${g.input},path:${extendPath(g.path, discKey)}});
+      ${g.issues}.push({code:"invalid_union",errors:[],note:"No matching discriminator",discriminator:${discKey},input:${g.input},path:${extendPath(g.path, discKey)}${msgProp}});
     }`;
   // Propagate option-applied mutations (defaults, coercions, transforms,
   // overwrite checks, stringbool) back to the output location. Each option is

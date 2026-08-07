@@ -77,6 +77,62 @@ describe("known divergence — record iterates own enumerable string keys only",
   });
 });
 
+/**
+ * 3. RECORD / LOOSE-OBJECT OUTPUT IDENTITY.
+ *
+ * Zod's record and catchall paths parse into a FRESH `{}` and copy the keys they
+ * accept onto it. Three things follow that the compiler's by-reference output
+ * does not reproduce, none of which changes the verdict:
+ *
+ *   - the output is always an ordinary plain object, so a null-prototype input
+ *     (or one inheriting from another object) comes back with `Object.prototype`;
+ *   - an own `__proto__` key is dropped, because zod's record walk skips it and
+ *     never copies it across (the compiler skips VALIDATING it too — that part
+ *     is parity, and is pinned in uncovered-api-parity.test.ts — but the key
+ *     rides along in the input it hands back);
+ *   - a symbol key survives, where zod's copy loop (`for … in`) never sees one.
+ *
+ * Closing any of them means allocating a fresh object on every successful record
+ * parse, which is the cost the by-reference design exists to avoid.
+ */
+describe("known divergence — record output is the input, not a fresh plain object", () => {
+  const schema = z.record(z.string(), z.string());
+
+  it("a null-prototype input keeps its prototype", () => {
+    const input = Object.assign(Object.create(null) as Record<string, string>, { a: "x" });
+    const compiled = compileLikeProduction(schema, "recNullProto");
+    const zodData = schema.safeParse(input).data as object;
+    const ourData = (compiled(input) as { data: object }).data;
+    expect(Object.getPrototypeOf(zodData)).toBe(Object.prototype); // zod rebuilt
+    expect(Object.getPrototypeOf(ourData)).toBeNull(); // compiler passed through
+    expect(ourData).toBe(input);
+  });
+
+  it("an own `__proto__` key rides along in the output", () => {
+    const input = JSON.parse('{"a":"x","__proto__":{"polluted":true}}') as Record<string, string>;
+    const compiled = compileLikeProduction(schema, "recProtoKey");
+    const zodData = schema.safeParse(input).data as object;
+    const ourData = (compiled(input) as { data: object }).data;
+    expect(Object.hasOwn(zodData, "__proto__")).toBe(false); // zod dropped it
+    expect(Object.hasOwn(ourData, "__proto__")).toBe(true); // compiler kept it
+    // Neither side POLLUTES: the key stays an own data property on both.
+    expect(Object.getPrototypeOf(ourData)).toBe(Object.prototype);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
+  it("a loose object passes its input through, symbol keys and all", () => {
+    const key = Symbol("s");
+    const loose = z.looseObject({ a: z.string() });
+    const input = { a: "x", [key]: 1 };
+    const compiled = compileLikeProduction(loose, "looseIdentity");
+    const zodData = loose.safeParse(input).data as object;
+    const ourData = (compiled(input) as { data: object }).data;
+    expect(Object.getOwnPropertySymbols(zodData)).toStrictEqual([]); // zod rebuilt
+    expect(Object.getOwnPropertySymbols(ourData)).toStrictEqual([key]);
+    expect(ourData).toBe(input);
+  });
+});
+
 describe("known divergence — a catchall validates inherited keys but cannot re-home them", () => {
   // zod's handleCatchall iterates the input with a BARE for-in, so a key found
   // on the prototype is validated — the compiler matches that exactly. What it

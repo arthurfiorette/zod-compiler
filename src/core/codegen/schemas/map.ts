@@ -66,7 +66,7 @@ export function slowMap(ir: SchemaIR & { type: "map" }, g: SlowGen): string {
           if(${pkVar}){
             ${pfx}(${g.issues},${keyIssues},${g.path},${keyVar});
           }else{
-            ${g.issues}.push({code:"invalid_key",origin:"map"${msgProp},input:${g.input},path:${g.path},issues:${fz}(${keyIssues})});
+            ${g.issues}.push({code:"invalid_key",origin:"map",issues:${fz}(${keyIssues}),input:${g.input},path:${g.path}${msgProp}});
           }
         }
         var ${valIssues}=[];
@@ -75,7 +75,7 @@ export function slowMap(ir: SchemaIR & { type: "map" }, g: SlowGen): string {
           if(${pkVar}){
             ${pfx}(${g.issues},${valIssues},${g.path},${keyVar});
           }else{
-            ${g.issues}.push({code:"invalid_element",origin:"map",key:${keyVar}${msgProp},input:${g.input},path:${g.path},issues:${fz}(${valIssues})});
+            ${g.issues}.push({origin:"map",code:"invalid_element",key:${keyVar},issues:${fz}(${valIssues}),input:${g.input},path:${g.path}${msgProp}});
           }
         }
         ${mutates ? `${rebuiltVar}.set(${entryVar}[0],${entryVar}[1]);` : ""}

@@ -39,7 +39,7 @@ export interface ZodLikeSchema {
   safeParse: (input: unknown) => {
     success: boolean;
     data?: unknown;
-    error?: { issues: { message: string }[] };
+    error?: { issues: { message: string }[]; message: string };
   };
 }
 
@@ -335,6 +335,21 @@ function expectCompiledParity(
         compiledIssues.map(renderIssue),
         `full issue shape for ${describeInput(input)}`,
       ).toStrictEqual(zodIssues.map(renderIssue));
+
+      // ...and finally the error's own `message`, which is the ONE assertion
+      // above that is sensitive to KEY ORDER. `ZodError`'s message is
+      // `JSON.stringify(issues, …, 2)`, so the order each issue's keys were
+      // inserted in is printed text — and `toStrictEqual` above compares objects
+      // key-order-insensitively, so a compiled issue carrying exactly the right
+      // fields in a different order passed everything else while rendering a
+      // different error than zod for essentially every failure. zod's own orders
+      // are irregular (`{expected, code}` everywhere but `{code, expected}` in a
+      // discriminated union; `origin` leads a check's `too_small` and trails a
+      // tuple's), so this is the only practical way to hold them.
+      expect(
+        (compiledResult.error as unknown as { message: string }).message,
+        `error.message for ${describeInput(input)}`,
+      ).toBe(zodResult.error?.message);
     }
   }
 }

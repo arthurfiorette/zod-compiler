@@ -100,6 +100,11 @@ export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string 
   const ojVar = g.temp("uoj");
   const abVar = g.temp("uab");
   const ocVar = g.temp("uoc");
+  // zod prunes with `util.aborted`, i.e. `continue !== true` on ANY issue — a
+  // superset of the code test below, and the only thing that catches a tuple's
+  // length issue (schema-created, same code a continuable check uses). See
+  // `abortsProp` in emit-issue.ts.
+  const oiIssue = g.temp("uoq");
   const okVar = g.temp("uok");
   const ofVar = g.temp("uof");
   const surfaced = `${naVar}[0][${okVar}]`;
@@ -123,7 +128,9 @@ export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string 
         var ${abVar}=${abortedVar}[${oiVar}]===true;
         if(!${abVar}){
           for(var ${ojVar}=0;${ojVar}<${errorsVar}[${oiVar}].length;${ojVar}++){
-            var ${ocVar}=${errorsVar}[${oiVar}][${ojVar}].code;
+            var ${oiIssue}=${errorsVar}[${oiVar}][${ojVar}];
+            if(${oiIssue}.continue===false){${abVar}=true;break;}
+            var ${ocVar}=${oiIssue}.code;
             if(${abortingCodeTest(ocVar)}){${abVar}=true;break;}
           }
         }
@@ -136,7 +143,7 @@ export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string 
         }
       }else{
         for(var ${ofVar}=0;${ofVar}<${errorsVar}.length;${ofVar}++){${fz}(${errorsVar}[${ofVar}]);}
-        ${g.issues}.push({code:"invalid_union",errors:${errorsVar}${msgProp},input:${g.input},path:${unionPath}});
+        ${g.issues}.push({code:"invalid_union",errors:${errorsVar},input:${g.input},path:${unionPath}${msgProp}});
       }
     }`;
   return `${code}\n`;
@@ -164,6 +171,12 @@ export function fastUnion(ir: UnionIR, g: FastGen): string | null {
   // chain. Which option matches is unobservable here (the result is a single
   // boolean), and the slow path — where option order IS observable, through
   // zod's first-match output and invalid_union issue order — is untouched.
+  //
+  // That "unobservable" holds for the VERDICT this expression reports, which is
+  // all a nested conjunct or a `.is()` guard consumes. It does NOT hold for the
+  // by-reference shortcut a root schema takes on a passing check, where WHICH
+  // option zod picked decides the output value — see `fastResultIsInput`, which
+  // withholds that shortcut rather than costing every union its fast check.
   const optionChecks: string[] = [];
   for (const option of orderByRuntimeCost(ir.options, (o) => o, g.ctx)) {
     const check = g.visit(option);

@@ -172,6 +172,7 @@ describe("fastPathEligible", () => {
         { type: "number", checks: [] },
       ],
       rest: null,
+      optStart: 2,
     };
     expect(diagnoseSchema(ir).fastPathEligible).toBe(true);
   });
@@ -181,6 +182,7 @@ describe("fastPathEligible", () => {
       type: "tuple",
       items: [{ type: "string", checks: [] }],
       rest: { type: "default", inner: { type: "string", checks: [] }, refIndex: 0 },
+      optStart: 1,
     };
     expect(diagnoseSchema(ir).fastPathEligible).toBe(true);
     expect(diagnoseSchema(ir).fastPathBlocker).toBeUndefined();
@@ -333,6 +335,7 @@ describe("diagnoseSchema", () => {
       type: "tuple",
       items: [{ type: "string", checks: [] }],
       rest: { type: "fallback", reason: "unsupported" },
+      optStart: 1,
     };
     const result = diagnoseSchema(ir);
 

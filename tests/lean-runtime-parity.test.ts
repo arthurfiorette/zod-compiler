@@ -66,6 +66,14 @@ const CASES: [label: string, schema: z.ZodType, inputs: unknown[]][] = [
   // __zcTSn: the tuple's under-length issue, which carries NO `inclusive` key.
   ["too_small tuple (no inclusive)", z.tuple([z.string(), z.number()]), [["a"]]],
   ["too_small tuple with message", z.tuple([z.string()], undefined, "wrong arity"), [[]]],
+  // __zcTBt: the tuple's OVER-length issue, whose `origin` trails `inclusive`.
+  ["too_big tuple key order", z.tuple([z.string(), z.number()]), [["a", 1, 2]]],
+  // __zcLo / __zcSo: a length/size check whose `when` fires on a value of the
+  // WRONG type, so its `origin` has to be computed from the input at runtime.
+  ["length check over a non-string", z.string().min(2), [[]]],
+  ["length check over a short string", z.array(z.string()).min(3), ["ab"]],
+  ["size check over a Map", z.set(z.string()).min(2), [new Map()]],
+  ["size check over a Set", z.file().min(2), [new Set(["a"])]],
   // __zcTB: inclusive true (.max) and false (.lt).
   ["too_big string", z.string().max(2), ["abc"]],
   ["too_big exclusive", z.number().lt(3), [3]],
@@ -125,6 +133,13 @@ const CASES: [label: string, schema: z.ZodType, inputs: unknown[]][] = [
     ]),
     [{ t: "c" }],
   ],
+  // __zcITc: a discriminated union's non-object guard is the ONE invalid_type
+  // in zod that writes `code` before `expected`.
+  [
+    "invalid_type discriminated union",
+    z.discriminatedUnion("t", [z.object({ t: z.literal("a"), v: z.string() })]),
+    [1],
+  ],
 
   // ── custom (refine) and the non-issue runtime helpers ────────────────────
   // __zcFsr — float-safe remainder; __zcHop — record key guard;
@@ -132,6 +147,9 @@ const CASES: [label: string, schema: z.ZodType, inputs: unknown[]][] = [
   // __zcCu — z.custom predicate; __zcPfx — map entry path prefixing.
   ["not_multiple_of float", z.number().multipleOf(0.1), [0.15]],
   ["record value", z.record(z.string(), z.number()), [{ a: "x" }]],
+  // __zcPlain: a record's plain-object guard, which rejects a Date/Map/class
+  // instance the way $ZodRecord's `util.isPlainObject` does.
+  ["record non-plain input", z.record(z.string(), z.number()), [new Date(0), new Map()]],
   [
     "outer refine after inner failure",
     z.object({ a: z.string().min(3) }).refine(() => false),

@@ -3,11 +3,30 @@ import type { FastGen, SlowGen } from "../context.js";
 import { declareFastTemps, emitRuntimeHelper, extendPath, hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType } from "../emit-issue.js";
-import { ZC_FZ_DECL, ZC_HOP_DECL } from "../issue-decls.js";
+import { ZC_FZ_DECL, ZC_HOP_DECL, ZC_PLAIN_DECL } from "../issue-decls.js";
+
+/**
+ * `$ZodRecord` gates on `util.isPlainObject`, NOT the looser `util.isObject`
+ * that `$ZodObject` uses — see {@link ZC_PLAIN_DECL} for why the two differ and
+ * what accepting the wrong one lets through.
+ */
+function plainObjectTest(g: SlowGen | FastGen, input: string): string {
+  return `${emitRuntimeHelper(g.ctx, "__zcPlain", ZC_PLAIN_DECL)}(${input})`;
+}
+
+/**
+ * Zod's record walk opens with `if (key === "__proto__") continue`, so an own
+ * `__proto__` data property (which `JSON.parse('{"__proto__":…}')` creates) is
+ * neither key-validated nor value-validated nor copied. Without this the
+ * compiled walk reported issues zod does not: `z.record(z.string(), z.number())`
+ * over such an object raised a SECOND `invalid_type`, and a constrained key
+ * schema a second `invalid_key`, for a key zod never looks at.
+ */
+const PROTO_SKIP = (keyVar: string): string => `if(${keyVar}==="__proto__")continue;`;
 
 export function slowRecord(ir: SchemaIR & { type: "record" }, g: SlowGen): string {
   let code = emit`
-    if(typeof ${g.input}!=="object"||${g.input}===null||Array.isArray(${g.input})){
+    if(!${plainObjectTest(g, g.input)}){
       ${invalidType(g, "record")}
     }else{`;
 
@@ -38,10 +57,11 @@ export function slowRecord(ir: SchemaIR & { type: "record" }, g: SlowGen): strin
   code += emit`
     for(var ${keyVar} in ${g.input}){
       if(!${hop}.call(${g.input},${keyVar}))continue;
+      ${PROTO_SKIP(keyVar)}
       var ${keyIssuesVar}=[];
       ${g.visit(ir.keyType, { input: keyVar, output: keyVar, path: "[]", issues: keyIssuesVar })}
       if(${keyIssuesVar}.length>0){
-        ${g.issues}.push({code:"invalid_key",origin:"record"${g.typeMsg === undefined ? "" : `,message:${JSON.stringify(g.typeMsg)}`},input:${keyVar},path:${keyPath},issues:${fz}(${keyIssuesVar})});
+        ${g.issues}.push({code:"invalid_key",origin:"record",issues:${fz}(${keyIssuesVar}),input:${keyVar},path:${keyPath}${g.typeMsg === undefined ? "" : `,message:${JSON.stringify(g.typeMsg)}`}});
       }else{
         ${g.visit(ir.valueType, { input: valExpr, output: valExpr, path: keyPath })}
       }
@@ -52,7 +72,7 @@ export function slowRecord(ir: SchemaIR & { type: "record" }, g: SlowGen): strin
 
 export function fastRecord(ir: RecordIR, g: FastGen): string | null {
   const x = g.input;
-  const parts: string[] = [`typeof ${x}==="object"`, `${x}!==null`, `!Array.isArray(${x})`];
+  const parts: string[] = [plainObjectTest(g, x)];
 
   // Object.keys only yields strings — a plain unconstrained string key schema
   // is always satisfied, so skip generating its check entirely.
@@ -86,7 +106,7 @@ export function fastRecord(ir: RecordIR, g: FastGen): string | null {
     // __zcHop.call inlines, making the guard ~free vs an unguarded for-in.
     const hop = emitRuntimeHelper(g.ctx, "__zcHop", ZC_HOP_DECL);
     g.ctx.preamble.push(
-      `function ${helperName}(o){${declareFastTemps(body.scope)}var ${kv},${vv};for(${kv} in o){if(${hop}.call(o,${kv})){${valAssign}if(!(${conditions.join("&&")})){return false;}}}return true;}`,
+      `function ${helperName}(o){${declareFastTemps(body.scope)}var ${kv},${vv};for(${kv} in o){${PROTO_SKIP(kv)}if(${hop}.call(o,${kv})){${valAssign}if(!(${conditions.join("&&")})){return false;}}}return true;}`,
     );
     parts.push(`${helperName}(${x})`);
   }

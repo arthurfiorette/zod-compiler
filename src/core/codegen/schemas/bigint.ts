@@ -50,7 +50,7 @@ export function slowBigInt(ir: BigIntIR, g: SlowGen): string {
             check.message !== undefined ? `,message:${JSON.stringify(check.message)}` : "";
           code += emit`
             if(${g.input}%${check.value}n!==0n){
-              ${g.issues}.push({code:"not_multiple_of",divisor:${check.value}n,origin:"bigint"${msgProp},input:${g.input},path:${g.path}});
+              ${g.issues}.push({origin:"bigint",code:"not_multiple_of",divisor:${check.value}n,input:${g.input},path:${g.path}${msgProp}});
             }`;
           break;
         }

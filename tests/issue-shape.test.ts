@@ -384,3 +384,79 @@ describe("issue shape — a refine's params reach the issue", () => {
     expect("params" in (result.error.issues[0] as object)).toBe(false);
   });
 });
+
+/**
+ * ISSUE KEY ORDER.
+ *
+ * `ZodError`'s `message` is `JSON.stringify(issues, …, 2)`, so the order each
+ * issue's keys were INSERTED in is printed text in a property consumers log,
+ * snapshot, and serialize. `toStrictEqual` compares objects key-order-
+ * insensitively, so a compiled issue carrying exactly the right fields in a
+ * different order passed every other assertion in the suite while rendering a
+ * different error than zod for essentially every failure.
+ *
+ * zod's own orders are irregular and follow whichever `payload.issues.push({…})`
+ * raised the issue: `{expected, code}` for every schema except a discriminated
+ * union's `{code, expected}`; `origin` leading a check's `too_small` and
+ * trailing a tuple's; `expected, format, code` for an integer-format failure
+ * against `expected, code, received` for a NaN. `finalizeIssue` then appends
+ * `message` last, even for a message baked into a custom error map.
+ *
+ * `expectParity` compares `error.message` on every case in the suite, which is
+ * what holds this in general; the cases below name the shapes whose order was
+ * wrong, so a regression reports as itself rather than as a distant failure.
+ */
+describe("issue shape — key order, as ZodError.message renders it", () => {
+  const orderOf = (issue: unknown): string[] => Object.keys(issue as object);
+
+  const expectKeyOrder = (schema: z.ZodType, input: unknown): void => {
+    const zodIssues = schema.safeParse(input).error?.issues ?? [];
+    const compiled = compileLikeProduction(schema, "keyOrder");
+    const result = compiled(input) as { success: false; error: { issues: unknown[] } };
+    expect(zodIssues.length, "precondition: zod rejects this input").toBeGreaterThan(0);
+    expect(result.error.issues.map(orderOf)).toStrictEqual(zodIssues.map(orderOf));
+  };
+
+  const CASES: [label: string, schema: z.ZodType, input: unknown][] = [
+    ["invalid_type leads with `expected`", z.string(), 1],
+    ["invalid_type with `received`", z.number(), null],
+    ["invalid_type from an integer format leads `expected, format`", z.int(), 1.5],
+    [
+      "invalid_type from a discriminated union leads with `code`",
+      z.discriminatedUnion("t", [z.object({ t: z.literal("a") })]),
+      1,
+    ],
+    ["too_small from a check leads with `origin`", z.string().min(3), "a"],
+    ["too_big from a check leads with `origin`", z.string().max(1), "abc"],
+    ["exact length leads with `origin`", z.string().length(2), "a"],
+    ["too_big from a tuple trails `origin` after `inclusive`", z.tuple([z.string()]), ["a", "b"]],
+    ["too_small from a tuple omits `inclusive`", z.tuple([z.string(), z.number()]), []],
+    ["safe-integer overflow puts `note` before `origin`", z.int(), Number.MAX_SAFE_INTEGER + 2],
+    ["not_multiple_of leads with `origin`", z.number().multipleOf(3), 5],
+    ["not_multiple_of on a bigint", z.bigint().multipleOf(3n), 5n],
+    ["invalid_format from a pattern check leads with `origin`", z.string().regex(/^a/), "b"],
+    ["invalid_format includes", z.string().includes("q"), "b"],
+    ["invalid_format starts_with", z.string().startsWith("q"), "b"],
+    ["invalid_format ends_with", z.string().endsWith("q"), "b"],
+    ["invalid_format from z.url() carries no `origin`", z.httpUrl(), "ftp://a.com"],
+    ["invalid_value from stringbool puts `expected` before `values`", z.stringbool(), "maybe"],
+    ["invalid_key puts `issues` before `path`", z.record(z.string().min(3), z.number()), { ab: 1 }],
+    [
+      "invalid_element leads with `origin`",
+      z.map(z.object({ a: z.string() }), z.number()),
+      new Map([[{ a: "x" }, "bad"]]),
+    ],
+    ["a baked custom message still lands LAST", z.string().min(3, "custom!"), "a"],
+    ["a schema-level message still lands LAST", z.string({ error: "bad type" }), 1],
+  ];
+
+  for (const [label, schema, input] of CASES) {
+    it(label, () => expectKeyOrder(schema, input));
+  }
+
+  it("nested issues inside invalid_key and invalid_union follow the same orders", () => {
+    expectKeyOrder(z.record(z.string().min(3), z.number()), { ab: 1 });
+    expectKeyOrder(z.union([z.string().min(3), z.number()]), true);
+    expectKeyOrder(z.object({ u: z.union([z.string().min(3), z.number()]) }), { u: "a" });
+  });
+});

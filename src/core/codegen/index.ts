@@ -1,6 +1,6 @@
 import type { SchemaIR } from "../types.js";
 import type { CodeGenContext, CodeGenResult, CodegenMode, RecTargetGen } from "./context.js";
-import { generateBuild, rebuildsOutput } from "./build-path.js";
+import { fastResultIsInput, generateBuild, rebuildsOutput } from "./build-path.js";
 import { declareFastTemps, emitRfDelegate, hasMutation } from "./context.js";
 import type { SharedSchemaPlan } from "./dedupe.js";
 import { createFastGen, generateFast } from "./fast-path.js";
@@ -417,7 +417,7 @@ export function generateValidator(
     };
   }
 
-  if (fastExpr !== null && !rebuildsOutput(ir)) {
+  if (fastExpr !== null && fastResultIsInput(ir)) {
     // Partial fast path (default/catch/... present-value shortcut): the slow
     // path must run eagerly — it can succeed where the fast check failed.
     //
@@ -448,7 +448,14 @@ export function generateValidator(
     functionDef,
     refCount: options?.refCount ?? 0,
     usedHelpers: ctx.usedHelpers,
-    fastFnName,
+    // `fc` carries a stronger contract than "accepts": `__zcMkv` returns the
+    // INPUT from `parse()`/`parseAsync()`/`~standard` whenever it holds, so it
+    // may only be published when a passing check implies `data === input`. A
+    // rebuilding schema breaks that even though its safeParse is correct, and so
+    // does a union whose options can rewrite — see `fastResultIsInput` for both.
+    // Same guard as the `data: input` shortcut above, which is the other reader
+    // of the same contract.
+    fastFnName: fastResultIsInput(ir) ? fastFnName : null,
     // Partial fast path (default/catch) or none (including coercion): a false fc
     // result does not imply rejection, so `.is()` derives from
     // safeParse(input).success.

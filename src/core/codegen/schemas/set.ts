@@ -3,11 +3,13 @@ import type { FastGen, SlowGen } from "../context.js";
 import { checkPriority, declareFastTemps, hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { invalidType, tooBig, tooSmall } from "../emit-issue.js";
+import { whenGatedSizeChecks } from "./sizeable.js";
 
 export function slowSet(ir: SchemaIR & { type: "set" }, g: SlowGen): string {
   let code = emit`
     if(!(${g.input} instanceof Set)){
       ${invalidType(g, "set")}
+      ${whenGatedSizeChecks(ir.checks ?? [], g, "size")}
     }else{`;
 
   // Validate each element BEFORE the size checks: Zod parses the elements

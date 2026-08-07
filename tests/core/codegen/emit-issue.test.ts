@@ -36,7 +36,7 @@ describe("emit-issue", () => {
       const g = makeGen("inline");
       const code = tooSmall(g, 3, "string", true);
       expect(code).toBe(
-        '_e.push({code:"too_small",minimum:3,origin:"string",inclusive:true,input:_d,path:[]});',
+        '_e.push({origin:"string",code:"too_small",minimum:3,inclusive:true,input:_d,path:[]});',
       );
       expect(g.ctx.usedHelpers.size).toBe(0);
     });
@@ -52,14 +52,14 @@ describe("emit-issue", () => {
       const g = makeGen("inline");
       const code = tooBig(g, 100, "number", true);
       expect(code).toBe(
-        '_e.push({code:"too_big",maximum:100,origin:"number",inclusive:true,input:_d,path:[]});',
+        '_e.push({origin:"number",code:"too_big",maximum:100,inclusive:true,input:_d,path:[]});',
       );
     });
 
     it("invalidType emits literal object", () => {
       const g = makeGen("inline");
       const code = invalidType(g, "string");
-      expect(code).toBe('_e.push({code:"invalid_type",expected:"string",input:_d,path:[]});');
+      expect(code).toBe('_e.push({expected:"string",code:"invalid_type",input:_d,path:[]});');
     });
 
     it("invalidType with extra inlines extra fields", () => {
@@ -122,8 +122,14 @@ describe("emit-issue", () => {
     it("invalidFormat with extra wraps extra in object literal", () => {
       const g = makeGen("lean");
       const code = invalidFormat(g, "email", { extra: "pattern:__re.toString()" });
-      expect(code).toBe('_e.push(__zcIF("email",_d,[],{pattern:__re.toString()}));');
+      expect(code).toBe('_e.push(__zcIF(undefined,"email",_d,[],{pattern:__re.toString()}));');
       expect(g.ctx.usedHelpers.has("__zcIF")).toBe(true);
+    });
+
+    it("invalidFormat passes a leading origin when the format carries one", () => {
+      const g = makeGen("lean");
+      const code = invalidFormat(g, "email", { origin: "string" });
+      expect(code).toBe('_e.push(__zcIF("string","email",_d,[]));');
     });
 
     it("invalidValue emits __zcIV factory call", () => {

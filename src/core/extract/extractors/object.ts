@@ -7,6 +7,30 @@ import {
 } from "../checks.js";
 import type { ExtractorContext, ZodDef } from "../types.js";
 
+/**
+ * Can this property IR raise an issue when its key is ABSENT (so the value it
+ * sees is `undefined`)? Only those need zod's absent-key issue suppression
+ * wrapped around them.
+ *
+ * `optional` and `undefined` cannot: the first short-circuits `undefined`
+ * (or forwards it into a `default`, which substitutes without complaint), and
+ * the second accepts it. `nullable`/`readonly` are transparent to `undefined`,
+ * so they inherit the answer. Everything else — a `fallback` delegate above all
+ * — is assumed to report.
+ */
+function reportsOnAbsentKey(ir: SchemaIR): boolean {
+  switch (ir.type) {
+    case "optional":
+    case "undefined":
+      return false;
+    case "nullable":
+    case "readonly":
+      return reportsOnAbsentKey(ir.inner);
+    default:
+      return true;
+  }
+}
+
 export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   // Unknown-key policies:
   // - z.strictObject / .strict() / .catchall(z.never()) reject unknown keys —
@@ -36,16 +60,26 @@ export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   // Every consumer reads this through Object.keys/values/entries, so dropping
   // the prototype is invisible to them.
   const properties: Record<string, SchemaIR> = Object.create(null) as Record<string, SchemaIR>;
-  // Fallback props whose zod schema is optional-out: mirror zod's
-  // handlePropertyResult, which suppresses issues for ABSENT keys (this is
-  // how z.exactOptional() accepts missing keys while rejecting explicit
-  // undefined). Compiled optional/default IRs already handle absence.
+  // Optional-OUT props: mirror zod's handlePropertyResult, which suppresses
+  // issues for ABSENT keys (`if (isOptionalOut && !(key in input)) return`).
+  // That is how `z.exactOptional()` accepts a missing key while rejecting an
+  // explicit `undefined`.
+  //
+  // Gated on the property IR still being able to REPORT for an absent key, so
+  // the common `.optional()` field pays nothing: its compiled form short-
+  // circuits `undefined` and produces no issue to suppress. Testing
+  // `propIR.type === "fallback"` — as this once did — was too narrow by exactly
+  // one wrapper: `z.exactOptional(z.string()).nullable()` extracts to
+  // `nullable(fallback)`, keeps `optout === "optional"` (nullable propagates
+  // it), and delegated `undefined` straight into zod's exactOptional, which
+  // rejects it. The object then reported an `invalid_type` for a key zod does
+  // not look at.
   const suppressAbsentKeys: string[] = [];
   const refMark = ctx.refs?.length ?? 0;
   for (const [key, value] of Object.entries(def.shape)) {
     const propIR = ctx.visit(value, `.shape[${JSON.stringify(key)}]`);
     properties[key] = propIR;
-    if (propIR.type === "fallback" && value._zod.optout === "optional") {
+    if (value._zod.optout === "optional" && reportsOnAbsentKey(propIR)) {
       suppressAbsentKeys.push(key);
     }
   }

@@ -45,6 +45,7 @@ import {
   emitRuntimeHelper,
   emitTemp,
   escapeString,
+  hasMutation,
   keyMembershipTest,
   literalToJs,
   outputAlwaysDefined,
@@ -52,7 +53,7 @@ import {
 } from "./context.js";
 import { createFastGen, generateFast } from "./fast-path.js";
 import { EXTRACT_CAP, estimateFastCost, MIN_EXTRACT, predictedInlineSize } from "./fast-size.js";
-import { ZC_HOP_DECL } from "./issue-decls.js";
+import { ZC_HOP_DECL, ZC_PLAIN_DECL } from "./issue-decls.js";
 import { defaultValueExpr, needsPostInnerDefault } from "./schemas/default.js";
 import { innerAppliesDefaultOnUndefined } from "./schemas/optional.js";
 import { fastStringCheck } from "./schemas/string.js";
@@ -148,6 +149,47 @@ function rebuildSet(root: SchemaIR): ReadonlySet<SchemaIR> {
 /** Does `ir`, taken as a whole schema, produce a value that is not its input? */
 export function rebuildsOutput(ir: SchemaIR): boolean {
   return rebuildSet(ir).has(ir);
+}
+
+/**
+ * Does a PASSING fast check prove that the parse returns its own input?
+ *
+ * This is the contract behind every by-reference shortcut: `safeParse`'s
+ * `if(fc(input)) return {success:true,data:input}` and, through `fc` in
+ * `__zcMkv`, `parse()` / `parseAsync()` / `~standard.validate()`. It is strictly
+ * stronger than "the fast check is sound", and two things break it:
+ *
+ *  1. The schema REBUILDS its output. A stripping object is the common case, and
+ *     it is why `z.object({ a: z.number().catch(0) })` — a strip object the
+ *     build pass declines because of the `.catch()` — used to answer
+ *     `parse({a: 1, b: 2})` with the UNSTRIPPED input while its own `safeParse`
+ *     correctly returned `{a: 1}`.
+ *
+ *  2. A plain `z.union()` with a MUTATING option. The fast form is an `||` chain,
+ *     which reports that SOME option accepts the input; zod returns the value
+ *     produced by the FIRST option that succeeds. Those differ as soon as an
+ *     earlier option would have claimed the input and rewritten it —
+ *     `z.union([z.string().catch("c"), z.number()])` answers `"c"` for every
+ *     input, catch being infallible, while the chain matches `1` against the
+ *     number arm and hands back `1`. A DISCRIMINATED union is exempt: its
+ *     dispatch selects exactly one option, so which arm zod runs is never in
+ *     doubt (and a rewriting object option is caught by (1) anyway).
+ *
+ * Withheld here rather than in `fastUnion` on purpose: the `||` chain is still a
+ * correct VERDICT, which is all a nested conjunct or a `.is()` guard needs, so
+ * declining to emit it would cost every union-of-objects its fast path (and the
+ * size-gated `__fo_` split) to fix a shortcut that only the root takes.
+ */
+export function fastResultIsInput(ir: SchemaIR): boolean {
+  if (rebuildsOutput(ir)) return false;
+  const seen = new Set<SchemaIR>();
+  const ordered = (node: SchemaIR): boolean => {
+    if (seen.has(node)) return false;
+    seen.add(node);
+    if (node.type === "union" && node.options.some(hasMutation)) return true;
+    return children(node).some(ordered);
+  };
+  return !ordered(ir);
 }
 
 /**
@@ -672,10 +714,16 @@ function buildRecord(ir: SchemaIR & { type: "record" }, input: string, g: BuildG
   const inner = build(ir.valueType, valVar, g);
   if (inner === null) return null;
   const hop = emitRuntimeHelper(g.ctx, "__zcHop", ZC_HOP_DECL);
+  // `$ZodRecord` gates on `util.isPlainObject`, not the `util.isObject` the
+  // object/discriminated-union builds above use — see ZC_PLAIN_DECL. And it
+  // skips `__proto__` outright: here that guard is load-bearing twice over,
+  // since `out[key]=value` for that key would not add a property at all but
+  // REDEFINE the built object's prototype.
+  const plain = emitRuntimeHelper(g.ctx, "__zcPlain", ZC_PLAIN_DECL);
   const code =
-    `if(typeof ${input}!=="object"||${input}===null||Array.isArray(${input}))return ${g.fail};` +
+    `if(!${plain}(${input}))return ${g.fail};` +
     `${out}={};` +
-    `for(${keyVar} in ${input}){if(${hop}.call(${input},${keyVar})){` +
+    `for(${keyVar} in ${input}){if(${keyVar}!=="__proto__"&&${hop}.call(${input},${keyVar})){` +
     `${valVar}=${input}[${keyVar}];${inner.code}${out}[${keyVar}]=${inner.value};}}`;
   return { code, value: out };
 }
