@@ -88,6 +88,39 @@ const PATTERNLESS_FORMATS = new Set(["email", "uuid", "url"]);
 const NON_AUTHORITATIVE_PATTERN_FORMATS = new Set(["base64", "base64url", "cidrv6", "ipv6"]);
 
 /**
+ * True when a `string_format` check validates through `def.fn` over a STATEFUL
+ * (`g`/`y`-flagged) pattern — a custom format built by Zod's `_stringFormat`
+ * helper, i.e. `z.stringFormat("name", /ab/g)`.
+ *
+ * Such a format is stateful in Zod, while the compiled output is deliberately
+ * stateless — so the two diverge from the first successful match onward.
+ * `_stringFormat` stores the regex as `def.pattern` AND closes over it as
+ * `def.fn = (val) => fnOrRegex.test(val)`.
+ * `$ZodCustomStringFormat` validates by calling that `def.fn`, and NOTHING
+ * resets `lastIndex`, so a `g`/`y` regex carries its cursor across parses:
+ * `z.stringFormat("f", /ab/g).safeParse("abab")` returns true, true, FALSE,
+ * true over four calls. Contrast `$ZodCheckRegex` — what `.regex(/ab/g)` builds
+ * — which does an explicit `def.pattern.lastIndex = 0` before testing and is
+ * therefore stateless. The codegen's `lastIndexReset` reproduces THAT reset,
+ * which is right for `.regex()` and is exactly what makes a custom format
+ * diverge. The state lives in the user's own RegExp object, which the compiled
+ * validator does not hold, so there is nothing faithful to emit: delegate.
+ *
+ * This needs a predicate rather than a name set like
+ * NON_AUTHORITATIVE_PATTERN_FORMATS above, because a custom format's name is
+ * user-chosen and cannot be enumerated. Narrowness matters in both clauses:
+ * `def.fn` alone would over-delegate the built-ins Zod also routes through
+ * `_stringFormat` (hostname, hex, hash), and the flag test alone would
+ * over-delegate `.regex(/…/g)` — both of which stay compiled because their
+ * patterns are unflagged and their check is not `def.fn`, respectively.
+ */
+function isStatefulCustomFormat(def: ZodCheckDef): boolean {
+  return (
+    typeof def.fn === "function" && def.pattern instanceof RegExp && /[gy]/.test(def.pattern.flags)
+  );
+}
+
+/**
  * Check kinds where Zod itself installs a `when` guard
  * (`!nullish(value) && value.length/size !== undefined`). Compiled output
  * reproduces that gating structurally — length/size checks only run after the
@@ -197,6 +230,12 @@ export function extractChecks(
         });
         break;
       case "string_format": {
+        // A custom format over a g/y regex advances that regex's lastIndex on
+        // every parse and Zod never resets it — see isStatefulCustomFormat.
+        if (isStatefulCustomFormat(def)) {
+          hasFallback = true;
+          break;
+        }
         if (def.format === "includes" && typeof def.includes === "string") {
           checkIRs.push({
             kind: "includes",

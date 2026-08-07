@@ -19,9 +19,10 @@
  * silently stops matching its check — here, or after a Zod upgrade — fails here
  * rather than in a user's validator.
  */
-import { describe, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
-import { expectParity } from "./parity-harness.js";
+import { extractSchema } from "#src/core/extract/index.js";
+import { compileLikeProduction, expectParity } from "./parity-harness.js";
 
 /** Deterministic LCG (numerical recipes constants) — never Math.random. */
 function lcg(seed: number): () => number {
@@ -203,4 +204,95 @@ describe("string format parity", () => {
       expectParity(schema, [...CORPUS], `fmt_${name.replace(/\W/g, "_")}`);
     });
   }
+});
+
+/**
+ * A custom string format built from a `g`/`y`-flagged regex is STATEFUL in Zod,
+ * and repeated parses of one schema disagree with each other.
+ *
+ * `z.stringFormat(name, /re/)` routes through `_stringFormat`, which keeps the
+ * regex as `def.pattern` and ALSO closes over it as
+ * `def.fn = (val) => fnOrRegex.test(val)`. `$ZodCustomStringFormat` validates by
+ * calling `def.fn` and never touches `lastIndex`, so a `g`/`y` regex resumes
+ * where the previous parse stopped. `$ZodCheckRegex` — what `.regex()` builds —
+ * does an explicit `def.pattern.lastIndex = 0` first and stays stateless. The
+ * codegen emits that reset for every flagged pattern, which is correct for
+ * `.regex()` and wrong for a custom format, so those now delegate to Zod.
+ *
+ * Zod's sequence is pinned literally rather than compared side-by-side alone:
+ * if an upstream Zod release starts resetting `lastIndex` in
+ * `$ZodCustomStringFormat`, this fails loudly instead of quietly agreeing at a
+ * new value and leaving the delegation unexplained.
+ *
+ * EVERY case below builds TWO schema instances, one per side. Sharing one
+ * instance would let both sides advance the SAME RegExp's `lastIndex`, and the
+ * comparison would pass no matter what the compiler did.
+ */
+describe("stateful custom string format (g/y flag)", () => {
+  /** Four repeated parses of the same input, as a pass/fail sequence. */
+  function sequence(parse: (value: unknown) => { success: boolean }, input: string): boolean[] {
+    return [1, 2, 3, 4].map(() => parse(input).success);
+  }
+
+  for (const flag of ["g", "y"] as const) {
+    it(`z.stringFormat with /ab/${flag} reproduces Zod's stateful sequence`, () => {
+      // "abab" matches at index 0 then 2; the third test starts at lastIndex 4,
+      // fails, and resets the cursor — so the fourth passes again.
+      const zodSide = z.stringFormat("stateful", new RegExp("ab", flag));
+      expect(sequence((v) => zodSide.safeParse(v), "abab")).toStrictEqual([
+        true,
+        true,
+        false,
+        true,
+      ]);
+
+      const compiledSide = z.stringFormat("stateful", new RegExp("ab", flag));
+      const compiled = compileLikeProduction(compiledSide, `stateful_${flag}`);
+      expect(sequence(compiled, "abab")).toStrictEqual([true, true, false, true]);
+    });
+
+    it(`z.stringFormat with /ab/${flag} delegates instead of compiling`, () => {
+      const ir = extractSchema(z.stringFormat("stateful", new RegExp("ab", flag)), []);
+      expect(ir.type).toBe("fallback");
+    });
+
+    // Control: $ZodCheckRegex resets lastIndex itself, so .regex() is stateless
+    // on both sides and must keep compiling — this is not the bug.
+    it(`.regex(/ab/${flag}) stays stateless and stays compiled`, () => {
+      const zodSide = z.string().regex(new RegExp("ab", flag));
+      expect(sequence((v) => zodSide.safeParse(v), "abab")).toStrictEqual([true, true, true, true]);
+
+      const compiledSide = z.string().regex(new RegExp("ab", flag));
+      const compiled = compileLikeProduction(compiledSide, `regex_${flag}`);
+      expect(sequence(compiled, "abab")).toStrictEqual([true, true, true, true]);
+
+      expect(extractSchema(z.string().regex(new RegExp("ab", flag)), []).type).not.toBe("fallback");
+    });
+  }
+
+  // Control: an UNflagged custom format has no cursor to carry, so the fix must
+  // not cost it its compiled path.
+  it("an unflagged custom format still compiles", () => {
+    const ir = extractSchema(z.stringFormat("digits", /^\d+$/), []);
+    expect(ir.type).not.toBe("fallback");
+
+    const zodSide = z.stringFormat("digits", /^\d+$/);
+    expect(sequence((v) => zodSide.safeParse(v), "123")).toStrictEqual([true, true, true, true]);
+
+    const compiled = compileLikeProduction(z.stringFormat("digits", /^\d+$/), "unflagged_custom");
+    expect(sequence(compiled, "123")).toStrictEqual([true, true, true, true]);
+  });
+
+  // Control: Zod routes these built-ins through the same `_stringFormat` helper,
+  // so they DO carry `def.fn` — only the unflagged pattern keeps them compiled.
+  // Delegating on `def.fn` alone would silently cost all three their fast path.
+  it.each([
+    ["hostname", () => z.hostname()],
+    ["hex", () => z.hex()],
+    ["hash md5", () => z.hash("md5")],
+  ])("built-in %s carries def.fn but still compiles", (_name, make) => {
+    const schema = make();
+    expect(typeof (schema._zod.def as { fn?: unknown }).fn).toBe("function");
+    expect(extractSchema(schema, []).type).not.toBe("fallback");
+  });
 });
