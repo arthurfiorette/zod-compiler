@@ -153,10 +153,12 @@ export type SupportedZodDefType =
 
 /**
  * Shared, mutable recursion-target bookkeeping for one {@link extractSchema}
- * call. Lazy cycle detection assigns each NON-root recursion target a stable
- * refId (≥ 1) keyed by Zod schema identity; the root schema is identified
- * separately and uses the implicit refId 0. `dispatch` wraps a schema's IR in
- * a `recursionTarget` node when that schema turns out to be a non-root target.
+ * call. Both cycle detectors — `extractLazy` for `z.lazy()` cycles, `dispatch`
+ * for getter-declared ones — route through `makeRecursiveRef`, which assigns
+ * each NON-root recursion target a stable refId (≥ 1) keyed by Zod schema
+ * identity; the root schema is identified separately and uses the implicit
+ * refId 0. `dispatch` wraps a schema's IR in a `recursionTarget` node when that
+ * schema turns out to be a non-root target.
  */
 export interface RecursionState {
   /** The root schema of this extraction (first dispatched), for root detection. */

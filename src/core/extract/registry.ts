@@ -34,6 +34,7 @@ import { extractUnion } from "./extractors/union.js";
 import { extractUnknown } from "./extractors/unknown.js";
 import { extractVoid } from "./extractors/void.js";
 import { makeFallback } from "./fallback.js";
+import { makeRecursiveRef } from "./recursion.js";
 import type {
   Extractor,
   ExtractorContext,
@@ -151,6 +152,33 @@ export function dispatch(
 ): SchemaIR {
   const schema = zodSchema as ZodSchema;
   const def = schema._zod.def;
+
+  // Cycle with no `z.lazy()` marker. Zod v4's documented getter form
+  // (`get subcategories() { return z.array(Category) }`) closes the loop through
+  // an ordinary shape entry, so nothing on the way down announces the back-edge
+  // — re-entering a schema still on the `visiting` stack IS the announcement.
+  // Without this, the walk recurses through the same shape forever and dies
+  // with "Maximum call stack size exceeded" before codegen ever runs.
+  //
+  // `lazy` is excluded because a lazy node is NOT the cycle's target — the
+  // schema it RESOLVES to is, and that is what the ref must be keyed on.
+  // Re-entering a lazy node is normal (`z.lazy(() => z.object({ next:
+  // Lazy.optional() }))` reaches the ROOT lazy again through its own subtree),
+  // and keying the ref on the wrapper would compare it against a root that
+  // `makeRecursiveRef` has already resolved through its lazy, miss the match,
+  // and mint a non-root refId — costing every root-level `z.lazy()` recursion
+  // a hosted helper validator instead of self-calling `safeParse_<name>`.
+  // extractLazy re-checks `visiting` against the resolved schema on the way in,
+  // so those cycles are still caught, one frame later and with the right key.
+  //
+  // Checked BEFORE `visiting.add` and outside the try: `visiting` is a plain
+  // Set, so returning from inside it would run the `finally` and delete an
+  // entry the OUTER frame for this same schema still owns — blinding the
+  // detector to every later back-edge to that target (a second self-reference
+  // in the same object would recurse forever again).
+  if (def.type !== "lazy" && visiting.has(zodSchema)) {
+    return makeRecursiveRef(zodSchema, recursion);
+  }
 
   visiting.add(zodSchema);
   try {
