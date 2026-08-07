@@ -12,7 +12,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import type { RefEntry } from "#src/core/extract/index.js";
 import { extractSchema } from "#src/core/extract/index.js";
-import { expectParity } from "./parity-harness.js";
+import { compileLikeProduction, expectParity } from "./parity-harness.js";
 
 /** Extraction produced a real compiled validator, not a delegation to Zod. */
 function expectCompiled(schema: unknown): void {
@@ -332,4 +332,74 @@ describe("recursion back-edge refIds", () => {
       "mutualRec",
     );
   });
+});
+
+// ─── Empty-valued enums ─────────────────────────────────────────────────────
+// An enum whose accepted-value set is EMPTY is legal in Zod and rejects every
+// input with `invalid_value` / `values: []`. Three public spellings reach it,
+// and the third is the one nobody expects: `z.enum([1, 2])` — a NUMERIC ARRAY —
+// becomes the entries `{1: 1, 2: 2}`, which Zod cannot tell apart from a TS
+// numeric enum's reverse mapping, so its reverse-mapping filter strips the lot
+// and leaves `_zod.values` empty.
+//
+// Codegen built both the slow walk's `&&` chain and the fast check's `||` chain
+// by JOINING per-value comparisons, and an empty join is an empty STRING: the
+// emitted source was `if(){...}` and `return ();`. That is not a divergence but
+// a SyntaxError at Function-construction time, i.e. the whole compile died.
+
+describe("empty-valued enums", () => {
+  const spellings: [string, z.ZodType][] = [
+    ["array", z.enum([])],
+    ["object", z.enum({})],
+    // Numeric array: entries {1:1, 2:2} → reverse-mapping filter empties values.
+    ["numericArray", z.enum([1, 2] as never)],
+  ];
+
+  const inputs = ["a", "", "1", 1, 2, 0, -1, null, undefined, true, NaN, {}, [], Symbol("s")];
+
+  for (const [label, schema] of spellings) {
+    it(`z.enum (${label}) rejects everything, exactly as zod does`, () => {
+      expectCompiled(schema);
+      expectParity(schema, inputs, `emptyEnum_${label}`);
+    });
+
+    it(`z.enum (${label}) reports invalid_value with an empty values array`, () => {
+      // expectParity compares issue code+path and the first message; the
+      // `values` field itself is what zod fills from its (empty) value set, so
+      // pin it here rather than trusting the code alone.
+      const compiled = compileLikeProduction(schema, `emptyEnumValues_${label}`);
+      const result = compiled("anything");
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      const issue = result.error.issues[0] as { code?: string; values?: unknown[] };
+      expect(issue.code).toBe("invalid_value");
+      expect(issue.values).toStrictEqual([]);
+      // …and zod agrees.
+      const zodResult = schema.safeParse("anything");
+      expect(zodResult.success).toBe(false);
+      if (zodResult.success) return;
+      expect((zodResult.error.issues[0] as { values?: unknown[] }).values).toStrictEqual([]);
+    });
+
+    it(`z.enum (${label}) nested in containers keeps the fast check well-formed`, () => {
+      // Nesting is what exercises the FAST path: the empty check is spliced
+      // into a larger boolean expression, where an empty join would also have
+      // wrecked the surrounding operator precedence.
+      const obj = z.object({ ok: z.string(), bad: schema });
+      expectCompiled(obj);
+      expectParity(
+        obj,
+        [{ ok: "x", bad: "y" }, { ok: "x", bad: 1 }, { ok: 1, bad: "y" }, { ok: "x" }, {}, null],
+        `emptyEnumObject_${label}`,
+      );
+
+      const arr = z.array(schema);
+      expectCompiled(arr);
+      expectParity(arr, [[], ["a"], [1], ["a", "b"], null, "nope"], `emptyEnumArray_${label}`);
+
+      const opt = z.object({ v: schema.optional() });
+      expectCompiled(opt);
+      expectParity(opt, [{}, { v: undefined }, { v: "a" }, { v: 1 }], `emptyEnumOpt_${label}`);
+    });
+  }
 });
