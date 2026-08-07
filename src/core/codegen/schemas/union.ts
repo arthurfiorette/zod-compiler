@@ -1,9 +1,9 @@
 import type { SchemaIR, UnionIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
-import { hasMutation } from "../context.js";
+import { emitRuntimeHelper, hasMutation } from "../context.js";
 import { emit } from "../emit.js";
 import { orderByRuntimeCost } from "../fast-size.js";
-import { abortingCodeTest } from "../issue-decls.js";
+import { abortingCodeTest, ZC_FZ_DECL } from "../issue-decls.js";
 import { detectUnionDiscriminator, emitFastDiscriminatedSwitch } from "./discriminated-union.js";
 
 export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string {
@@ -15,13 +15,41 @@ export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string 
   const abortedVar = g.temp("uea");
   let code = `var ${resultVar}=false;var ${errorsVar}=[];var ${abortedVar}=[];`;
 
+  // Options run at a path RELATIVE to the union, not at the union's own path.
+  //
+  // $ZodUnion hands each option a FRESH payload — `{ value: payload.value,
+  // issues: [] }` — so every issue an option raises is numbered from the union's
+  // position, and handleUnionResults copies those relative paths into the
+  // `invalid_union` groups unchanged. Walking options at the union's absolute
+  // path instead leaked it into all of them: `{a: z.union([...])}` reported the
+  // nested errors at `["a"]` where zod reports `[]`. Same model record/map
+  // already use for their key and value schemas.
+  //
+  // The union's own path is re-applied in exactly one place, mirroring the one
+  // place zod re-applies it: handleUnionResults' shortcut for a single
+  // non-aborted option returns THAT OPTION'S payload, whose issues are still
+  // relative, and the PARENT (an object's handlePropertyResult, say) prefixes
+  // them exactly once. Compiled parents bake their path into each issue at
+  // creation, so the union has to do that prefixing itself.
+  //
+  // That path expression is read ONCE, into `pathVar`, rather than at each issue
+  // below — it may allocate a fresh array per evaluation (`["items",__i_7]`).
+  // The binding is emitted inside the failure block further down, not here: both
+  // readers live there, so a union that matches an option never evaluates it at
+  // all, and the whole of this generator's output is one contiguous block at the
+  // union's site, so any enclosing loop variable the expression names is equally
+  // in scope there. A union already at `[]` prefixes nothing (concat would only
+  // copy the array), so it skips the binding entirely.
+  const atPathRoot = g.path === "[]";
+  const pathVar = atPathRoot ? null : g.temp("up");
+  const unionPath = pathVar ?? "[]";
+
   // If any option can mutate output (default, catch, coerce, effect),
   // each branch gets its own temp output to prevent cross-branch leaks.
   const needsOutputIsolation = ir.options.some(hasMutation);
 
   for (const option of ir.options) {
     const tmpIssues = g.temp("ui");
-    const innerIdx = g.temp("ufi");
     // This option's abort flag, forwarded into the option so a pipe `in` failure
     // can raise it (zod's handlePipeResult). Stays false for every other shape.
     const optAborted = g.temp("uoa");
@@ -33,17 +61,11 @@ export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string 
           var ${tmpIssues}=[];
           var ${optAborted}=false;
           var ${tmpOutput}=${g.input};
-          ${g.visit(option, { issues: tmpIssues, input: tmpOutput, output: tmpOutput, aborted: optAborted })}
+          ${g.visit(option, { issues: tmpIssues, input: tmpOutput, output: tmpOutput, path: "[]", aborted: optAborted })}
           if(${tmpIssues}.length===0){
             ${resultVar}=true;
             ${g.output}=${tmpOutput};
           }else{
-            for(var ${innerIdx}=0;${innerIdx}<${tmpIssues}.length;${innerIdx}++){
-              if(${tmpIssues}[${innerIdx}].message===undefined&&typeof __zcMsg==="function"){
-                ${tmpIssues}[${innerIdx}].message=__zcMsg(${tmpIssues}[${innerIdx}]);
-              }
-              ${tmpIssues}[${innerIdx}].input=undefined;
-            }
             ${errorsVar}.push(${tmpIssues});
             ${abortedVar}.push(${optAborted});
           }
@@ -53,16 +75,10 @@ export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string 
         if(!${resultVar}){
           var ${tmpIssues}=[];
           var ${optAborted}=false;
-          ${g.visit(option, { issues: tmpIssues, aborted: optAborted })}
+          ${g.visit(option, { issues: tmpIssues, path: "[]", aborted: optAborted })}
           if(${tmpIssues}.length===0){
             ${resultVar}=true;
           }else{
-            for(var ${innerIdx}=0;${innerIdx}<${tmpIssues}.length;${innerIdx}++){
-              if(${tmpIssues}[${innerIdx}].message===undefined&&typeof __zcMsg==="function"){
-                ${tmpIssues}[${innerIdx}].message=__zcMsg(${tmpIssues}[${innerIdx}]);
-              }
-              ${tmpIssues}[${innerIdx}].input=undefined;
-            }
             ${errorsVar}.push(${tmpIssues});
             ${abortedVar}.push(${optAborted});
           }
@@ -78,14 +94,30 @@ export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string 
   // option is non-aborted, its issues are surfaced directly instead of an
   // invalid_union wrapper.
   const msgProp = g.typeMsg === undefined ? "" : `,message:${JSON.stringify(g.typeMsg)}`;
+  const fz = emitRuntimeHelper(g.ctx, "__zcFz", ZC_FZ_DECL);
   const naVar = g.temp("una");
   const oiVar = g.temp("uoi");
   const ojVar = g.temp("uoj");
   const abVar = g.temp("uab");
   const ocVar = g.temp("uoc");
   const okVar = g.temp("uok");
+  const ofVar = g.temp("uof");
+  const surfaced = `${naVar}[0][${okVar}]`;
+  // Which branch fires decides where an option's issues are finalized, because
+  // the two branches finalize at DIFFERENT paths — so neither can be done up
+  // front, in the option loop, without being wrong for the other half:
+  //
+  // - invalid_union: zod maps each group through `finalizeIssue` while the paths
+  //   are still relative, so an error map reading `issue.path` sees `[]`.
+  //   __zcFz is that same locale-fill + input-strip, and is what record/map
+  //   already use for the issues they nest.
+  // - sole non-aborted: zod surfaces the option's own issues, which reach the
+  //   top-level finalizer with the FULL path, so the message is computed from
+  //   the absolute path. Prefix here and leave them unfinalized — they land in
+  //   the parent's issue array, which is finalized at the top exactly once.
   code += emit`
     if(!${resultVar}){
+      ${pathVar === null ? "" : `var ${pathVar}=${g.path};`}
       var ${naVar}=[];
       for(var ${oiVar}=0;${oiVar}<${errorsVar}.length;${oiVar}++){
         var ${abVar}=${abortedVar}[${oiVar}]===true;
@@ -98,9 +130,13 @@ export function slowUnion(ir: SchemaIR & { type: "union" }, g: SlowGen): string 
         if(!${abVar}){${naVar}.push(${errorsVar}[${oiVar}]);}
       }
       if(${naVar}.length===1){
-        for(var ${okVar}=0;${okVar}<${naVar}[0].length;${okVar}++){${g.issues}.push(${naVar}[0][${okVar}]);}
+        for(var ${okVar}=0;${okVar}<${naVar}[0].length;${okVar}++){
+          ${atPathRoot ? "" : `${surfaced}.path=${unionPath}.concat(${surfaced}.path);`}
+          ${g.issues}.push(${surfaced});
+        }
       }else{
-        ${g.issues}.push({code:"invalid_union",errors:${errorsVar}${msgProp},input:${g.input},path:${g.path}});
+        for(var ${ofVar}=0;${ofVar}<${errorsVar}.length;${ofVar}++){${fz}(${errorsVar}[${ofVar}]);}
+        ${g.issues}.push({code:"invalid_union",errors:${errorsVar}${msgProp},input:${g.input},path:${unionPath}});
       }
     }`;
   return `${code}\n`;

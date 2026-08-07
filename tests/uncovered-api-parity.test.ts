@@ -1530,3 +1530,295 @@ describe("issue fields beyond code and path", () => {
     ]);
   });
 });
+
+// ─── Paths nested inside an `invalid_union` ─────────────────────────────────
+// $ZodUnion runs every option on a FRESH payload (`{ value, issues: [] }`), so
+// an option's issues are numbered RELATIVE to the union's own position and
+// handleUnionResults copies those relative paths into the `errors` groups
+// unchanged. The compiled union used to walk its options at the union's
+// ABSOLUTE path, which produced the right outer issue and leaked that path into
+// every nested one: `z.object({ a: z.union([...]) })` reported the nested issues
+// at `["a"]` where zod reports `[]`.
+//
+// The blind spot was structural, not accidental. `expectParity` compares only
+// each issue's code, path and first message, and `expectIssueFields` above —
+// which DOES descend into `errors` — only ever pinned a union at the root, where
+// relative and absolute coincide. Every case here therefore asserts the whole
+// tree, and at least one nested group has to be non-empty for it to mean
+// anything.
+
+describe("union option paths inside invalid_union", () => {
+  /**
+   * Every issue in the tree as `path: code@relativePath`, descending through
+   * `invalid_union.errors` so a nested group's paths are compared, not just the
+   * wrapper's. Keys are fully qualified (`0.errors[1].0`), so a mismatch names
+   * the exact group rather than reporting two shuffled lists.
+   */
+  function issueTree(issues: readonly unknown[], prefix = ""): string[] {
+    const lines: string[] = [];
+    issues.forEach((raw, index) => {
+      const issue = raw as { code?: string; path?: unknown[]; errors?: unknown };
+      lines.push(`${prefix}${index}: ${issue.code}@${JSON.stringify(issue.path ?? [])}`);
+      if (Array.isArray(issue.errors)) {
+        issue.errors.forEach((group: unknown, groupIndex: number) => {
+          if (Array.isArray(group)) {
+            lines.push(...issueTree(group, `${prefix}${index}.errors[${groupIndex}].`));
+          }
+        });
+      }
+    });
+    return lines;
+  }
+
+  /** {@link issueTree}'s sibling over `message` — same descent, same labels. */
+  function messageTree(issues: readonly unknown[], prefix = ""): string[] {
+    const lines: string[] = [];
+    issues.forEach((raw, index) => {
+      const issue = raw as { message?: string; errors?: unknown };
+      lines.push(`${prefix}${index}: ${issue.message}`);
+      if (Array.isArray(issue.errors)) {
+        issue.errors.forEach((group: unknown, groupIndex: number) => {
+          if (Array.isArray(group)) {
+            lines.push(...messageTree(group, `${prefix}${index}.errors[${groupIndex}].`));
+          }
+        });
+      }
+    });
+    return lines;
+  }
+
+  function rejectedIssues(result: unknown, label: string): unknown[] {
+    const typed = result as { success: boolean; error?: { issues: unknown[] } };
+    expect(typed.success, `${label} must reject for there to be a tree`).toBe(false);
+    return typed.error?.issues ?? [];
+  }
+
+  /**
+   * Zod's whole issue tree, then the same tree from both emit modes. `expected`
+   * is passed in literally so the case documents what zod does — a silent
+   * upstream change to the nesting fails here rather than being absorbed by a
+   * self-referential comparison.
+   */
+  function expectTree(
+    schema: ZodLikeSchema,
+    input: unknown,
+    name: string,
+    expected: string[],
+  ): void {
+    expectCompiled(schema);
+    expect(
+      issueTree(rejectedIssues(schema.safeParse(input), `zod ${name}`)),
+      `zod's tree for ${name}`,
+    ).toStrictEqual(expected);
+    const modes = [
+      ["inline", compileLikeProduction(schema, name)],
+      ["lean", compileLeanLikeProduction(schema, `${name}Lean`)],
+    ] as const;
+    for (const [mode, compiled] of modes) {
+      expect(
+        issueTree(rejectedIssues(compiled(input), `${mode} ${name}`)),
+        `${mode} tree for ${name}`,
+      ).toStrictEqual(expected);
+    }
+  }
+
+  it("nested errors are relative to the union, not to the document", () => {
+    expectTree(z.object({ a: z.union([z.string(), z.number()]) }), { a: true }, "unionInObject", [
+      '0: invalid_union@["a"]',
+      "0.errors[0].0: invalid_type@[]",
+      "0.errors[1].0: invalid_type@[]",
+    ]);
+    expectTree(z.array(z.union([z.string(), z.number()])), [true], "unionInArray", [
+      "0: invalid_union@[0]",
+      "0.errors[0].0: invalid_type@[]",
+      "0.errors[1].0: invalid_type@[]",
+    ]);
+    // Several segments deep, and through a loop variable — the union's path
+    // expression names the enclosing element index, so it has to be read where
+    // that binding is live.
+    expectTree(
+      z.object({ o: z.array(z.object({ u: z.union([z.string(), z.number()]) })) }),
+      { o: [{ u: true }] },
+      "unionDeep",
+      [
+        '0: invalid_union@["o",0,"u"]',
+        "0.errors[0].0: invalid_type@[]",
+        "0.errors[1].0: invalid_type@[]",
+      ],
+    );
+  });
+
+  it("an option's OWN sub-paths survive, rooted at the union", () => {
+    // Object options give the nested issues real relative paths of their own,
+    // so this separates "relative" from "empty" — the bug rendered these as
+    // ["a","x"] / ["a","y"].
+    expectTree(
+      z.object({ a: z.union([z.object({ x: z.string() }), z.object({ y: z.number() })]) }),
+      { a: {} },
+      "unionOfObjects",
+      [
+        '0: invalid_union@["a"]',
+        '0.errors[0].0: invalid_type@["x"]',
+        '0.errors[1].0: invalid_type@["y"]',
+      ],
+    );
+  });
+
+  it("a union inside a union re-roots at the INNER union", () => {
+    expectTree(
+      z.object({ a: z.union([z.union([z.string(), z.number()]), z.boolean()]) }),
+      { a: {} },
+      "unionInUnion",
+      [
+        '0: invalid_union@["a"]',
+        "0.errors[0].0: invalid_union@[]",
+        "0.errors[0].0.errors[0].0: invalid_type@[]",
+        "0.errors[0].0.errors[1].0: invalid_type@[]",
+        "0.errors[1].0: invalid_type@[]",
+      ],
+    );
+    // Same, with object options at both levels, so every level contributes a
+    // segment and a dropped or doubled prefix cannot cancel out.
+    expectTree(
+      z.object({
+        a: z.union([
+          z.union([z.object({ x: z.string() }), z.object({ y: z.string() })]),
+          z.boolean(),
+        ]),
+      }),
+      { a: { x: 1 } },
+      "unionInUnionOfObjects",
+      [
+        '0: invalid_union@["a"]',
+        "0.errors[0].0: invalid_union@[]",
+        '0.errors[0].0.errors[0].0: invalid_type@["x"]',
+        '0.errors[0].0.errors[1].0: invalid_type@["y"]',
+        "0.errors[1].0: invalid_type@[]",
+      ],
+    );
+  });
+
+  it("CONTROL: a union at the root is unchanged", () => {
+    // Relative and absolute coincide at `[]`, so nothing may move — this is the
+    // shape the old code got right, and the one the emitter must keep
+    // prefix-free.
+    expectTree(z.union([z.string(), z.number()]), true, "unionAtRoot", [
+      "0: invalid_union@[]",
+      "0.errors[0].0: invalid_type@[]",
+      "0.errors[1].0: invalid_type@[]",
+    ]);
+  });
+
+  it("the sole non-aborted option is surfaced at the ABSOLUTE path", () => {
+    // handleUnionResults' shortcut: with exactly one non-aborted option it
+    // returns THAT option's payload, whose issues are still relative, and the
+    // parent prefixes them once. There is no `invalid_union` wrapper here at
+    // all, so the union has to re-apply its own path — the half a relative walk
+    // would otherwise break.
+    expectTree(
+      z.object({ a: z.union([z.string().min(5), z.number()]) }),
+      { a: "ab" },
+      "soleOptionInObject",
+      ['0: too_small@["a"]'],
+    );
+    expectTree(z.array(z.union([z.string().min(5), z.number()])), ["ab"], "soleOptionInArray", [
+      "0: too_small@[0]",
+    ]);
+    // The surfaced issue carries a relative path of its own, so the prefix has
+    // to be spliced in front of it rather than replace it.
+    expectTree(
+      z.object({ a: z.union([z.object({ x: z.string().min(5) }), z.number()]) }),
+      { a: { x: "ab" } },
+      "soleOptionObjectOption",
+      ['0: too_small@["a","x"]'],
+    );
+    // Two levels of shortcut: the inner union surfaces its sole option to the
+    // outer union, which surfaces it again to the object.
+    expectTree(
+      z.object({ a: z.union([z.union([z.object({ x: z.string().min(5) }), z.number()])]) }),
+      { a: { x: "ab" } },
+      "soleOptionNested",
+      ['0: too_small@["a","x"]'],
+    );
+    // And at the root, where the shortcut must add nothing.
+    expectTree(z.union([z.string().min(5), z.number()]), "ab", "soleOptionAtRoot", [
+      "0: too_small@[]",
+    ]);
+  });
+
+  it("containers that prefix AFTER the fact still land at the right path", () => {
+    // A map value is walked at `[]` and its issues are prefixed by the map
+    // (util.prefixIssues / __zcPfx), so the union sits at a relative root and
+    // must not prefix a second time.
+    expectTree(
+      z.map(z.string(), z.union([z.string(), z.number()])),
+      new Map([["k", true]]),
+      "unionInMapValue",
+      [
+        '0: invalid_union@["k"]',
+        "0.errors[0].0: invalid_type@[]",
+        "0.errors[1].0: invalid_type@[]",
+      ],
+    );
+    expectTree(
+      z.map(z.string(), z.union([z.string().min(5), z.number()])),
+      new Map([["k", "ab"]]),
+      "soleOptionInMapValue",
+      ['0: too_small@["k"]'],
+    );
+    expectTree(
+      z.record(z.string(), z.union([z.string(), z.number()])),
+      { k: true },
+      "unionInRecordValue",
+      [
+        '0: invalid_union@["k"]',
+        "0.errors[0].0: invalid_type@[]",
+        "0.errors[1].0: invalid_type@[]",
+      ],
+    );
+  });
+
+  it("messages are computed at the path the issue is reported under", () => {
+    // The two branches finalize at different paths, so an error map reading
+    // `issue.path` pins WHERE each is finalized: zod maps the `errors` groups
+    // through finalizeIssue while they are still relative, while a surfaced
+    // sole option is finalized at the top with its full path. Finalizing every
+    // option eagerly, as the emitter used to, can only satisfy one of the two.
+    const previous = z.config().customError;
+    z.config({ customError: (issue) => `at ${JSON.stringify(issue.path ?? [])}` });
+    try {
+      const messages = (result: unknown, name: string): string[] =>
+        messageTree(rejectedIssues(result, name));
+      const cases: [string, ZodLikeSchema, unknown][] = [
+        ["errorsBranchMsg", z.object({ a: z.union([z.string(), z.number()]) }), { a: true }],
+        [
+          "soleOptionBranchMsg",
+          z.object({ a: z.union([z.string().min(5), z.number()]) }),
+          { a: "ab" },
+        ],
+      ];
+      for (const [name, schema, input] of cases) {
+        const expected = messages(schema.safeParse(input), `zod ${name}`);
+        // Non-vacuous by construction: every case has to produce at least one
+        // message, or a helper that quietly returned nothing would "match".
+        expect(expected.length, `zod produced messages for ${name}`).toBeGreaterThan(0);
+        expect(
+          messages(compileLikeProduction(schema, name)(input), name),
+          `messages for ${name}`,
+        ).toStrictEqual(expected);
+      }
+      // Spelled out, so the two branches are visibly different rather than just
+      // equal to zod: relative inside `errors`, absolute once surfaced.
+      const nested = z.object({ a: z.union([z.string(), z.number()]) }).safeParse({ a: true }) as {
+        error?: { issues: { errors?: { message?: string }[][] }[] };
+      };
+      expect(nested.error?.issues[0]?.errors?.[0]?.[0]?.message).toBe("at []");
+      const surfaced = z
+        .object({ a: z.union([z.string().min(5), z.number()]) })
+        .safeParse({ a: "ab" }) as { error?: { issues: { message?: string }[] } };
+      expect(surfaced.error?.issues[0]?.message).toBe('at ["a"]');
+    } finally {
+      z.config({ customError: previous });
+    }
+  });
+});
