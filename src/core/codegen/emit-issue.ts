@@ -171,7 +171,18 @@ export function invalidType(
 export function invalidFormat(
   g: IssueGen,
   format: string | { expr: string },
-  options?: { input?: string; path?: string; extra?: string; message?: string | undefined },
+  options?: {
+    input?: string;
+    path?: string;
+    /**
+     * Extra issue properties as a source fragment
+     * (`'pattern:"…",origin:"string"'`). Explicitly `| undefined` so a caller
+     * can compute it conditionally: zod's `invalid_format` carries different
+     * fields per format, and the bare-issue formats carry none.
+     */
+    extra?: string | undefined;
+    message?: string | undefined;
+  },
 ): string {
   const input = options?.input ?? g.input;
   const path = options?.path ?? g.path;

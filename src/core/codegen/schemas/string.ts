@@ -22,6 +22,11 @@ function lastIndexReset(regexVar: string, flags: string | undefined): string {
  * Generate the url check, mirroring $ZodURL semantics:
  * trim → new URL(trimmed) → optional hostname/protocol regex tests →
  * write back url.href (normalize) or the trimmed input.
+ *
+ * $ZodURL is another constructor that OVERRIDES the `??=`-installed default
+ * check, so none of the three issues below carries `origin` — and the two that
+ * do carry a `pattern` use `regex.source`, not the default check's
+ * `regex.toString()` (no delimiters, no flags). Both are reproduced verbatim.
  */
 function slowUrlCheck(check: CheckStringFormat, g: SlowGen): string {
   const trimmedVar = g.temp("ut");
@@ -99,22 +104,27 @@ export function slowString(ir: StringIR, g: SlowGen): string {
               ${tooBig(g, check.length, "string", true, { exact: true, message: check.message })}
             }`;
           break;
+        // includes/starts_with/ends_with each carry `origin:"string"` but NO
+        // `pattern`: $ZodCheckIncludes/StartsWith/EndsWith bypass
+        // $ZodCheckStringFormat entirely (they init from $ZodCheck and assign
+        // `inst._zod.check` directly), and the pattern they build is registered
+        // in the bag for JSON Schema only, never put on the issue.
         case "includes":
           code += emit`
             if(!${g.input}.includes(${escapeString(check.includes)}${check.position !== undefined ? `,${check.position}` : ""})){
-              ${invalidFormat(g, "includes", { extra: `includes:${escapeString(check.includes)}`, message: check.message })}
+              ${invalidFormat(g, "includes", { extra: `includes:${escapeString(check.includes)},origin:"string"`, message: check.message })}
             }`;
           break;
         case "starts_with":
           code += emit`
             if(!${g.input}.startsWith(${escapeString(check.prefix)})){
-              ${invalidFormat(g, "starts_with", { extra: `prefix:${escapeString(check.prefix)}`, message: check.message })}
+              ${invalidFormat(g, "starts_with", { extra: `prefix:${escapeString(check.prefix)},origin:"string"`, message: check.message })}
             }`;
           break;
         case "ends_with":
           code += emit`
             if(!${g.input}.endsWith(${escapeString(check.suffix)})){
-              ${invalidFormat(g, "ends_with", { extra: `suffix:${escapeString(check.suffix)}`, message: check.message })}
+              ${invalidFormat(g, "ends_with", { extra: `suffix:${escapeString(check.suffix)},origin:"string"`, message: check.message })}
             }`;
           break;
         case "refine_effect":
@@ -154,18 +164,30 @@ export function slowString(ir: StringIR, g: SlowGen): string {
               continue;
             }
           }
-          // When emitRegex swapped in a faster equivalent pattern, the runtime
-          // regex's toString() would leak the rewrite into the issue. Reference
-          // the shared original-pattern string instead (pattern came from
-          // RegExp.source, so it matches zod's `.toString()` byte-for-byte).
-          const rewritten = !check.patternFlags && fastTestSource(pattern) !== null;
-          const patternExpr = rewritten
-            ? emitRegexSourceString(g.ctx, pattern)
-            : `${regexVar}.toString()`;
+          // Zod's invalid_format shape depends on WHICH check instance ran.
+          // `$ZodCheckStringFormat.init` installs the default pattern check with
+          // `??=`, and that default pushes `origin:"string"` + `pattern`. A
+          // constructor that OVERRIDES `inst._zod.check` pushes its own issue
+          // instead — `$ZodCustomStringFormat` (z.stringFormat/z.hex/z.hostname/
+          // z.hash) pushes a bare `{code, format, input}` because it validates
+          // through `def.fn` and never reads `def.pattern`. We test the pattern
+          // either way, so the issue shape is driven off the extracted flag.
+          let extra: string | undefined;
+          if (!check.bareIssue) {
+            // When emitRegex swapped in a faster equivalent pattern, the runtime
+            // regex's toString() would leak the rewrite into the issue. Reference
+            // the shared original-pattern string instead (pattern came from
+            // RegExp.source, so it matches zod's `.toString()` byte-for-byte).
+            const rewritten = !check.patternFlags && fastTestSource(pattern) !== null;
+            const patternExpr = rewritten
+              ? emitRegexSourceString(g.ctx, pattern)
+              : `${regexVar}.toString()`;
+            extra = `pattern:${patternExpr},origin:"string"`;
+          }
           code += emit`
             ${lastIndexReset(regexVar, check.patternFlags)}
             if(!${regexVar}.test(${g.input})){
-              ${invalidFormat(g, { expr: escapeString(check.format) }, { extra: `pattern:${patternExpr},origin:"string"`, message: check.message })}
+              ${invalidFormat(g, { expr: escapeString(check.format) }, { extra, message: check.message })}
             }`;
           break;
         }

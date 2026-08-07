@@ -62,6 +62,24 @@ export interface CheckStringFormat extends CheckBase {
   protocolFlags?: string;
   /** url-only: output url.href instead of the trimmed input. */
   normalize?: boolean;
+  /**
+   * Emit a BARE `invalid_format` issue — no `origin`, no `pattern`.
+   *
+   * Zod's `invalid_format` shape is not uniform, and the split follows which
+   * check instance ends up installed. `$ZodCheckStringFormat.init` installs the
+   * DEFAULT pattern check with `inst._zod.check ??= …`, and that default pushes
+   * `origin: "string"` plus `pattern: def.pattern.toString()`. A constructor
+   * that OVERRIDES `inst._zod.check` afterwards pushes its own issue instead —
+   * `$ZodCustomStringFormat` (what `z.stringFormat()`, `z.hex()`, `z.hostname()`
+   * and `z.hash()` all build) pushes only `{ code, format, input }`, because it
+   * validates through `def.fn` and never consults `def.pattern`.
+   *
+   * The compiler validates with the pattern either way, so this flag records
+   * WHICH issue shape to reproduce. Set from the structural `def.fn` marker in
+   * src/core/extract/checks.ts — a format's name is user-chosen, so it cannot be
+   * decided from a name list.
+   */
+  bareIssue?: boolean;
 }
 
 export interface CheckIncludes extends CheckBase {

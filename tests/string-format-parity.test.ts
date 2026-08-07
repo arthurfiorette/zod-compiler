@@ -296,3 +296,268 @@ describe("stateful custom string format (g/y flag)", () => {
     expect(extractSchema(schema, []).type).not.toBe("fallback");
   });
 });
+
+/**
+ * WHICH FIELDS an `invalid_format` issue carries. Zod is not uniform here, and
+ * the split is decided by which check instance ends up installed:
+ *
+ *   `$ZodCheckStringFormat.init` installs the DEFAULT pattern check with
+ *   `inst._zod.check ??= …`, and that default pushes `origin: "string"` plus
+ *   `pattern: def.pattern.toString()`. Any constructor that OVERRIDES
+ *   `inst._zod.check` afterwards pushes its OWN issue instead — and none of
+ *   them repeats `origin`/`pattern`.
+ *
+ * Four groups fall out, all represented below:
+ *
+ *   origin + pattern  the `??=` default survived — ipv4, uuid, email, iso.*,
+ *                     lowercase/uppercase, `.regex()`, …
+ *   origin, no pattern  $ZodCheckIncludes/StartsWith/EndsWith skip
+ *                     $ZodCheckStringFormat entirely (they init from $ZodCheck
+ *                     and assign `inst._zod.check` directly). The pattern they
+ *                     build goes into the bag for JSON Schema, never the issue.
+ *   neither           $ZodCustomStringFormat — `z.stringFormat()` and the
+ *                     built-ins routed through `_stringFormat` (hex, hostname,
+ *                     hash). Validates via `def.fn`, pushes `{code, format,
+ *                     input}`. The compiler tells this group apart by the
+ *                     structural `def.fn` marker, NOT by format name: a custom
+ *                     format's name is user-chosen, so no list can enumerate it.
+ *   url               $ZodURL also overrides. No `origin`; the hostname and
+ *                     protocol notes carry `pattern` as `regex.source` — bare
+ *                     source, unlike the default check's `.toString()`.
+ *
+ * The compiler emitted one uniform shape and was wrong in BOTH directions: it
+ * dropped `origin` from includes/starts_with/ends_with and invented
+ * `origin`+`pattern` for hex/hostname/hash/stringFormat. `expectParity` above
+ * could not see it — it compares issue code, path and the first message only.
+ *
+ * Each case pins ZOD's own key set literally before comparing sides, so an
+ * upstream change to either shape fails here instead of silently redefining
+ * what parity means.
+ */
+describe("invalid_format issue fields", () => {
+  /**
+   * An issue reduced to comparable form: keys sorted, and keys whose value is
+   * `undefined` dropped. Zod `delete`s `input` during finalization while
+   * `__zcFin` blanks it in place (`e[i].input=undefined`) to avoid the delete's
+   * shape transition — a deliberate divergence owned by issue-shape.test.ts.
+   */
+  function normalizeIssue(issue: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(issue).sort()) {
+      if (issue[key] !== undefined) out[key] = issue[key];
+    }
+    return out;
+  }
+
+  /** Zod's own first issue for an input it must reject. */
+  function zodIssueFor(schema: z.ZodType, input: string, name: string): Record<string, unknown> {
+    const result = schema.safeParse(input);
+    const issue = result.error?.issues[0] as Record<string, unknown> | undefined;
+    expect(issue, `${name}: input must be rejected by zod`).toBeDefined();
+    return issue ?? {};
+  }
+
+  /** Zod's first issue and the compiled first issue for the same input. */
+  function bothSides(
+    schema: z.ZodType,
+    input: string,
+    name: string,
+  ): { compiled: Record<string, unknown>; zod: Record<string, unknown> } {
+    const zod = zodIssueFor(schema, input, name);
+    const compiledResult = compileLikeProduction(schema, name)(input);
+    expect(compiledResult.success, `${name}: input must be rejected by the compiler`).toBe(false);
+    const compiled = compiledResult.success
+      ? {}
+      : (compiledResult.error.issues[0] as unknown as Record<string, unknown>);
+    return { compiled: normalizeIssue(compiled), zod: normalizeIssue(zod) };
+  }
+
+  const FIELD_CASES: [name: string, schema: z.ZodType, input: string, zodKeys: string[]][] = [
+    // ── the `??=` default check survived: origin + pattern ──────────────────
+    ["ipv4", z.ipv4(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["cidrv4", z.cidrv4(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["mac", z.mac(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["email", z.email(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["uuid", z.uuid(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["guid", z.guid(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["cuid", z.cuid(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["cuid2", z.cuid2(), "!!", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["ulid", z.ulid(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["xid", z.xid(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["ksuid", z.ksuid(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["nanoid", z.nanoid(), "!!", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["e164", z.e164(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["emoji", z.emoji(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    [
+      "iso.datetime",
+      z.iso.datetime(),
+      "nope",
+      ["code", "format", "message", "origin", "path", "pattern"],
+    ],
+    ["iso.date", z.iso.date(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    ["iso.time", z.iso.time(), "nope", ["code", "format", "message", "origin", "path", "pattern"]],
+    [
+      "iso.duration",
+      z.iso.duration(),
+      "nope",
+      ["code", "format", "message", "origin", "path", "pattern"],
+    ],
+    [
+      "lowercase",
+      z.string().lowercase(),
+      "ABC",
+      ["code", "format", "message", "origin", "path", "pattern"],
+    ],
+    [
+      "uppercase",
+      z.string().uppercase(),
+      "abc",
+      ["code", "format", "message", "origin", "path", "pattern"],
+    ],
+    [
+      "regex",
+      z.string().regex(/^[ab]+$/),
+      "zz",
+      ["code", "format", "message", "origin", "path", "pattern"],
+    ],
+    // ── own check, no $ZodCheckStringFormat: origin, no pattern ─────────────
+    [
+      "includes",
+      z.string().includes("ab"),
+      "zz",
+      ["code", "format", "includes", "message", "origin", "path"],
+    ],
+    [
+      "includes (position)",
+      z.string().includes("ab", { position: 2 }),
+      "zz",
+      ["code", "format", "includes", "message", "origin", "path"],
+    ],
+    [
+      "startsWith",
+      z.string().startsWith("ab"),
+      "zz",
+      ["code", "format", "message", "origin", "path", "prefix"],
+    ],
+    [
+      "endsWith",
+      z.string().endsWith("ab"),
+      "zz",
+      ["code", "format", "message", "origin", "path", "suffix"],
+    ],
+    [
+      "startsWith (custom message)",
+      z.string().startsWith("ab", "boom"),
+      "zz",
+      ["code", "format", "message", "origin", "path", "prefix"],
+    ],
+    // ── $ZodCustomStringFormat override: bare issue, neither field ──────────
+    ["hex", z.hex(), "zz", ["code", "format", "message", "path"]],
+    ["hostname", z.hostname(), "-bad-.com", ["code", "format", "message", "path"]],
+    ["hash md5", z.hash("md5"), "zz", ["code", "format", "message", "path"]],
+    ["hash sha256", z.hash("sha256"), "zz", ["code", "format", "message", "path"]],
+    [
+      "hash md5 (base64)",
+      z.hash("md5", { enc: "base64" }),
+      "zz",
+      ["code", "format", "message", "path"],
+    ],
+    [
+      "hash sha512 (base64url)",
+      z.hash("sha512", { enc: "base64url" }),
+      "zz",
+      ["code", "format", "message", "path"],
+    ],
+    [
+      "stringFormat (user-chosen name)",
+      z.stringFormat("digits", /^\d+$/),
+      "zz",
+      ["code", "format", "message", "path"],
+    ],
+    [
+      "stringFormat (custom message)",
+      z.stringFormat("digits", /^\d+$/, "boom"),
+      "zz",
+      ["code", "format", "message", "path"],
+    ],
+    ["hex (custom message)", z.hex("boom"), "zz", ["code", "format", "message", "path"]],
+    // ── $ZodURL override: no origin; pattern is regex.source on the notes ───
+    ["url (unparseable)", z.url(), "not a url", ["code", "format", "message", "path"]],
+    [
+      "url (bad hostname)",
+      z.url({ hostname: /^example\.com$/ }),
+      "https://other.com",
+      ["code", "format", "message", "note", "path", "pattern"],
+    ],
+    [
+      "url (bad protocol)",
+      z.url({ protocol: /^https$/ }),
+      "ftp://example.com",
+      ["code", "format", "message", "note", "path", "pattern"],
+    ],
+    [
+      "httpUrl (bad protocol)",
+      z.httpUrl(),
+      "ftp://example.com",
+      ["code", "format", "message", "note", "path", "pattern"],
+    ],
+    ["httpUrl (unparseable)", z.httpUrl(), "not a url", ["code", "format", "message", "path"]],
+  ];
+
+  for (const [name, schema, input, zodKeys] of FIELD_CASES) {
+    it(`${name} carries exactly ${zodKeys.join("+")}`, () => {
+      const { compiled, zod } = bothSides(schema, input, `iff_${name.replace(/\W/g, "_")}`);
+      // Pin zod first: an upstream reshuffle must fail as drift, not disappear
+      // into a still-symmetric comparison.
+      expect(Object.keys(zod), `${name}: zod's own field set`).toStrictEqual(zodKeys);
+      // Then full equality — key set AND every value, so a pattern rendered as
+      // `.source` where zod used `.toString()` fails too.
+      expect(compiled, `${name}: compiled issue`).toStrictEqual(zod);
+    });
+  }
+
+  // The formats whose pattern disagrees with their check delegate to zod (see
+  // NON_AUTHORITATIVE_PATTERN_FORMATS), so their issue IS zod's — parity by
+  // construction, not by the flag above. Asserted so a future attempt to
+  // compile them cannot land without an explicit issue-shape decision.
+  it.each([
+    ["ipv6", z.ipv6(), "nope"],
+    ["cidrv6", z.cidrv6(), "nope"],
+    ["base64", z.base64(), "!!!"],
+    ["base64url", z.base64url(), "!!!"],
+    ["jwt", z.jwt(), "nope"],
+    ["stringFormat (fn)", z.stringFormat("custom_fn", (v) => v.length === 3), "zz"],
+  ])("delegated %s returns zod's own bare issue", (name, schema, input) => {
+    expect(extractSchema(schema, []).type, `${name} must delegate`).toBe("fallback");
+    const { compiled, zod } = bothSides(schema, input, `iff_del_${name.replace(/\W/g, "_")}`);
+    expect(Object.keys(zod)).toStrictEqual(["code", "format", "message", "path"]);
+    expect(compiled).toStrictEqual(zod);
+  });
+
+  // The IR flag is the whole mechanism, so assert it agrees with zod rather
+  // than only that the emitted issue happens to. `url` is excluded: it is
+  // emitted by slowUrlCheck, which reproduces $ZodURL's own three issues.
+  it.each([
+    ["ipv4", z.ipv4(), "nope", false],
+    ["uuid", z.uuid(), "nope", false],
+    ["regex", z.string().regex(/^[ab]+$/), "zz", false],
+    ["lowercase", z.string().lowercase(), "ABC", false],
+    ["hex", z.hex(), "zz", true],
+    ["hostname", z.hostname(), "-bad-.com", true],
+    ["hash sha256", z.hash("sha256"), "zz", true],
+    ["stringFormat", z.stringFormat("digits", /^\d+$/), "zz", true],
+  ])("%s carries bareIssue=%o in the IR, matching zod", (name, schema, input, bare) => {
+    const ir = extractSchema(schema, []);
+    expect(ir.type, `${name} must compile`).toBe("string");
+    const check = (ir as { checks: { kind: string; bareIssue?: boolean }[] }).checks.find(
+      (c) => c.kind === "string_format",
+    );
+    expect(check?.bareIssue ?? false, `${name}: IR flag`).toBe(bare);
+    // ...and the flag is only right if zod really omits origin for exactly
+    // these — `def.fn` is the discriminator, so check it lines up too.
+    expect("origin" in zodIssueFor(schema, input, name), `${name}: zod's origin`).toBe(!bare);
+    expect(typeof (schema._zod.def as { fn?: unknown }).fn === "function", `${name}: def.fn`).toBe(
+      bare,
+    );
+  });
+});

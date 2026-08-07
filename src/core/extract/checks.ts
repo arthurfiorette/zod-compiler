@@ -88,6 +88,28 @@ const PATTERNLESS_FORMATS = new Set(["email", "uuid", "url"]);
 const NON_AUTHORITATIVE_PATTERN_FORMATS = new Set(["base64", "base64url", "cidrv6", "ipv6"]);
 
 /**
+ * True when a `string_format` check is a `$ZodCustomStringFormat` — the family
+ * Zod's `_stringFormat` helper builds: `z.stringFormat()`, and the built-ins
+ * `z.hex()`, `z.hostname()` and `z.hash()` that route through it.
+ *
+ * `def.fn` is the structural marker: `_stringFormat` is the ONLY producer of a
+ * `string_format` check def that carries one (every other format — guid, uuid,
+ * email, ipv4, iso.*, lowercase/uppercase, regex, includes/starts_with/ends_with
+ * — is built from a plain `{ check, format, pattern }` def). A name list cannot
+ * stand in for it: `z.stringFormat("anything", /re/)` lets the caller pick the
+ * format name, so the set of names is open.
+ *
+ * Two things follow from being in this family, both about Zod's OVERRIDE of
+ * `inst._zod.check` (see `$ZodCustomStringFormat` in zod/v4/core/schemas.js):
+ * the issue it pushes is bare (see CheckStringFormat.bareIssue), and it calls
+ * `def.fn` rather than testing `def.pattern` — which is what makes a `g`/`y`
+ * pattern stateful (see {@link isStatefulCustomFormat}).
+ */
+function isCustomStringFormat(def: ZodCheckDef): boolean {
+  return typeof def.fn === "function";
+}
+
+/**
  * True when a `string_format` check validates through `def.fn` over a STATEFUL
  * (`g`/`y`-flagged) pattern — a custom format built by Zod's `_stringFormat`
  * helper, i.e. `z.stringFormat("name", /ab/g)`.
@@ -116,7 +138,7 @@ const NON_AUTHORITATIVE_PATTERN_FORMATS = new Set(["base64", "base64url", "cidrv
  */
 function isStatefulCustomFormat(def: ZodCheckDef): boolean {
   return (
-    typeof def.fn === "function" && def.pattern instanceof RegExp && /[gy]/.test(def.pattern.flags)
+    isCustomStringFormat(def) && def.pattern instanceof RegExp && /[gy]/.test(def.pattern.flags)
   );
 }
 
@@ -280,6 +302,7 @@ export function extractChecks(
           format: def.format,
           ...(pattern ? { pattern } : {}),
           ...(flags ? { patternFlags: flags } : {}),
+          ...(isCustomStringFormat(def) ? { bareIssue: true } : {}),
           ...message,
         });
         break;
