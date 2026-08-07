@@ -561,3 +561,106 @@ describe("invalid_format issue fields", () => {
     );
   });
 });
+
+/**
+ * A custom format's NAME is user-chosen, so it cannot identify which validator
+ * Zod runs — `z.stringFormat("email", fn)` is a $ZodCustomStringFormat that
+ * validates through `def.fn`, sharing nothing with `z.email()` but the label.
+ *
+ * Two name-keyed decisions read that label as proof of a built-in and inverted
+ * the verdict in BOTH directions for a format merely named after one:
+ *
+ *   PATTERNLESS_FORMATS ({email, uuid, url}) lets a check with no `def.pattern`
+ *   compile anyway, because codegen substitutes a known regex
+ *   (EMAIL_REGEX_SOURCE / UUID_REGEX_SOURCE). A custom format built from a
+ *   FUNCTION has no pattern and landed there, so `z.stringFormat("email",
+ *   (v) => v.length === 3)` compiled to the EMAIL regex: it rejected "abc"
+ *   (Zod accepts) and accepted "a@b.co" (Zod rejects).
+ *
+ *   `format === "url"` routes to slowUrlCheck (the URL-parser probe) in both
+ *   the extractor and codegen, discarding `def.pattern` outright — so a custom
+ *   format named "url" was mis-compiled in its REGEX form too, not just its
+ *   function form.
+ *
+ * The fix keys on the structural `def.fn` marker (isCustomStringFormat), never
+ * the name. Which way each form goes is decided by what is actually available
+ * to compile: the function form has only `def.fn`, which lives in the user's
+ * closure and cannot be emitted, so it delegates; the regex form carries the
+ * user's OWN `def.pattern`, which is exactly what `def.fn` tests, so it keeps
+ * its compiled path.
+ *
+ * Zod's verdicts are pinned literally, not just compared side-by-side: if an
+ * upstream release ever made `z.stringFormat("email", fn)` consult the built-in
+ * email check, this must fail loudly rather than quietly agree with it.
+ */
+describe("custom string format colliding with a built-in format name", () => {
+  /** A built-in-VALID value per colliding name — Zod's custom fn rejects each. */
+  const BUILTIN_VALID = {
+    email: "a@b.co",
+    url: "https://example.com",
+    uuid: "550e8400-e29b-41d4-a716-446655440000",
+  } as const;
+
+  const COLLIDING = ["email", "uuid", "url"] as const;
+
+  // The predicate is deliberately unrelated to every built-in it is named
+  // after, so "compiled against the built-in" and "compiled against the user's
+  // function" disagree on BOTH inputs below.
+  const lengthIs3 = (value: string) => value.length === 3;
+
+  for (const name of COLLIDING) {
+    it(`z.stringFormat("${name}", fn) delegates instead of compiling the built-in`, () => {
+      expect(extractSchema(z.stringFormat(name, lengthIs3), []).type).toBe("fallback");
+    });
+
+    it(`z.stringFormat("${name}", fn) matches Zod in both directions`, () => {
+      const schema = z.stringFormat(name, lengthIs3);
+      const builtinValid = BUILTIN_VALID[name];
+
+      // Pin Zod: the custom predicate decides, and it is the built-in's inverse.
+      expect(schema.safeParse("abc").success, `${name}: zod accepts "abc"`).toBe(true);
+      expect(schema.safeParse(builtinValid).success, `${name}: zod rejects ${builtinValid}`).toBe(
+        false,
+      );
+
+      expectParity(schema, ["abc", builtinValid, "", "ab", "abcd"], `collide_fn_${name}`);
+    });
+
+    // A custom format built from a REGEX carries the user's own `def.pattern`,
+    // and that pattern IS what `def.fn` tests — so it stays compiled. Delegating
+    // it too would be safe but would cost every such schema its fast path.
+    it(`z.stringFormat("${name}", /^[ab]+$/) stays compiled and matches Zod`, () => {
+      const make = () => z.stringFormat(name, /^[ab]+$/);
+      const ir = extractSchema(make(), []);
+      expect(ir.type, `${name}: regex form must stay compiled`).not.toBe("fallback");
+      // ...and compiled against the USER's pattern, not a name-matched built-in.
+      const check = (ir as { checks: { kind: string; pattern?: string }[] }).checks.find(
+        (c) => c.kind === "string_format",
+      );
+      expect(check?.pattern, `${name}: the user's pattern is what compiles`).toBe("^[ab]+$");
+
+      const schema = make();
+      expect(schema.safeParse("aab").success, `${name}: zod accepts "aab"`).toBe(true);
+      expect(schema.safeParse(BUILTIN_VALID[name]).success, `${name}: zod rejects builtin`).toBe(
+        false,
+      );
+
+      expectParity(make(), ["aab", BUILTIN_VALID[name], "zzz", ""], `collide_re_${name}`);
+    });
+  }
+
+  // Control: the genuine built-ins must keep their compiled path — the fix
+  // narrows the name-keyed branches, and narrowing them too far would silently
+  // delegate the three formats those branches exist to serve.
+  it.each([
+    ["email", () => z.email(), "a@b.co", "abc"],
+    ["uuid", () => z.uuid(), "550e8400-e29b-41d4-a716-446655440000", "abc"],
+    ["url", () => z.url(), "https://example.com", "abc"],
+  ])("built-in z.%s() still compiles", (name, make, good, bad) => {
+    expect(extractSchema(make(), []).type, `${name} must compile`).not.toBe("fallback");
+    expect(typeof (make()._zod.def as { fn?: unknown }).fn, `${name} has no def.fn`).not.toBe(
+      "function",
+    );
+    expectParity(make(), [good, bad], `builtin_${name}`);
+  });
+});

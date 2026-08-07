@@ -50,9 +50,15 @@ export function payloadCheckRef(
 }
 
 /**
- * String formats the codegen can validate without a regex pattern.
- * Everything else without a pattern (e.g. z.jwt(), which validates
- * algorithmically) must fall back to Zod instead of being silently skipped.
+ * BUILT-IN string formats the codegen can validate without a regex pattern,
+ * because it substitutes a known regex of its own (see EMAIL_REGEX_SOURCE /
+ * UUID_REGEX_SOURCE in codegen/schemas/string.ts). Everything else without a
+ * pattern (e.g. z.jwt(), which validates algorithmically) must fall back to Zod
+ * instead of being silently skipped.
+ *
+ * Built-in ONLY: this is keyed on the format NAME, and a custom format's name is
+ * user-chosen, so a match here proves nothing about a `$ZodCustomStringFormat`
+ * — see the isCustomStringFormat gate at the use site.
  */
 const PATTERNLESS_FORMATS = new Set(["email", "uuid", "url"]);
 
@@ -252,6 +258,13 @@ export function extractChecks(
         });
         break;
       case "string_format": {
+        // `z.stringFormat(name, …)` lets the CALLER pick the format name, so a
+        // custom format can be named "email", "url" — anything a built-in is
+        // named. The name therefore does NOT identify which validator Zod runs;
+        // only the structural `def.fn` marker does. Every branch below that
+        // treats a name as proof of a built-in's behaviour is gated on this.
+        const isCustom = isCustomStringFormat(def);
+
         // A custom format over a g/y regex advances that regex's lastIndex on
         // every parse and Zod never resets it — see isStatefulCustomFormat.
         if (isStatefulCustomFormat(def)) {
@@ -275,7 +288,12 @@ export function extractChecks(
           checkIRs.push({ kind: "ends_with", suffix: def.suffix, ...message });
           break;
         }
-        if (def.format === "url") {
+        // z.url() validates with the URL parser plus optional hostname/protocol
+        // probes, and carries no pattern worth compiling. A custom format merely
+        // NAMED "url" shares none of that — it validates through `def.fn` — so
+        // taking this branch both discarded the user's own `def.pattern` and
+        // answered with the URL parser's verdict instead of the user's.
+        if (def.format === "url" && !isCustom) {
           checkIRs.push({
             kind: "string_format",
             format: "url",
@@ -286,14 +304,22 @@ export function extractChecks(
           });
           break;
         }
+        // Not gated on isCustom: this set only ever adds a fallback, so a custom
+        // format that happens to borrow one of these names loses its fast path
+        // but never its verdict.
         if (NON_AUTHORITATIVE_PATTERN_FORMATS.has(def.format)) {
           hasFallback = true;
           break;
         }
         const pattern = def.pattern instanceof RegExp ? def.pattern.source : def.pattern;
         const flags = def.pattern instanceof RegExp && def.pattern.flags ? def.pattern.flags : "";
-        if (!pattern && !PATTERNLESS_FORMATS.has(def.format)) {
-          // Algorithmic format (e.g. jwt) — nothing to compile.
+        if (!pattern && !(!isCustom && PATTERNLESS_FORMATS.has(def.format))) {
+          // Nothing to compile: an algorithmic built-in (e.g. jwt), or a custom
+          // format built from a FUNCTION rather than a regex. For the latter the
+          // predicate lives only in `def.fn`, and a name-matched built-in regex
+          // is emphatically not it — `z.stringFormat("email", (v) => v.length
+          // === 3)` accepts "abc" and rejects "a@b.co", the exact inverse of the
+          // email regex. Delegate to Zod.
           hasFallback = true;
           break;
         }
@@ -302,7 +328,7 @@ export function extractChecks(
           format: def.format,
           ...(pattern ? { pattern } : {}),
           ...(flags ? { patternFlags: flags } : {}),
-          ...(isCustomStringFormat(def) ? { bareIssue: true } : {}),
+          ...(isCustom ? { bareIssue: true } : {}),
           ...message,
         });
         break;

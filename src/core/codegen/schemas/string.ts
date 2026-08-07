@@ -141,7 +141,12 @@ export function slowString(ir: StringIR, g: SlowGen): string {
         case "string_format": {
           let regexVar: string;
           let pattern: string;
-          if (check.format === "url") {
+          // Only the BUILT-IN z.url() gets the URL-parser check, and extraction
+          // never gives that one a pattern. A `pattern` on a "url"-named check
+          // therefore marks a custom format that merely borrowed the name
+          // (`z.stringFormat("url", /re/)`); it validates through its own regex,
+          // so fall through and compile that instead of the URL parser.
+          if (check.format === "url" && !check.pattern) {
             code += slowUrlCheck(check, g);
             continue;
           }
@@ -227,7 +232,9 @@ export function fastStringCheck(check: CheckIR, x: string, ctx: CodeGenContext):
       return `${x}.endsWith(${escapeString(check.suffix)})`;
     case "string_format": {
       // URL validation mutates (trims) and uses try/catch — not a predicate.
-      if (check.format === "url") return null;
+      // A patterned "url" check is a custom format that borrowed the name (see
+      // buildString), and its regex IS a predicate.
+      if (check.format === "url" && !check.pattern) return null;
       let pattern: string;
       let prefix: string;
       if (check.format === "email") {
