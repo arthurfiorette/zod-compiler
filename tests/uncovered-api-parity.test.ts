@@ -1167,3 +1167,89 @@ describe("intersections that can report unrecognized keys", () => {
     );
   });
 });
+
+// ─── Records whose KEY schema rewrites its input ────────────────────────────
+// z.record(z.string().toUpperCase(), z.number()) RE-HOMES each entry: zod parses
+// the key, then writes the value under the PARSED key, so `{ a: 1 }` parses to
+// `{ A: 1 }`. The compiled record used to reassign the for-in loop variable and
+// then read the value back as `input[rewrittenKey]` — a key the input object
+// does not have — so the entry failed with `invalid_type` at the rewritten path
+// while zod accepted it. And because that walk returns its input by reference,
+// it could not have produced the moved entry even with the lookup fixed. Both
+// halves are why such a key delegates to zod outright.
+
+describe("records with a rewriting key schema", () => {
+  /** Extraction really produced a compiled record, not a delegation to Zod. */
+  function expectRecordIr(schema: unknown): void {
+    const ir = extractSchema(schema, []) as { type: string };
+    expect(ir.type, "key schema does not rewrite, so the record must compile").toBe("record");
+    expectCompiled(schema);
+  }
+
+  it(".toUpperCase() key re-homes the entry", () => {
+    expectParity(
+      z.record(z.string().toUpperCase(), z.number()),
+      [
+        { a: 1 },
+        { A: 1 },
+        { a: 1, b: 2 },
+        // Two keys normalize onto one — zod's rebuilt output keeps the last.
+        { A: 2, a: 1 },
+        { a: "x" },
+        {},
+        "nope",
+        null,
+        [],
+      ],
+      "recUpperKey",
+    );
+  });
+
+  it(".trim() key re-homes the entry", () => {
+    expectParity(
+      z.record(z.string().trim(), z.number()),
+      [{ " a ": 1 }, { a: 1 }, { " a ": 1, "  b": 2 }, { " a ": "x" }, {}, 7],
+      "recTrimKey",
+    );
+  });
+
+  it("z.url() key normalizes the href", () => {
+    // z.url()'s check writes `new URL(value).href` back, so it rewrites even
+    // keys that already look clean ("https://example.com" gains a trailing "/").
+    expectParity(
+      z.record(z.url(), z.number()),
+      [
+        { "https://example.com": 1 },
+        { "https://example.com/ ": 1 },
+        { "https://example.com/": 1 },
+        { "not a url": 1 },
+        { "https://example.com/": "x" },
+        {},
+      ],
+      "recUrlKey",
+    );
+  });
+
+  it("non-rewriting key schemas still compile", () => {
+    expectRecordIr(z.record(z.string(), z.number()));
+    expectRecordIr(z.record(z.string().min(2), z.number()));
+    expectRecordIr(z.record(z.string().regex(/^k/), z.number()));
+    // z.email() only tests a regex — unlike z.url() it never writes back.
+    expectRecordIr(z.record(z.email(), z.number()));
+    expectRecordIr(z.record(z.templateLiteral(["id_", z.number()]), z.number()));
+
+    expectParity(z.record(z.string(), z.number()), [{ a: 1 }, { a: "x" }, {}], "recPlainKey");
+    expectParity(
+      z.record(z.string().min(2), z.number()),
+      [{ ab: 1 }, { a: 1 }, {}],
+      "recMinLenKey",
+    );
+    expectParity(z.record(z.string().regex(/^k/), z.number()), [{ k1: 1 }, { x: 1 }], "recReKey");
+    expectParity(z.record(z.email(), z.number()), [{ "a@b.com": 1 }, { nope: 1 }], "recEmailKey");
+    expectParity(
+      z.record(z.templateLiteral(["id_", z.number()]), z.number()),
+      [{ id_1: 1 }, { id_x: 1 }],
+      "recTemplateKey",
+    );
+  });
+});

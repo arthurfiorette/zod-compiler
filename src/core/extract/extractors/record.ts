@@ -1,3 +1,4 @@
+import { hasMutation } from "../../codegen/context.js";
 import type { SchemaIR } from "../../types.js";
 import type { ExtractorContext, ZodDef } from "../types.js";
 
@@ -20,6 +21,26 @@ export function extractRecord(def: ZodDef, ctx: ExtractorContext): SchemaIR {
   // typeof on the string key and reject everything. Only string-shaped key
   // schemas compile; everything else delegates to Zod.
   if (!isStringShapedKey(keyType)) {
+    return ctx.fallback("unsupported");
+  }
+  // Rewriting key schemas (z.string().trim()/.toUpperCase(), z.url() — whose
+  // check writes back the normalized href) RE-HOME the entry in zod: the output
+  // carries the parsed key, so `z.record(z.string().toUpperCase(), z.number())`
+  // turns `{ a: 1 }` into `{ A: 1 }`. The compiled record cannot follow, on two
+  // independent counts.
+  //
+  // First, the key is validated with `{ input: keyVar, output: keyVar }`, so an
+  // overwrite effect reassigns the loop variable in place; the value is then
+  // read as `input[keyVar]` — i.e. at the REWRITTEN key, which is absent from
+  // the input object — so the value check sees `undefined` and the record is
+  // wrongly rejected with `invalid_type` at the rewritten path.
+  //
+  // Second, even with the lookup pinned to the original key, the walk iterates
+  // the input with for-in and returns it BY REFERENCE, so it has nowhere to put
+  // the moved entry: producing zod's output would mean building a fresh object
+  // under the parsed keys, which also has to resolve collisions (two keys
+  // normalizing to one). Neither half is expressible here, so delegate.
+  if (hasMutation(keyType)) {
     return ctx.fallback("unsupported");
   }
   return { type: "record", keyType, valueType };
