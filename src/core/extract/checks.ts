@@ -24,6 +24,34 @@ export function refineRefRegistrar(
 }
 
 /**
+ * Build the `customParamsRef` registrar for {@link extractChecks}: it appends a
+ * {@link RefEntry} pointing at the check's own `params` object
+ * (`<schema>._zod.def.checks[i]._zod.def.params`), which $ZodCustom copies onto
+ * the issue by reference.
+ *
+ * A reference rather than a baked literal because `params` is opaque user data:
+ * it may hold functions, symbols or a cycle (none of which survive a literal),
+ * and zod hands out the SAME object on every issue, so a per-failure copy would
+ * break the identity comparison that is the point of passing params.
+ *
+ * Returns undefined — meaning "fall back to zod" — when refs are unavailable.
+ */
+export function customParamsRefRegistrar(
+  ctx: ExtractorContext,
+  checks: ZodCheckSchema[],
+): ((index: number) => number | undefined) | undefined {
+  const refs = ctx.refs;
+  if (!refs) return undefined;
+  return (index) => {
+    refs.push({
+      schema: checks[index]?._zod?.def?.params,
+      accessPath: `${ctx.path}._zod.def.checks[${index}]._zod.def.params`,
+    });
+    return refs.length - 1;
+  };
+}
+
+/**
  * Register the payload-taking callback of check `index` (`superRefine`) as an
  * `__rf[N]` reference, pointing at zod's own wrapper
  * (`<schema>._zod.def.checks[i]._zod.check`).
@@ -193,6 +221,8 @@ export function extractChecks(
   refineRef?: (index: number) => number | undefined,
   /** Registers a payload-taking callback (superRefine); see payloadCheckRef. */
   payloadRefFor?: (index: number) => number | undefined,
+  /** Registers a `.refine(fn, { params })` payload; see customParamsRefRegistrar. */
+  customParamsRef?: (index: number) => number | undefined,
 ): {
   checkIRs: CheckOrEffectIR[];
   hasFallback: boolean;
@@ -365,9 +395,22 @@ export function extractChecks(
           break;
         }
         const pathIR = customPath && customPath.length > 0 ? { path: customPath } : {};
+        // `.refine(fn, { params })`: zod attaches the object to the issue, and
+        // an error map reads it back. Held as a reference (see
+        // customParamsRefRegistrar); with no ref array to hold it, the issue
+        // cannot be reproduced at all, so the schema goes to zod.
+        let paramsIR: { paramsRefIndex?: number } = {};
+        if (def.params !== undefined) {
+          const paramsRefIndex = customParamsRef?.(index);
+          if (paramsRefIndex === undefined) {
+            hasFallback = true;
+            break;
+          }
+          paramsIR = { paramsRefIndex };
+        }
         const source = tryCompileEffect(def.fn);
         if (source) {
-          checkIRs.push({ kind: "refine_effect", source, ...pathIR, ...message });
+          checkIRs.push({ kind: "refine_effect", source, ...pathIR, ...paramsIR, ...message });
           break;
         }
         // Not inlineable (the predicate captures outer variables). Call the
@@ -376,7 +419,7 @@ export function extractChecks(
         // whole schema its compiled path.
         const refIndex = refineRef?.(index);
         if (refIndex !== undefined) {
-          checkIRs.push({ kind: "refine_effect", refIndex, ...pathIR, ...message });
+          checkIRs.push({ kind: "refine_effect", refIndex, ...pathIR, ...paramsIR, ...message });
         } else {
           hasFallback = true;
         }

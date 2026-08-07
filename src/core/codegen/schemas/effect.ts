@@ -6,6 +6,7 @@ import type {
 } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
 import {
+  emitConstant,
   emitEffectCallable,
   emitRuntimeHelper,
   extendStaticPath,
@@ -68,9 +69,19 @@ export function refineCheck(check: RefineEffectCheckIR, expr: string, g: SlowGen
         : extendStaticPath(acc, segment),
     g.path,
   );
+  // `.refine(fn, { params })`: $ZodCustom's check does
+  // `if (def.params) _iss.params = def.params`, so the key is present only when
+  // the schema declared one, and holds the ORIGINAL object — the extractor
+  // parked it in `__rf` precisely so the reference survives (see
+  // RefineEffectCheckIR.paramsRefIndex). Placed before `message` to keep the
+  // key order zod produces.
+  const paramsProp =
+    check.paramsRefIndex === undefined
+      ? ""
+      : `,params:${emitConstant(g.ctx, "rpa", `__rf[${check.paramsRefIndex}]`)}`;
   return emit`
     if(!${emitEffectCallable(g.ctx, check)}(${expr})){
-      ${g.issues}.push({code:"custom",path:${path}${messageProp},input:${expr}});
+      ${g.issues}.push({code:"custom",path:${path}${paramsProp}${messageProp},input:${expr}});
     }`;
 }
 

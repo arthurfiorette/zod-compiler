@@ -1,5 +1,6 @@
 import type { CheckOrEffectIR, SchemaIR } from "../../types.js";
 import {
+  customParamsRefRegistrar,
   extractChecks,
   payloadCheckRef,
   refineRefRegistrar,
@@ -40,6 +41,7 @@ export function extractNumber(def: ZodDef, ctx: ExtractorContext): SchemaIR {
       def.checks,
       refineRefRegistrar(ctx, def.checks),
       (index) => payloadCheckRef(ctx, def.checks, index),
+      customParamsRefRegistrar(ctx, def.checks),
     );
     if (hasFallback) return ctx.fallback("refine");
     allChecks.push(...checkIRs);

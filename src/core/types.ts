@@ -140,6 +140,15 @@ export interface RefineEffectCheckIR {
    * the refined value itself.
    */
   path?: (string | number)[];
+  /**
+   * `__rf[N]` index of the `params` object from `.refine(fn, { params })`.
+   * $ZodCustom copies it onto the issue (`if (def.params) _iss.params =
+   * def.params`) BY REFERENCE, so it is held as a reference rather than baked
+   * as a literal: the value may be anything (functions, symbols, a cycle), and
+   * an error map comparing `issue.params === myParams` — the reason to pass
+   * params at all — would fail against a per-failure copy.
+   */
+  paramsRefIndex?: number;
 }
 
 /**

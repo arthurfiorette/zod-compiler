@@ -1,5 +1,10 @@
 import type { RefineEffectCheckIR, SchemaIR, SuperRefineEffectCheckIR } from "../../types.js";
-import { extractChecks, payloadCheckRef, refineRefRegistrar } from "../checks.js";
+import {
+  customParamsRefRegistrar,
+  extractChecks,
+  payloadCheckRef,
+  refineRefRegistrar,
+} from "../checks.js";
 import type { ExtractorContext, ZodDef } from "../types.js";
 
 export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
@@ -62,6 +67,7 @@ export function extractObject(def: ZodDef, ctx: ExtractorContext): SchemaIR {
       def.checks,
       refineRefRegistrar(ctx, def.checks),
       (index) => payloadCheckRef(ctx, def.checks, index),
+      customParamsRefRegistrar(ctx, def.checks),
     );
     if (hasFallback) return ctx.fallback("refine");
     // Object codegen supports the two callback kinds; anything else (overwrite,

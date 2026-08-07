@@ -249,6 +249,9 @@ describe("schema dedupe", () => {
       z.number().catch(0),
       z.string().refine((v) => v.length > captured.min),
       z.string().transform((v) => v + captured.min),
+      // Zero-capture predicate, but `.refine(fn, { params })` still parks the
+      // params object in `__rf` — the issue reads it back from there.
+      z.string().refine((v) => v.length > 3, { params: { code: "E_SHORT" } }),
     ]) {
       const Shape = z.strictObject({ a: z.string(), b: z.string(), c: inner });
       const { shared } = compileSchemas(

@@ -198,7 +198,19 @@ function referencesExportRefs(ir: SchemaIR): boolean {
     case "number":
     case "object":
     case "array":
-      if (ir.checks?.some((c) => "refIndex" in c && c.refIndex !== undefined)) return true;
+      // BOTH of a check's `__rf[]` handles disqualify sharing, not just the
+      // captured predicate: a `.refine(fn, { params })` reads its params object
+      // off the export's array too, and does so even when the predicate itself
+      // is zero-capture and would otherwise be hostable into the shared block.
+      if (
+        ir.checks?.some(
+          (c) =>
+            ("refIndex" in c && c.refIndex !== undefined) ||
+            ("paramsRefIndex" in c && c.paramsRefIndex !== undefined),
+        )
+      ) {
+        return true;
+      }
       break;
     default:
       break;

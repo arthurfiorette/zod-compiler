@@ -310,3 +310,77 @@ describe("issue shape — containers nested in each other", () => {
     expectParity(schema as never, inputs as unknown[], "nest");
   });
 });
+
+/**
+ * `.refine(fn, { params })` — the fourth field of a custom issue.
+ *
+ * $ZodCustom's check writes `if (def.params) _iss.params = def.params`, so the
+ * key exists only when the schema declared one and holds the ORIGINAL object,
+ * shared by every issue the check raises. The compiler dropped it entirely:
+ * invisible to a suite that compared code, path, and one message, and the whole
+ * point of passing params is that an error map reads them back.
+ *
+ * Identity is asserted alongside the shape because a structural comparison
+ * cannot see the difference between zod's shared object and a per-failure copy.
+ */
+describe("issue shape — a refine's params reach the issue", () => {
+  const params = { code: "E_SHORT", limit: 3 };
+
+  it.each([
+    ["string", z.string().refine((v) => v.length > 3, { params }), "a"],
+    ["number", z.number().refine((v) => v > 3, { params }), 1],
+    ["array", z.array(z.string()).refine((v) => v.length > 3, { params }), []],
+    ["object", z.object({ a: z.string() }).refine((v) => v.a.length > 3, { params }), { a: "x" }],
+    ["with a message", z.string().refine(() => false, { message: "m", params }), "a"],
+    [
+      "with a path",
+      z.object({ a: z.string() }).refine(() => false, { path: ["a"], params }),
+      {
+        a: "x",
+      },
+    ],
+    // The predicate captures `params`, so it cannot be inlined — the refine is
+    // called through __rf[] instead, a different emit path with the same duty.
+    ["captured predicate", z.string().refine((v) => v.length > params.limit, { params }), "a"],
+  ])("%s", (label, schema, input) => {
+    // The name becomes a JS identifier in the generated source.
+    expectParity(schema as never, [input], `params_${label.replaceAll(" ", "_")}`);
+  });
+
+  it("carries zod's OWN params object, not a per-failure copy", () => {
+    const schema = z.string().refine(() => false, { params });
+    const compiled = compileLikeProduction(schema, "paramsIdentity");
+    const first = compiled("a");
+    const second = compiled("b");
+    if (first.success || second.success) throw new Error("expected both parses to fail");
+    const issueParams = (issues: unknown[]) => (issues[0] as { params?: unknown }).params;
+    expect(issueParams(first.error.issues)).toBe(params);
+    expect(issueParams(second.error.issues)).toBe(params);
+    expect(issueParams(schema.safeParse("a").error?.issues ?? [])).toBe(params);
+  });
+
+  it("parks params on __rf under an access path that resolves from the schema", () => {
+    // generateIIFE materializes `__rf` by navigating each accessPath from the
+    // schema root, so a wrong path is a TypeError in every emitted file — and
+    // compileLikeProduction, which uses the collected VALUES, would not see it.
+    const refEntries: RefEntry[] = [];
+    extractSchema(
+      z.string().refine(() => false, { params }),
+      refEntries,
+    );
+    const entry = refEntries.find((ref) => ref.schema === params);
+    expect(entry?.accessPath).toBe("._zod.def.checks[0]._zod.def.params");
+    const navigate = new Function("s", `return s${entry?.accessPath ?? ""};`);
+    expect(navigate(z.string().refine(() => false, { params }))).toBe(params);
+  });
+
+  it("leaves the key OFF when the refine declares no params", () => {
+    const compiled = compileLikeProduction(
+      z.string().refine(() => false),
+      "noParams",
+    );
+    const result = compiled("a");
+    if (result.success) throw new Error("expected a failure");
+    expect("params" in (result.error.issues[0] as object)).toBe(false);
+  });
+});

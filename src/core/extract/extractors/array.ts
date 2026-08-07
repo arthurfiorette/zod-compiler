@@ -1,5 +1,10 @@
 import type { SchemaIR } from "../../types.js";
-import { extractChecks, payloadCheckRef, refineRefRegistrar } from "../checks.js";
+import {
+  customParamsRefRegistrar,
+  extractChecks,
+  payloadCheckRef,
+  refineRefRegistrar,
+} from "../checks.js";
 import type { ExtractorContext, ZodDef } from "../types.js";
 
 /** Check kinds the array codegen knows how to emit. Anything else → fallback. */
@@ -20,6 +25,7 @@ export function extractArray(def: ZodDef, ctx: ExtractorContext): SchemaIR {
     def.checks,
     refineRefRegistrar(ctx, def.checks),
     (i) => payloadCheckRef(ctx, def.checks, i),
+    customParamsRefRegistrar(ctx, def.checks),
   );
   // Previously hasFallback was ignored here, silently dropping uncompilable
   // refinements (e.g. captured-variable .refine()) from compiled output.

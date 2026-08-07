@@ -18,6 +18,8 @@ export interface ZodCheckDef {
   fn: unknown;
   /** `.refine(fn, { path })` — issue path suffix, relative to the refined value. */
   path?: unknown;
+  /** `.refine(fn, { params })` — opaque payload $ZodCustom copies onto the issue. */
+  params?: unknown;
   /** $ZodCheckOverwrite transform function (.trim(), .toLowerCase(), ...). */
   tx?: unknown;
   /** Runtime predicate gating check execution — forces fallback when present. */

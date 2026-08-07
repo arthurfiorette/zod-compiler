@@ -138,6 +138,69 @@ function issueSignature(issue: { code?: string; path?: unknown[] }): string {
 }
 
 /**
+ * Render one value inside an issue into something `toStrictEqual` can compare
+ * without erasing anything that distinguishes two issues.
+ *
+ * Rebuilds objects key by key instead of picking fields, so KEY PRESENCE is
+ * part of the result: a key one side omits and the other emits — even holding
+ * `undefined` — produces a different rendering. `Reflect.ownKeys` rather than
+ * `Object.keys` for the same reason, since a non-enumerable or symbol key is
+ * still an own key that `Object.keys`-based diffing would drop.
+ *
+ * The scalar cases exist because `toStrictEqual`'s diff cannot render them (or
+ * renders two different values identically):
+ *   - symbols and bigints: legal `path` segments and `values` members;
+ *   - functions: reachable through a custom issue's `params`;
+ *   - RegExp: zod reports SOME patterns as a RegExp object (`z.string().regex()`,
+ *     `z.string().base64url()`) and OTHERS as a source string, and the two are
+ *     observably different to an error map — so the RegExp form is tagged rather
+ *     than flattened to its source, which would make `/src/` and `src` compare
+ *     equal and hide exactly the bug this file exists to catch;
+ *   - Date: `minimum`/`maximum` on a date range issue, whose own-key walk would
+ *     otherwise be the empty object for every instant.
+ *
+ * `seen` is per-path (added on the way down, removed on the way up), so a
+ * repeated sibling reference still renders in full while a true cycle stops at
+ * `[circular]` rather than overflowing the stack. That matters because the
+ * failure mode it guards is real: an issue carrying an `input` key holding the
+ * input itself is one self-reference away from being uncomparable.
+ */
+function renderIssueValue(value: unknown, seen: Set<object>): unknown {
+  if (typeof value === "bigint") return `[bigint ${value}]`;
+  if (typeof value === "symbol") return `[symbol ${String(value)}]`;
+  if (typeof value === "function") return `[function ${value.name || "anonymous"}]`;
+  if (value === null || typeof value !== "object") return value;
+  if (seen.has(value)) return "[circular]";
+  if (value instanceof RegExp) return `[RegExp /${value.source}/${value.flags}]`;
+  if (value instanceof Date) {
+    return `[Date ${Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString()}]`;
+  }
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) return value.map((entry) => renderIssueValue(entry, seen));
+    const rendered: Record<string, unknown> = {};
+    for (const key of Reflect.ownKeys(value)) {
+      const label = typeof key === "symbol" ? `[symbol ${String(key)}]` : key;
+      rendered[label] = renderIssueValue((value as Record<PropertyKey, unknown>)[key], seen);
+    }
+    // A class instance and a plain object with the same fields are different
+    // things; keep the constructor visible so one cannot pass for the other.
+    const proto: unknown = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype) {
+      rendered["[[class]]"] = proto === null ? "null-prototype" : value.constructor?.name;
+    }
+    return rendered;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+/** One issue rendered whole — every own key, recursively — for strict comparison. */
+function renderIssue(issue: unknown): unknown {
+  return renderIssueValue(issue, new Set());
+}
+
+/**
  * Assert compiled accept/reject, output data, and the whole ISSUE LIST match Zod
  * for every input. Schemas that throw synchronously (async refinements, function
  * schemas) must throw identically on both sides.
@@ -148,6 +211,41 @@ function issueSignature(issue: { code?: string; path?: unknown[] }): string {
  * shipped bugs (set elements getting an invented index, map entries addressed by
  * position instead of by key, an outer refine suppressed by a field's own failed
  * check) all passed a green suite because nothing here looked at paths.
+ *
+ * `code@path` plus one message is still only three fields of an issue, and an
+ * issue is public API — error maps read it, and consumers destructure it. Every
+ * OTHER field was invisible here until a hand sweep turned up six divergences a
+ * fully green suite could not see, all of them shipped:
+ *
+ *   - `too_small`/`too_big` on a size-checked collection missing `origin`;
+ *   - a tuple's under-length `too_small` carrying an INVENTED `inclusive`, which
+ *     zod's under-length branch does not set at all;
+ *   - `z.stringbool()`'s `invalid_value` missing `expected: "stringbool"`;
+ *   - a custom string format reporting `pattern` as the RegExp's `toString()`
+ *     (`/src/`) where zod reports the bare `source` (`src`);
+ *   - a discriminated union inventing an `options` key on its `invalid_union`;
+ *   - `input` left on a finalized issue, which zod `delete`s — so every compiled
+ *     issue was one key wider than zod's.
+ *
+ * None of those changes a code, a path, or the first message. So the issue list
+ * is ALSO compared whole: each issue rebuilt key by key, recursively (through a
+ * union's `errors` and an invalid_key/invalid_element wrapper's `issues`), with
+ * key presence significant in both directions — see {@link renderIssueValue}.
+ * The code+path and first-message assertions are kept ahead of it because they
+ * name the failure in one line; the whole-shape assertion is the one that is
+ * actually complete.
+ *
+ * Two things stay out of reach, and both are pinned in
+ * tests/known-divergences.test.ts rather than papered over here:
+ *
+ *   - `inst`, the live $ZodType that raised an issue. zod deletes it during
+ *     finalization, so it never appears on either side of this comparison — but
+ *     where it survives into user-visible API (`z.catch()`'s raw `ctx.issues`)
+ *     the compiler has no counterpart to offer.
+ *   - WHEN the error is built. zod builds it inside safeParse; a compiled
+ *     failure defers it to the `.error` accessor. The comparison below forces
+ *     that accessor before judging throw parity, so the two sides are compared
+ *     doing the same work; the timing itself still differs.
  */
 export function expectParity(
   schema: ZodLikeSchema,
@@ -156,7 +254,28 @@ export function expectParity(
   extractOptions?: ExtractOptions,
   options?: { compact?: boolean },
 ): void {
-  const compiled = compileLikeProduction(schema, name, extractOptions, options);
+  expectCompiledParity(
+    compileLikeProduction(schema, name, extractOptions, options),
+    schema,
+    inputs,
+  );
+}
+
+/**
+ * {@link expectParity} against the LEAN build — the same schema, the same
+ * inputs, but with every issue produced by the virtual runtime module's
+ * factories instead of an inline object literal. See
+ * {@link compileLeanLikeProduction}; the two emit paths agree only if both pass.
+ */
+export function expectLeanParity(schema: ZodLikeSchema, inputs: unknown[], name?: string): void {
+  expectCompiledParity(compileLeanLikeProduction(schema, name), schema, inputs);
+}
+
+function expectCompiledParity(
+  compiled: (input: unknown) => SafeParseResult<unknown>,
+  schema: ZodLikeSchema,
+  inputs: unknown[],
+): void {
   for (const input of inputs) {
     let zodResult: ReturnType<ZodLikeSchema["safeParse"]> | undefined;
     let zodThrew: string | undefined;
@@ -170,6 +289,14 @@ export function expectParity(
     let compiledThrew: string | undefined;
     try {
       compiledResult = compiled(input);
+      // A compiled FAILURE defers the whole issue walk — locale message build
+      // included — into the cached `.error` accessor (see FAIL_CLASS_DECL), so
+      // work zod does inside safeParse happens here instead. Touching `.error`
+      // makes throw parity compare like with like: a schema whose message
+      // cannot be built (z.literal(Symbol()), whose locale stringifies the
+      // symbol) throws on both sides rather than only on zod's. The timing
+      // difference that remains is pinned in known-divergences.test.ts.
+      if (!compiledResult.success) void compiledResult.error;
     } catch (e) {
       compiledThrew = e instanceof Error ? e.constructor.name : "unknown";
     }
@@ -203,6 +330,11 @@ export function expectParity(
       const zodMessage = zodResult.error?.issues[0]?.message;
       const compiledMessage = (compiledResult.error.issues[0] as { message?: string })?.message;
       expect(compiledMessage, `message for ${describeInput(input)}`).toBe(zodMessage);
+
+      expect(
+        compiledIssues.map(renderIssue),
+        `full issue shape for ${describeInput(input)}`,
+      ).toStrictEqual(zodIssues.map(renderIssue));
     }
   }
 }

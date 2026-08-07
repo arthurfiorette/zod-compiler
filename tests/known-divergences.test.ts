@@ -177,3 +177,37 @@ describe("known divergence — z.catch()'s raw ctx.issues view is the finalized 
     ]);
   });
 });
+
+/**
+ * WHEN A FAILURE'S ERROR IS BUILT.
+ *
+ * zod builds the whole ZodError inside `safeParse` — locale messages included.
+ * A compiled failure builds nothing there: the issue walk, the locale fill, the
+ * `input` strip and the ZodError construction are all deferred into the cached
+ * `.error` accessor (see FAIL_CLASS_DECL in src/core/iife.ts), so a rejected
+ * parse whose `.error` is never read — `safeParse(x).success`, `.is(x)` — costs
+ * only the fast check. That is the deferral the compiler exists to buy.
+ *
+ * It is unobservable except in one place: when building the MESSAGE itself
+ * throws. `z.literal(Symbol())`'s locale runs the symbol through a template
+ * string, which is a TypeError, so zod's safeParse throws while the compiled
+ * safeParse returns a failure and throws only once `.error` is read. Closing it
+ * means building every error eagerly — the exact cost the deferral removes, to
+ * reproduce a zod defect (a schema zod cannot report on at all).
+ *
+ * `expectParity` reads `.error` on a compiled failure before comparing throws,
+ * so the harness compares the same work on both sides rather than pretending
+ * this gap does not exist.
+ */
+describe("known divergence — a compiled failure builds its error lazily", () => {
+  const schema = z.literal(Symbol("s"));
+
+  it("zod throws from safeParse; the compiler throws from .error", () => {
+    expect(() => schema.safeParse("nope")).toThrow(TypeError);
+
+    const compiled = compileLikeProduction(schema, "lazyErrThrow");
+    const result = compiled("nope") as { success: boolean; error: unknown };
+    expect(result.success).toBe(false); // safeParse itself survives
+    expect(() => result.error).toThrow(TypeError); // ...the message build does not
+  });
+});
