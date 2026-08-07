@@ -98,6 +98,12 @@
       "source": "./src/swc.ts",
       "import": "./dist/swc.js",
       "default": "./dist/swc.js"
+    },
+    "./turbopack": {
+      "types": "./dist/turbopack.d.ts",
+      "source": "./src/turbopack.ts",
+      "import": "./dist/turbopack.js",
+      "default": "./dist/turbopack.js"
     }
   },
   "scripts": {
