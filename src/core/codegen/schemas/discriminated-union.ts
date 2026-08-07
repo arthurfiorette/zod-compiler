@@ -1,4 +1,4 @@
-import type { DiscriminatedUnionIR, ObjectIR, SchemaIR } from "../../types.js";
+import type { DiscriminatedUnionIR, LiteralValue, ObjectIR, SchemaIR } from "../../types.js";
 import type { FastGen, SlowGen } from "../context.js";
 import {
   declareFastTemps,
@@ -179,10 +179,17 @@ export function fastDiscriminatedUnion(ir: DiscriminatedUnionIR, g: FastGen): st
  */
 const MIN_AUTO_DISCRIMINATE_OPTIONS = 5;
 
-/** Values that switch correctly under `===` (excludes `undefined` and `NaN`). */
-function isSwitchableDiscriminant(
-  v: string | number | boolean | null | bigint | undefined,
-): v is string | number | boolean | bigint | null {
+/**
+ * Values that switch correctly under `===` (excludes `undefined` and `NaN`).
+ *
+ * Also excludes a SYMBOL — now that `LiteralIR.values` admits one, this is the
+ * guard that keeps it out. A symbol discriminant has no source form, so there
+ * is no `case` label to emit for it (`literalToJs` refuses it by type), and the
+ * ordinal-table variant is string-keyed besides. Detection bails to the
+ * `||`-chain, where the option's own literal check does the right thing by
+ * reading the value list off the retained schema.
+ */
+function isSwitchableDiscriminant(v: LiteralValue): v is string | number | boolean | bigint | null {
   return (
     v === null ||
     typeof v === "string" ||

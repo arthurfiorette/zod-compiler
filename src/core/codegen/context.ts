@@ -1,4 +1,11 @@
-import type { BigIntCheckIR, CheckIR, DateCheckIR, SchemaIR, SetCheckIR } from "../types.js";
+import type {
+  BigIntCheckIR,
+  CheckIR,
+  DateCheckIR,
+  LiteralValue,
+  SchemaIR,
+  SetCheckIR,
+} from "../types.js";
 import type { SharedSchemaPlan } from "./dedupe.js";
 import {
   fastTestSource,
@@ -565,13 +572,39 @@ export function escapeString(s: string | number): string {
   return JSON.stringify(s);
 }
 
+/** The {@link LiteralValue}s that {@link literalToJs} can spell. */
+export type SourceFormLiteral = string | number | boolean | null | bigint | undefined;
+
+/**
+ * Can {@link literalToJs} render this value as JS source that strict-equals it?
+ *
+ * Total by construction — it NAMES the value kinds that have a source form
+ * rather than excluding the ones that don't, so every reference value falls out
+ * on the false side. That matters because `literalToJs` used to end in a bare
+ * `JSON.stringify`, which does not fail loudly on the values it cannot spell:
+ * for a symbol it RETURNS `undefined` (the value, not a string), so
+ * `z.literal(sym)` compiled to the comparison `x===undefined` — rejecting the
+ * symbol it was built from and accepting `undefined`. An object is mis-rendered
+ * the other way: `{}` stringifies to `"{}"`, and `x==={}` is never true, so the
+ * very object the schema was built from was rejected. Both take the runtime
+ * membership path instead (see the literal generator).
+ */
+export function hasSourceForm(v: LiteralValue): v is SourceFormLiteral {
+  if (v === null) return true;
+  const t = typeof v;
+  return t === "string" || t === "number" || t === "boolean" || t === "bigint" || t === "undefined";
+}
+
 /**
  * JS source for a primitive literal value (literal schemas, discriminator
  * case labels). JSON.stringify covers string/number/boolean/null; bigint
  * needs the `n` suffix (JSON.stringify throws and String(5n) renders a
  * number literal that never strict-equals a bigint); undefined isn't JSON.
+ *
+ * The parameter type is deliberately NARROWER than {@link LiteralValue}: every
+ * caller must first prove its value is spellable with {@link hasSourceForm}.
  */
-export function literalToJs(v: string | number | boolean | null | bigint | undefined): string {
+export function literalToJs(v: SourceFormLiteral): string {
   if (typeof v === "bigint") return `${v}n`;
   if (v === undefined) return "undefined";
   // JSON.stringify maps NaN/±Infinity to "null"; emit them as JS expressions so a

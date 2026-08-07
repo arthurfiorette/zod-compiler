@@ -291,9 +291,30 @@ export interface UnknownIR {
   type: "unknown";
 }
 
+/**
+ * A value accepted by `z.literal()`.
+ *
+ * Zod TYPES the argument as `util.Literal = string | number | bigint | boolean
+ * | null | undefined`, but its runtime does `new Set(def.values).has(input)` —
+ * so anything at all parses, and a SYMBOL is the off-type value people actually
+ * pass (branded keys, well-known registry symbols). `symbol` is therefore
+ * admitted here; other reference values (an object, a function) are equally
+ * legal at runtime and are handled by the same route, because the codegen guard
+ * that splits the two paths ({@link import("./codegen/context.js").hasSourceForm})
+ * is a total `typeof` test rather than a list of exclusions.
+ */
+export type LiteralValue = string | number | boolean | null | bigint | undefined | symbol;
+
 export interface LiteralIR {
   type: "literal";
-  values: (string | number | boolean | null | bigint | undefined)[];
+  values: LiteralValue[];
+  /**
+   * Index into `__rf[]` — the original `z.literal()` schema — present ONLY when
+   * at least one value has no JS source form. Codegen then tests membership
+   * against that schema's own `_zod.def.values` at runtime instead of emitting
+   * `===` comparisons it cannot spell. See the literal extractor and generator.
+   */
+  refIndex?: number;
 }
 
 export interface EnumIR {

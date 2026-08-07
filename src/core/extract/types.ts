@@ -1,3 +1,5 @@
+import type { LiteralValue } from "../types.js";
+
 export interface ZodCheckDef {
   check: string;
   type: string;
@@ -62,7 +64,12 @@ export interface ZodDef {
   element: ZodSchema;
   options: ZodSchema[];
   innerType: ZodSchema;
-  values: (string | number | boolean | null | bigint | undefined)[];
+  /**
+   * z.literal() values. Wider than zod's own `util.Literal` type on purpose:
+   * `$ZodLiteral` never inspects them beyond `new Set(def.values)`, so a symbol
+   * (or any other reference value) arrives here intact. See {@link LiteralValue}.
+   */
+  values: LiteralValue[];
   entries: Record<string, string>;
   in: ZodSchema;
   out: ZodSchema;

@@ -184,6 +184,16 @@ function referencesExportRefs(ir: SchemaIR): boolean {
     case "effect":
       if (ir.refIndex !== undefined) return true;
       break;
+    case "literal":
+      // Only a literal whose value list has no source form (symbol, object)
+      // carries a refIndex, and it reads that list off `__rf[N]` on every
+      // parse. Sharing is also what would make two DISTINCT symbols collide:
+      // `keyOf` serializes an IR field with JSON.stringify, which returns
+      // `undefined` for any symbol, so `z.literal(a)` and `z.literal(b)` key
+      // identically. The refIndex differs, so the keys differ anyway — but this
+      // guard is the one that does not depend on that coincidence.
+      if (ir.refIndex !== undefined) return true;
+      break;
     case "string":
     case "number":
     case "object":

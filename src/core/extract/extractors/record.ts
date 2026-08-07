@@ -33,6 +33,11 @@ function isStringShapedKey(ir: SchemaIR): boolean {
     case "enum":
       return ir.values.every((v) => typeof v === "string");
     case "literal":
+      // `typeof v === "string"` (not merely "has a source form") is what keeps a
+      // SYMBOL key out, and it has to: the compiled record walks its input with
+      // `for-in`, which yields string keys only, so a symbol-keyed entry would
+      // be invisible to it — while zod's record enumerates the symbol keys too.
+      // Only zod can decide such a record, so delegate.
       return ir.values.every((v) => typeof v === "string");
     case "union":
       return ir.options.every(isStringShapedKey);

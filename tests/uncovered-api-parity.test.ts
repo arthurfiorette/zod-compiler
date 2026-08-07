@@ -403,3 +403,220 @@ describe("empty-valued enums", () => {
     });
   }
 });
+
+// ─── Literal values with no JS source form ──────────────────────────────────
+// `z.literal()` is TYPED as `util.Literal` (string | number | bigint | boolean |
+// null | undefined), but its runtime is `new Set(def.values).has(input)` — so a
+// SYMBOL is accepted at construction AND matched at parse time. Zod users do
+// pass one (branded keys, registry symbols), and the schema genuinely works.
+//
+// Codegen rendered every literal through `literalToJs`, whose tail was
+// `JSON.stringify` — and `JSON.stringify(aSymbol)` returns the VALUE `undefined`,
+// not a string. So `z.literal(sym)` compiled to `input===undefined`: it REJECTED
+// the very symbol it was built from and ACCEPTED `undefined`, a hole in both
+// directions. `z.literal([sym, "b"])` compiled to `x===undefined||x==="b"` and
+// reported `values:[,"b"]` — an array HOLE, since `join` renders `undefined` as
+// the empty string. An OBJECT value broke the same way in one direction:
+// `x==={}` is never true, so the object the schema was built from was rejected.
+//
+// The fix keeps the schema in `__rf[]` and tests `values.includes(input)`
+// against its own `_zod.def.values`. `Array.prototype.includes` is SameValueZero
+// — exactly what `Set.prototype.has` does — so the verdict matches zod's, and
+// emitting that same array as the issue's `values` matches what zod reports.
+//
+// Delegating the literal to `__rf[N].safeParse` instead would have been WRONG,
+// and the tests below pin why: zod's locale renders `invalid_value` through
+// `stringifyPrimitive`, i.e. `` `${value}` ``, which is a TypeError on a symbol.
+// A union DISCARDS a losing option's issues without ever formatting them, so
+// `z.union([z.literal(sym), z.string()]).safeParse("a")` succeeds in zod — while
+// a delegating arm would run a full safeParse and THROW on that same valid input.
+
+describe("literal values with no JS source form", () => {
+  const SYM = Symbol.for("zod-compiler.literal.k");
+  const OTHER = Symbol.for("zod-compiler.literal.other");
+  const OBJ = { tag: "identity" };
+
+  /** The literal really compiled, retaining exactly one schema for its value list. */
+  function expectRuntimeValuesCompiled(schema: unknown): void {
+    const refs: RefEntry[] = [];
+    const ir = extractSchema(schema, refs) as { type: string; refIndex?: number };
+    expect(ir.type, "must compile, not delegate to zod").toBe("literal");
+    expect(ir.refIndex, "must retain the schema to read def.values from").toBe(0);
+    expect(refs, "exactly one retained schema").toHaveLength(1);
+  }
+
+  /**
+   * Zod cannot even REPORT a symbol-literal mismatch — it throws while
+   * formatting, from inside `safeParse`. The compiler defers every message to
+   * the `.error` accessor, so `safeParse` returns a plain rejection and the
+   * identical TypeError surfaces on the first `.error` read.
+   */
+  function expectDeferredFormatThrow(
+    compiled: (input: unknown) => { success: boolean },
+    schema: { safeParse: (input: unknown) => unknown },
+    input: unknown,
+  ): void {
+    expect(() => schema.safeParse(input), "zod throws eagerly").toThrow(TypeError);
+    const result = compiled(input) as
+      | { success: true }
+      | { success: false; readonly error: unknown };
+    expect(result.success, "compiled rejects without throwing").toBe(false);
+    if (result.success) return;
+    expect(() => result.error, "compiled throws the same error, deferred").toThrow(TypeError);
+  }
+
+  it("accepts the symbol it was built from and rejects undefined", () => {
+    const schema = z.literal(SYM as never);
+    expectRuntimeValuesCompiled(schema);
+    const compiled = compileLikeProduction(schema, "symLiteral");
+
+    // The accept direction: zod accepts this, and so must the compiled form.
+    expect(schema.safeParse(SYM).success).toBe(true);
+    expect(compiled(SYM).success).toBe(true);
+
+    // The reject direction: `undefined` was the value the broken comparison had
+    // baked in, so it is the one input that must not sneak through.
+    for (const input of [undefined, null, "k", 0, false, OTHER, Symbol("k")]) {
+      expect(compiled(input).success, `rejects ${String(input)}`).toBe(false);
+    }
+  });
+
+  it("reports the schema's own values array in the issue", () => {
+    // Zod's invalid_value issue carries `def.values` — the array object itself,
+    // not a copy — so the compiled issue must carry that same array. Pinned on
+    // an OBJECT literal because a symbol one cannot be formatted at all: reading
+    // `.error` is what throws (see the deferred-throw test).
+    const schema = z.literal(OBJ as never);
+    const defValues = (schema as unknown as { _zod: { def: { values: unknown[] } } })._zod.def
+      .values;
+    const compiled = compileLikeProduction(schema, "objLiteralIssue");
+
+    const result = compiled("nope");
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    const issue = result.error.issues[0] as { code?: string; values?: unknown[] };
+    expect(issue.code).toBe("invalid_value");
+    expect(issue.values, "the schema's own array, by reference").toBe(defValues);
+
+    // …and zod reports exactly that.
+    const zodResult = schema.safeParse("nope");
+    expect(zodResult.success).toBe(false);
+    if (zodResult.success) return;
+    expect((zodResult.error.issues[0] as { values?: unknown[] }).values).toBe(defValues);
+  });
+
+  it("mixed symbol + string literal keeps both values live", () => {
+    const schema = z.literal([SYM, "b"] as never);
+    expectRuntimeValuesCompiled(schema);
+    const compiled = compileLikeProduction(schema, "symMixedLiteral");
+
+    for (const input of [SYM, "b"]) {
+      expect(schema.safeParse(input).success, `zod accepts ${String(input)}`).toBe(true);
+      expect(compiled(input).success, `compiled accepts ${String(input)}`).toBe(true);
+    }
+    // `undefined` used to be accepted here too — the symbol collapsed into it
+    // and left `x===undefined||x==="b"`.
+    for (const input of [undefined, null, "a", "", 0]) {
+      expect(compiled(input).success, `rejects ${String(input)}`).toBe(false);
+    }
+  });
+
+  it("nested in containers", () => {
+    const object = z.object({ kind: z.literal(SYM as never), n: z.number() });
+    const compiledObject = compileLikeProduction(object, "symLiteralObject");
+    expect(object.safeParse({ kind: SYM, n: 1 }).success).toBe(true);
+    expect(compiledObject({ kind: SYM, n: 1 }).success).toBe(true);
+    // A MISSING key reads as `undefined`, which the broken comparison accepted —
+    // so a required symbol-tagged field was satisfied by omitting it entirely.
+    expect(compiledObject({ n: 1 }).success).toBe(false);
+    expect(compiledObject({ kind: undefined, n: 1 }).success).toBe(false);
+    expect(compiledObject({ kind: OTHER, n: 1 }).success).toBe(false);
+
+    const array = z.array(z.literal(SYM as never));
+    const compiledArray = compileLikeProduction(array, "symLiteralArray");
+    expect(compiledArray([]).success).toBe(true);
+    expect(compiledArray([SYM, SYM]).success).toBe(true);
+    expect(compiledArray([SYM, undefined]).success).toBe(false);
+
+    const optional = z.object({ v: z.literal(SYM as never).optional() });
+    const compiledOptional = compileLikeProduction(optional, "symLiteralOptional");
+    expect(compiledOptional({}).success).toBe(true);
+    expect(compiledOptional({ v: SYM }).success).toBe(true);
+    expect(compiledOptional({ v: OTHER }).success).toBe(false);
+  });
+
+  it("a union arm with a symbol literal does not throw on input another arm accepts", () => {
+    const union = z.union([z.literal(SYM as never), z.string()]);
+
+    // The reason a zod FALLBACK is not an option: the literal alone throws on
+    // exactly the input the union accepts, because a top-level safeParse
+    // formats its issues while a union discards a losing option's unformatted.
+    expect(() => z.literal(SYM as never).safeParse("a")).toThrow(TypeError);
+    expect(union.safeParse("a").success).toBe(true);
+
+    // Compiled must behave like the union, not like the bare literal.
+    expectParity(union, [SYM, "a", ""], "symLiteralUnion");
+    const compiled = compileLikeProduction(union, "symLiteralUnionThrow");
+    expect(compiled("a").success).toBe(true);
+    expect(compiled(SYM).success).toBe(true);
+    // …and when the union really does fail, the throw is merely deferred.
+    expectDeferredFormatThrow(compiled, union, 1);
+  });
+
+  it("defers zod's formatter TypeError to the .error accessor", () => {
+    for (const [label, schema, bad] of [
+      ["single", z.literal(SYM as never), "nope"],
+      ["mixed", z.literal([SYM, "b"] as never), "nope"],
+      ["object", z.object({ kind: z.literal(SYM as never) }), { kind: "nope" }],
+    ] as [string, z.ZodType, unknown][]) {
+      const compiled = compileLikeProduction(schema, `symLiteralDeferred_${label}`);
+      expectDeferredFormatThrow(compiled, schema, bad);
+    }
+  });
+
+  it("an object-valued literal takes the same path, with full issue parity", () => {
+    // The guard is on "has a JS source form", not on "is a symbol": an object
+    // stringifies to `"{}"`, so the old codegen emitted `x==={}` — never true,
+    // so the schema rejected its own value. Zod's formatter handles objects, so
+    // this case can be held to FULL parity, issues and messages included.
+    const schema = z.literal(OBJ as never);
+    expectRuntimeValuesCompiled(schema);
+    expectParity(schema, [OBJ, { tag: "identity" }, {}, "nope", undefined, null], "objLiteral");
+
+    const mixed = z.literal([OBJ, "b"] as never);
+    expectParity(mixed, [OBJ, "b", { tag: "identity" }, "a", undefined], "objMixedLiteral");
+  });
+
+  it("a symbol discriminant never becomes switch dispatch", () => {
+    // Auto-discrimination turns a large plain union into an O(1) switch over the
+    // shared key's literal values — which needs a `case` LABEL per value, and a
+    // symbol has none. `isSwitchableDiscriminant` must keep refusing it so the
+    // union falls back to the `||`-chain, where each option's own literal check
+    // reads the value list off the retained schema.
+    const union = z.union([
+      z.object({ k: z.literal(SYM as never), a: z.string() }),
+      z.object({ k: z.literal("b"), a: z.string() }),
+      z.object({ k: z.literal("c"), a: z.string() }),
+      z.object({ k: z.literal("d"), a: z.string() }),
+      z.object({ k: z.literal("e"), a: z.string() }),
+    ]);
+    expectParity(
+      union,
+      [
+        { k: SYM, a: "x" },
+        { k: "b", a: "x" },
+        { k: "e", a: "x" },
+      ],
+      "symDiscriminant",
+    );
+  });
+
+  it("a symbol-keyed record still delegates to zod", () => {
+    // Compiled records walk their input with `for-in`, which yields string keys
+    // only, so a symbol-valued key literal could never match — while zod's own
+    // record enumerates differently. `isStringShapedKey` must keep refusing it.
+    const refs: RefEntry[] = [];
+    const ir = extractSchema(z.partialRecord(z.literal(SYM as never), z.string()), refs);
+    expect(ir.type, "symbol-keyed record must not compile").toBe("fallback");
+  });
+});
