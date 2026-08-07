@@ -118,18 +118,21 @@ that blocks eval both leave a working plain-Zod schema.
 
 ### Supported Build Tools
 
-| Build Tool | Import                                            |
-| ---------- | ------------------------------------------------- |
-| Vite       | `import zodCompiler from "zod-compiler/vite"`     |
-| webpack    | `import zodCompiler from "zod-compiler/webpack"`  |
-| esbuild    | `import zodCompiler from "zod-compiler/esbuild"`  |
-| SWC        | `import zodCompiler from "zod-compiler/swc"`      |
-| Rollup     | `import zodCompiler from "zod-compiler/rollup"`   |
-| Rolldown   | `import zodCompiler from "zod-compiler/rolldown"` |
-| Rsbuild    | `import zodCompiler from "zod-compiler/rsbuild"`  |
-| rspack     | `import zodCompiler from "zod-compiler/rspack"`   |
-| Bun        | `import zodCompiler from "zod-compiler/bun"`      |
-| Farm       | `import zodCompiler from "zod-compiler/farm"`     |
+| Build Tool          | Import                                            |
+| ------------------- | ------------------------------------------------- |
+| Vite                | `import zodCompiler from "zod-compiler/vite"`     |
+| webpack             | `import zodCompiler from "zod-compiler/webpack"`  |
+| Turbopack / Next.js | `loaders: ["zod-compiler/turbopack"]`             |
+| esbuild             | `import zodCompiler from "zod-compiler/esbuild"`  |
+| SWC                 | `import zodCompiler from "zod-compiler/swc"`      |
+| Rollup              | `import zodCompiler from "zod-compiler/rollup"`   |
+| Rolldown            | `import zodCompiler from "zod-compiler/rolldown"` |
+| Rsbuild             | `import zodCompiler from "zod-compiler/rsbuild"`  |
+| rspack              | `import zodCompiler from "zod-compiler/rspack"`   |
+| Bun                 | `import zodCompiler from "zod-compiler/bun"`      |
+| Farm                | `import zodCompiler from "zod-compiler/farm"`     |
+
+Turbopack takes a loader rather than a plugin — see [Next.js (Turbopack)](#nextjs-turbopack).
 
 ### Options
 
@@ -142,7 +145,7 @@ that blocks eval both leave a working plain-Zod schema.
 | `verbose`     | `boolean`                        | `false`         | Log per-schema compilation status                                                                           |
 | `hoist`       | `boolean`                        | `true`          | Move schemas built inside functions to module scope — see [Schema Hoisting](#schema-hoisting)               |
 | `apply`       | `"build" \| "serve" \| "all"`    | builds + Vitest | **Vite only**: when the plugin runs                                                                         |
-| `codegenMode` | `"lean" \| "inline"`             | auto            | `"inline"` emits helpers per file; needed for transpile-only esbuild — see [SWC](#swc)                      |
+| `codegenMode` | `"lean" \| "inline"`             | auto            | `"inline"` emits helpers per file; forced for Turbopack and transpile-only esbuild — see [SWC](#swc)        |
 | `cache`       | `boolean \| string`              | `true`          | Persistent transform cache in `node_modules/.cache/zod-compiler`                                            |
 
 ```typescript
@@ -219,6 +222,86 @@ export default [zodCompiler({ schemas: "explicit", codegenMode: "inline" })];
 ```
 
 Set `output: "bag"` to also drop the retained Zod schema when you don't need `.shape` / `instanceof`.
+
+### Next.js (Turbopack)
+
+Turbopack — the default bundler since Next.js 16 — [runs webpack loaders but no webpack
+plugins](https://nextjs.org/docs/app/api-reference/turbopack#webpack-plugins), so it needs the
+loader entry point rather than `zod-compiler/webpack`:
+
+```typescript
+// next.config.ts
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  turbopack: {
+    rules: {
+      "*.{ts,tsx}": {
+        condition: {
+          all: [
+            { not: "foreign" }, // skip node_modules
+            { content: /[Zz]od/ }, // skip files that cannot contain a schema
+          ],
+        },
+        loaders: ["zod-compiler/turbopack"],
+      },
+    },
+  },
+};
+
+export default nextConfig;
+```
+
+Pass options with the object form — `loaders: [{ loader: "zod-compiler/turbopack", options: { verbose: true } }]`.
+Next.js serializes them into its config, so they have to be plain JSON. That rules out a RegExp
+`hoist.schemaNamePattern` (pass the pattern as a string instead), `apply` is Vite-only as always,
+and `codegenMode` is fixed at `"inline"` — a loader has no resolve hook to answer the lean runtime
+import with. There is no `cache` option either: the loader keeps no disk cache of its own, because
+Turbopack already caches loader results persistently, keyed on file content plus the dependencies
+the loader declares. Nothing lands in `node_modules/.cache/zod-compiler`, so the CI cache step under
+[Large projects and CI](#large-projects-and-ci) does not apply — cache `.next/cache` instead.
+
+The two `condition` clauses are the Turbopack equivalent of the plugin's own file filters — without
+them the loader is invoked on every `.ts` in the project. Keep the `content` pattern this loose:
+narrowing it to `"zod"` silently skips `zod/v4`, `zod/mini` and the `zod-compiler` import behind
+`schemas: "explicit"`, and skipped files just quietly stay uncompiled. Drop the `content` clause
+entirely if you set a custom `hoist.schemaNamePattern`, which makes schema roots out of identifiers
+(`UserModel`) in files that need never mention zod at all.
+
+Set no `as` or `type` on the rule. The loader emits TypeScript and Turbopack's own SWC pass handles
+it, so there is no second transpile and no `@swc/core` dependency.
+
+Expect a file reachable from both client and server components to be transformed more than once —
+Turbopack applies loaders per output environment, and runs them in a worker pool, so the cache of
+executed modules that makes discovery cheap is only shared within a worker. The first build of a
+large schema set is the expensive one.
+
+`next dev --webpack` / `next build --webpack` remain available, where `zod-compiler/webpack` applies
+unchanged:
+
+```typescript
+// next.config.ts — webpack only
+import type { NextConfig } from "next";
+import zodCompiler from "zod-compiler/webpack";
+
+const nextConfig: NextConfig = {
+  webpack: (config) => {
+    config.plugins?.push(zodCompiler({ verbose: true }));
+    return config;
+  },
+};
+
+export default nextConfig;
+```
+
+Schemas exported from a `"use client"` module compile like any other — the generated runtime is
+emitted below the directive so it stays the first statement. A `"use server"` file is different, and
+not because of zod-compiler: Next.js only allows async function exports there, so a schema in one
+has to stay inside a function, where [hoisting](#schema-hoisting) still lifts and compiles it.
+
+Note also the React Server Components rule that a server component may not import a _value_ from a
+`"use client"` module — that yields a client reference rather than the schema, with or without
+zod-compiler.
 
 ### SWC
 
