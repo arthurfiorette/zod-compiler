@@ -68,7 +68,14 @@ export const SCHEMA_NAME_PATTERN = /ZodSchema$/;
  * must contain "zod" for the same reason as SCHEMA_NAME_PATTERN above; both
  * are pinned by `describe("code filter soundness")` in the transform tests.
  */
-export const ZOD_MODULES = new Set(["zod", "zod/v3", "zod/v4", "zod/mini", "zod/v4/mini"]);
+export const ZOD_MODULES = new Set([
+  "zod",
+  "zod/v3",
+  "zod/v4",
+  "zod/mini",
+  "zod/v4/mini",
+  "zod/v4-mini",
+]);
 
 /** How an imported local binding maps onto its source module. */
 export interface ImportDetail {

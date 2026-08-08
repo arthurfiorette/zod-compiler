@@ -194,17 +194,20 @@ describe("code filter soundness", () => {
     }
   });
 
-  it("documents the zod/mini gap between the hoist roots and the discovery gate", () => {
-    // Pre-existing (unrelated to hook filters): zod/mini and zod/v4/mini are
-    // ZOD_MODULES — hoist roots, and zod bindings for the hoist-compile
-    // determinism gate — but the discovery gate does not match them, so their
-    // module-scope exports are never auto-discovered. Harmless to the code
-    // filter (the specifier still mentions "zod"), pinned here so the gap is
-    // visible; delete this test if discovery grows to cover mini.
-    for (const specifier of ["zod/mini", "zod/v4/mini"]) {
+  it("the discovery gate covers every zod/mini spelling", () => {
+    // zod/mini shares `_zod.def` with classic zod, so extract → codegen treats
+    // both identically; only this gate decides whether a mini file is ever
+    // looked at. All three mini specifiers in zod's export map must match, or
+    // those files are silently skipped with no error.
+    for (const specifier of ["zod/mini", "zod/v4/mini", "zod/v4-mini"]) {
+      const source = `import { object } from "${specifier}";\nexport const S = object({});`;
+      expect(HAS_RUNTIME_ZOD_IMPORT.test(source), specifier).toBe(true);
+      expect(filter.test(source), specifier).toBe(true);
+    }
+    // The widened `[/-]mini` suffix must not open the gate to a foreign package.
+    for (const specifier of ["not-zod/mini", "zodiac/mini", "valibot/mini"]) {
       const source = `import { object } from "${specifier}";\nexport const S = object({});`;
       expect(HAS_RUNTIME_ZOD_IMPORT.test(source), specifier).toBe(false);
-      expect(filter.test(source), specifier).toBe(true);
     }
   });
 

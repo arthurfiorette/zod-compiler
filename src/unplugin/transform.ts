@@ -151,7 +151,8 @@ class StagedTransform {
  * contain "zod" silently strips those files from every bundler with native
  * hook filters. `describe("code filter soundness")` fails if it drifts.
  */
-export const HAS_RUNTIME_ZOD_IMPORT = /import\s+(?!type\s)[^;]*from\s+["']zod(?:\/v\d+)?["']/;
+export const HAS_RUNTIME_ZOD_IMPORT =
+  /import\s+(?!type\s)[^;]*from\s+["']zod(?:\/v\d+)?(?:[/-]mini)?["']/;
 
 /**
  * Opt-in phase timing (ZOD_COMPILER_TIMING=1): accumulates per-phase wall time

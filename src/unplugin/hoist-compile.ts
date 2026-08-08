@@ -139,7 +139,8 @@ function isZodSpecifier(specifier: string): boolean {
     specifier === "zod" ||
     specifier === "zod/v4" ||
     specifier === "zod/mini" ||
-    specifier === "zod/v4/mini"
+    specifier === "zod/v4/mini" ||
+    specifier === "zod/v4-mini"
   );
 }
 
