@@ -481,6 +481,9 @@ Schema-level `error` and `z.config()` maps are unaffected; for a per-call map us
 | medium object (invalid)                         | 504K   | 80K    | **14.7M**        | 2.9M  | 7.7M  | **184x**  |
 | large object (10 items)                         | 122K   | 166K   | **5.3M**         | 5.9M  | 1.2M  | **32x**   |
 | large object (100 items)                        | 13K    | 18K    | **781K**         | 1.3M  | 125K  | **43x**   |
+| readonly field (wrapper compiles away)          | 3.1M   | 4.4M   | **15.7M**        | —     | —     | 3.6x      |
+| readonly root object (rebuild + freeze)         | 2.9M   | 3.8M   | **12.2M**        | —     | —     | 3.2x      |
+| readonly array (delegates to Zod)               | 3.9M   | 2.9M   | **2.9M**         | —     | —     | 1.0x      |
 | recursive tree (7 nodes)                        | 569K   | 2.1M   | **8.2M**         | 11.6M | 4.8M  | 3.9x      |
 | recursive tree (121 nodes)                      | 32K    | 135K   | **800K**         | 1.9M  | 372K  | 5.9x      |
 | nested recursion (7 nodes)                      | 391K   | 1.0M   | **7.9M**         | 11.1M | 3.1M  | 7.8x      |
