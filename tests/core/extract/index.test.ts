@@ -337,8 +337,14 @@ describe("extractSchema — readonly", () => {
     expect(ir.type).toBe("readonly");
   });
 
-  it("falls back for readonly object (freezing compiled output would freeze caller input)", () => {
+  it("compiles readonly over a stripping object (its output is rebuilt, so safe to freeze)", () => {
     const ir = extractSchema(z.object({ name: z.string() }).readonly());
+    expect(ir.type).toBe("readonly");
+    expect((ir as { freeze?: boolean }).freeze).toBe(true);
+  });
+
+  it("falls back for readonly over a pass-through container (would freeze caller input)", () => {
+    const ir = extractSchema(z.array(z.string()).readonly());
     expect(ir.type).toBe("fallback");
   });
 });
@@ -776,7 +782,7 @@ describe("extractSchema — zero-capture transform produces EffectIR (no fallbac
     expect(refs).toHaveLength(1);
   });
 
-  it("readonly object falls back as a whole (Zod freezes its output)", () => {
+  it("readonly object with a zero-capture transform compiles and freezes", () => {
     const schema = z
       .object({
         name: z.string(),
@@ -786,8 +792,9 @@ describe("extractSchema — zero-capture transform produces EffectIR (no fallbac
     const refs: RefEntry[] = [];
     const ir = extractSchema(schema, refs);
 
-    expect(ir.type).toBe("fallback");
-    expect(refs).toHaveLength(1);
+    expect(ir.type).toBe("readonly");
+    expect((ir as { freeze?: boolean }).freeze).toBe(true);
+    expect(refs).toHaveLength(0);
   });
 
   it("default object with zero-capture transform produces EffectIR, default uses runtime ref", () => {

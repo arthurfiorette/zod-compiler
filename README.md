@@ -430,7 +430,7 @@ A schema delegates to Zod when it reaches JavaScript the generated code cannot r
 | `ctx`-taking or `async` callbacks                    | Needs Zod's parse context / the async pipeline                             |
 | `z.url()`, `z.jwt()`                                 | Algorithmic formats (`new URL()`, signature parsing)                       |
 | Overlapping or policy-sensitive object intersections | Zod's independent parse-and-merge semantics cannot be safely collapsed     |
-| `.readonly()` over a container                       | Zod freezes its rebuilt output; compiled containers are the caller's input |
+| `.readonly()` over a pass-through container          | Zod freezes the output it rebuilt; these are the caller's own input        |
 | Dynamic error maps, unresolvable `z.lazy()`          | Not knowable at build time                                                 |
 
 Everything else compiles, including context-free `preprocess` callbacks and

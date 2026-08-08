@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
+import { fastResultIsInput, rebuildsOutput } from "#src/core/codegen/build-path.js";
 import { diagnoseSchema } from "#src/core/diagnostic.js";
 import type { RefEntry } from "#src/core/extract/index.js";
 import { extractSchema } from "#src/core/extract/index.js";
@@ -86,7 +87,6 @@ describe("readonly — an observable freeze still delegates to Zod", () => {
   // freezing would freeze the caller's own data. z.date()/z.file() are objects
   // in their own right. Each keeps Zod's rebuild-then-freeze.
   const fallsBack: [string, z.ZodType][] = [
-    ["object", z.object({ a: z.string() }).readonly()],
     ["strict object", z.strictObject({ a: z.string() }).readonly()],
     ["loose object", z.looseObject({ a: z.string() }).readonly()],
     ["array", z.array(z.number()).readonly()],
@@ -133,6 +133,104 @@ describe("readonly — an observable freeze still delegates to Zod", () => {
     const baseline: RefEntry[] = [];
     extractSchema(inner, baseline);
     expect(withReadonly.length).toBe(baseline.length);
+  });
+});
+
+describe("readonly — a stripping object freezes the value it rebuilt", () => {
+  it("compiles with the freeze flag and matches Zod end to end", () => {
+    const schema = z.object({ name: z.string() }).readonly();
+    const ir = irOf(schema);
+    expect(ir.type).toBe("readonly");
+    expect((ir as { freeze?: boolean }).freeze).toBe(true);
+
+    // Stripping still happens, the OUTPUT is frozen, and the caller's object —
+    // which the compiler never had to touch, having rebuilt — stays mutable.
+    const compiled = compileLikeProduction(schema, "roFreeze");
+    const input = { name: "Alice", extra: 1 };
+    const result = compiled(input) as { success: boolean; data: unknown };
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ name: "Alice" });
+    expect(Object.isFrozen(result.data)).toBe(true);
+    expect(Object.isFrozen(input)).toBe(false);
+    expect(result.data).not.toBe(input);
+  });
+
+  it("withholds every by-reference shortcut", () => {
+    // safeParse's `data:input` return and the `fc` behind parse()/~standard all
+    // hand back the unfrozen input; a freezing readonly must disable them.
+    const ir = irOf(z.object({ name: z.string() }).readonly());
+    expect(rebuildsOutput(ir)).toBe(true);
+    expect(fastResultIsInput(ir)).toBe(false);
+  });
+
+  it("freezes even when a sibling already pushed issues (relative mark)", () => {
+    // `.catch()` lets the parse SUCCEED with a sibling's issues still in the
+    // array, so the eager walk's freeze guard has to compare against a mark
+    // taken before the inner ran, not against zero. An absolute test silently
+    // skipped the freeze here while zod still applied it. Only the eager walk
+    // is involved: mutatesBeyondStrip declines `.catch()`, so no build path.
+    const inner = () => z.object({ a: z.string() }).readonly();
+    const shapes: [string, z.ZodType, unknown, (data: never) => unknown][] = [
+      [
+        "object sibling",
+        z.object({ bad: z.string(), r: inner() }).catch((c) => c.value as never),
+        { bad: 1, r: { a: "x" } },
+        (d) => (d as Record<string, unknown>)["r"],
+      ],
+      [
+        "array element",
+        z.array(inner()).catch((c) => c.value as never),
+        [{ a: 1 }, { a: "x" }],
+        (d) => (d as unknown[])[1],
+      ],
+      [
+        "tuple slot",
+        z.tuple([z.string(), inner()]).catch((c) => c.value as never),
+        [1, { a: "x" }],
+        (d) => (d as unknown[])[1],
+      ],
+    ];
+
+    for (const [label, schema, input, pick] of shapes) {
+      const compiled = compileLikeProduction(schema, "roMark");
+      type Result = { success: boolean; data: never };
+      const zodResult = schema.safeParse(structuredClone(input)) as Result;
+      const aotResult = compiled(structuredClone(input)) as Result;
+      expect(aotResult.success, label).toBe(zodResult.success);
+      expect(Object.isFrozen(pick(aotResult.data)), label).toBe(
+        Object.isFrozen(pick(zodResult.data)),
+      );
+    }
+  });
+
+  it("freezes through nesting, arrays and unions", () => {
+    const cases: [string, z.ZodType, unknown][] = [
+      [
+        "nested",
+        z.object({ inner: z.object({ a: z.string() }).readonly() }),
+        { inner: { a: "x" } },
+      ],
+      ["in array", z.array(z.object({ a: z.string() }).readonly()), [{ a: "x" }]],
+      ["double readonly", z.object({ a: z.string() }).readonly().readonly(), { a: "x" }],
+      ["in union", z.union([z.string(), z.object({ a: z.string() }).readonly()]), { a: "x" }],
+    ];
+    // Reach past the wrapper to the object the freeze should have landed on.
+    const pick = (label: string, data: unknown): unknown => {
+      const record = data as Record<string, unknown>;
+      if (label === "nested") return record["inner"];
+      if (label === "in array") return (data as unknown[])[0];
+      return data;
+    };
+
+    for (const [label, schema, input] of cases) {
+      const compiled = compileLikeProduction(schema, "roNest");
+      const zodResult = schema.safeParse(structuredClone(input)) as { data: unknown };
+      const aotResult = compiled(structuredClone(input)) as { data: unknown };
+      expect(aotResult.data, label).toEqual(zodResult.data);
+      expect(Object.isFrozen(pick(label, aotResult.data)), label).toBe(
+        Object.isFrozen(pick(label, zodResult.data)),
+      );
+    }
   });
 });
 
@@ -187,18 +285,19 @@ describe("readonly — parity with Zod", () => {
     expect(after.fallbacks).toEqual([]);
   });
 
-  it("a readonly root object is unchanged — still a full delegation", () => {
-    // The issue's mySchema3. Compiling it would mean freezing a value the
-    // compiler passes through by reference, so it stays with Zod.
-    const d = diagnoseSchema(irOf(z.object({ foo: z.string() }).readonly()));
-    expect(d.coveragePct).toBe(0);
-    expect(d.fastPathEligible).toBe(false);
+  it("a readonly root object now compiles (the issue's mySchema3)", () => {
+    const ir = irOf(z.object({ foo: z.string() }).readonly());
+    expect(ir.type).toBe("readonly");
+    expect((ir as { freeze?: boolean }).freeze).toBe(true);
+    const d = diagnoseSchema(ir);
+    expect(d.coveragePct).toBe(100);
+    expect(d.fallbacks).toEqual([]);
   });
 
   it("a delegated readonly explains itself instead of claiming to be unsupported", () => {
-    // The generic "not yet supported" hint reads as an oversight; this is a
-    // deliberate trade-off, so it gets its own reason.
-    const d = diagnoseSchema(irOf(z.object({ foo: z.string() }).readonly()));
+    // The generic "not yet supported" hint reads as an oversight; delegating a
+    // pass-through container is a deliberate trade-off, so it gets its own reason.
+    const d = diagnoseSchema(irOf(z.array(z.string()).readonly()));
     expect(d.fallbacks[0]?.reason).toBe("readonly");
     expect(d.fallbacks[0]?.hint).toContain("caller's own input");
     expect(d.fastPathBlocker).toBe("fallback (readonly)");

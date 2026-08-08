@@ -367,9 +367,9 @@ export interface ObjectIR {
   strict?: boolean;
   /**
    * Strip unknown keys from the output (zod's DEFAULT `z.object()` behavior),
-   * set only when the `stripUnknownKeys` build option is enabled AND this is a
-   * genuine `z.object()` (no catchall) — never on `z.looseObject()` (keep) or
-   * `z.strictObject()` (reject). Compiled by rebuilding a fresh object from
+   * set whenever this is a genuine `z.object()` (no catchall) — never on
+   * `z.looseObject()` (keep) or `z.strictObject()` (reject). Compiled by
+   * rebuilding a fresh object from
    * only the declared own keys, mirroring zod's strip exactly. Because the
    * output is a fresh value, a strip object counts as a {@link hasMutation}
    * node: it never takes the zero-allocation by-reference fast path, and parent
@@ -498,6 +498,20 @@ export interface NullableIR {
 export interface ReadonlyIR {
   type: "readonly";
   inner: SchemaIR;
+  /**
+   * Emit `Object.freeze` on the produced value.
+   *
+   * Set only when the freeze is OBSERVABLE and the value being frozen is one
+   * the compiler allocated (a stripping object, which both the build pass and
+   * the eager walk rebuild). Omitted when the inner yields a primitive, where
+   * freezing is a no-op and the wrapper compiles to nothing at all.
+   *
+   * A readonly carrying this flag counts as rebuilding (see rebuildSet), which
+   * is what withholds every by-reference shortcut — `fastResultIsInput` turns
+   * false, so neither safeParse's `data:input` return nor the `fc` behind
+   * `parse()` / `~standard` can hand back an unfrozen input.
+   */
+  freeze?: boolean;
 }
 
 export interface DefaultIR {

@@ -759,9 +759,12 @@ export function hasMutation(ir: SchemaIR): boolean {
       );
     case "record":
       return hasMutation(ir.valueType);
+    // A freezing readonly produces a value that is not its input, exactly as a
+    // strip object does — so it must never take a by-reference shortcut.
+    case "readonly":
+      return ir.freeze === true || hasMutation(ir.inner);
     case "optional":
     case "nullable":
-    case "readonly":
     case "recursionTarget":
     case "zodDelegate":
       return hasMutation(ir.inner);

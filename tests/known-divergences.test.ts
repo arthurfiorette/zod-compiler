@@ -308,6 +308,21 @@ describe("known divergence — readonly does not freeze a rejected value", () =>
     expect(Object.isFrozen(aotInput)).toBe(false); // the compiler did not
   });
 
+  it("also applies to a readonly OBJECT handed a non-object", () => {
+    // Same cause, other end of the feature: the object schema rejects the array,
+    // but zod's readonly freezes the payload value on the way past — and that
+    // value is still the caller's array.
+    const objectSchema = z.object({ name: z.string() }).readonly();
+    const zodInput: unknown[] = [1, 2];
+    expect(objectSchema.safeParse(zodInput).success).toBe(false);
+    expect(Object.isFrozen(zodInput)).toBe(true);
+
+    const compiled = compileLikeProduction(objectSchema, "roObjRejectFreeze");
+    const aotInput: unknown[] = [1, 2];
+    expect((compiled(aotInput) as { success: boolean }).success).toBe(false);
+    expect(Object.isFrozen(aotInput)).toBe(false);
+  });
+
   it("a union sibling can carry that freeze onto a successful parse", () => {
     // The readonly option REJECTS the object, but zod froze it on the way past,
     // and z.any() then succeeds with the very same reference.

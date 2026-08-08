@@ -116,6 +116,11 @@ function rebuildSet(root: SchemaIR): ReadonlySet<SchemaIR> {
       const target = node.type === "recursiveRef" ? targets.get(node.refId ?? 0) : undefined;
       const rebuild =
         (node.type === "object" && node.stripUnknownKeys === true) ||
+        // A freezing readonly's output is `Object.freeze(inner)` — a value the
+        // caller never handed us, so it must be BUILT rather than passed
+        // through. Marking it here is also what makes `rebuildsOutput` true and
+        // so withholds every by-reference shortcut above it.
+        (node.type === "readonly" && node.freeze === true) ||
         // `.default()` substitutes its own value for `undefined`, so its output
         // is not its input even when the inner schema passes through — it must
         // never be handed to `passthrough`, whose fast check would reject the
@@ -400,7 +405,7 @@ function buildInline(ir: SchemaIR, input: string, g: BuildGen): Built | null {
     case "effect":
       return buildEffect(ir, input, g);
     case "readonly":
-      return build(ir.inner, input, g);
+      return buildReadonly(ir, input, g);
     case "zodDelegate":
       return build(ir.inner, input, g);
     case "union":
@@ -577,6 +582,26 @@ function passthrough(ir: SchemaIR, input: string, g: BuildGen): Built | null {
  * are the whole key set). A loose object or one with a `.catchall()` keeps keys
  * this pass does not enumerate, so those bail.
  */
+/**
+ * Freeze the inner's built value, matching zod's `Object.freeze(payload.value)`.
+ *
+ * Sound only because `freeze` is set exclusively over a stripping object, whose
+ * build ALWAYS allocates (`buildObject` assembles a fresh `__bo_N`) — so the
+ * frozen value is never the caller's input. A pass-through inner would return
+ * `input` here and freezing it would mutate data the caller still owns, which
+ * is why the extractor withholds the flag for every other container.
+ */
+function buildReadonly(
+  ir: SchemaIR & { type: "readonly" },
+  input: string,
+  g: BuildGen,
+): Built | null {
+  const built = build(ir.inner, input, g);
+  if (built === null || ir.freeze !== true) return built;
+  const slot = local(g, "bz");
+  return { code: `${built.code}${slot}=Object.freeze(${built.value});`, value: slot };
+}
+
 function buildObject(ir: ObjectIR, input: string, g: BuildGen): Built | null {
   if (ir.catchall !== undefined) return null;
   if (ir.stripUnknownKeys !== true && ir.strict !== true) return null;
