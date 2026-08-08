@@ -332,9 +332,9 @@ describe("extractSchema — unknown", () => {
 // ─── readonly ──────────────────────────────────────────────────────────────
 
 describe("extractSchema — readonly", () => {
-  it("falls back for readonly string (Zod freezes its output)", () => {
+  it("compiles readonly string (freezing a primitive is a no-op)", () => {
     const ir = extractSchema(z.string().readonly());
-    expect(ir.type).toBe("fallback");
+    expect(ir.type).toBe("readonly");
   });
 
   it("falls back for readonly object (freezing compiled output would freeze caller input)", () => {

@@ -281,8 +281,10 @@ describe("integration — optional/nullable match Zod", () => {
 });
 
 describe("integration — readonly match Zod", () => {
-  // readonly falls back to Zod (Zod freezes its output; compiled validators
-  // must not freeze the caller's input) — needs the refs-aware harness.
+  // readonly over a CONTAINER falls back to Zod (Zod freezes its output;
+  // compiled validators must not freeze the caller's input), so these need the
+  // refs-aware harness. Over a primitive the freeze is unobservable and the
+  // wrapper compiles away — see readonly.test.ts.
   it("readonly string", () => {
     const schema = z.string().readonly();
     const safeParse = compileWithRefs(schema, "roStr");

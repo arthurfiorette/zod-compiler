@@ -267,3 +267,70 @@ describe("known divergence — a compiled failure builds its error lazily", () =
     expect(() => result.error).toThrow(TypeError); // ...the message build does not
   });
 });
+
+/**
+ * 6. z.readonly() OVER A PRIMITIVE FREEZES A VALUE ITS INNER REJECTED.
+ *
+ * `$ZodReadonly` freezes `payload.value` after running its inner schema without
+ * checking whether that schema produced issues (`handleReadonlyResult` is
+ * unconditional). When the inner is a primitive and the value is an object, the
+ * payload still holds the caller's own object — so Zod freezes data it just
+ * rejected. A plain `z.string()` does not.
+ *
+ * Freezing is a no-op on every value such a schema ACCEPTS (`Object.isFrozen("a")`
+ * is already true), which is what lets the compiler drop the wrapper and keep
+ * the enclosing object on the fast path. What it does not reproduce is the
+ * freeze on the rejected path, and that has two observable shapes:
+ *
+ *   a. the caller's rejected input stays mutable (the parse verdict, data and
+ *      issues are all identical);
+ *   b. inside a union, where it reaches a SUCCESSFUL parse. Zod hands the same
+ *      object to every option, so a failing readonly option freezes it and a
+ *      later permissive option then returns that now-frozen object as `data`.
+ *
+ * (b) is the same class as divergences 1-3 above — Zod's output identity versus
+ * the compiler's — and never changes the parsed VALUE, only whether it is
+ * frozen. Closing either would mean a type test plus a freeze on every readonly
+ * failure: hot-path cost on every schema to reproduce a Zod bug on rejected
+ * data. If Zod ever makes the freeze conditional on success, delete this pin.
+ */
+describe("known divergence — readonly does not freeze a rejected value", () => {
+  const schema = z.string().readonly();
+
+  it("zod freezes the rejected object; the compiler leaves it alone", () => {
+    const zodInput = {};
+    expect(schema.safeParse(zodInput).success).toBe(false);
+    expect(Object.isFrozen(zodInput)).toBe(true); // zod froze what it rejected
+
+    const compiled = compileLikeProduction(schema, "roRejectFreeze");
+    const aotInput = {};
+    expect((compiled(aotInput) as { success: boolean }).success).toBe(false);
+    expect(Object.isFrozen(aotInput)).toBe(false); // the compiler did not
+  });
+
+  it("a union sibling can carry that freeze onto a successful parse", () => {
+    // The readonly option REJECTS the object, but zod froze it on the way past,
+    // and z.any() then succeeds with the very same reference.
+    const union = z.union([z.string().readonly(), z.any()]);
+    const compiled = compileLikeProduction(union, "roUnionFreeze");
+
+    const zodResult = union.safeParse({ a: 1 }) as { success: boolean; data: unknown };
+    const aotResult = compiled({ a: 1 }) as { success: boolean; data: unknown };
+
+    expect(aotResult.success).toBe(zodResult.success); // both succeed
+    expect(aotResult.data).toEqual(zodResult.data); // same value...
+    expect(Object.isFrozen(zodResult.data)).toBe(true); // ...zod's is frozen
+    expect(Object.isFrozen(aotResult.data)).toBe(false); // ...the compiler's is not
+  });
+
+  it("both agree on every value the schema accepts", () => {
+    const compiled = compileLikeProduction(schema, "roAcceptParity");
+    for (const input of ["a", ""]) {
+      const zodResult = schema.safeParse(input);
+      const aotResult = compiled(input) as { success: boolean; data?: unknown };
+      expect(aotResult.success).toBe(zodResult.success);
+      expect(aotResult.data).toBe(zodResult.data);
+      expect(Object.isFrozen(aotResult.data)).toBe(Object.isFrozen(zodResult.data));
+    }
+  });
+});

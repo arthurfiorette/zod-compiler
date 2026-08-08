@@ -587,7 +587,15 @@ export interface ZodDelegateIR {
 
 export interface FallbackIR {
   type: "fallback";
-  reason: "transform" | "refine" | "superRefine" | "custom" | "lazy" | "unsupported" | "coalesced";
+  reason:
+    | "transform"
+    | "refine"
+    | "superRefine"
+    | "custom"
+    | "lazy"
+    | "readonly"
+    | "unsupported"
+    | "coalesced";
   /** Index into the __rf[] fallback schemas array. Present when partial fallback is used. */
   refIndex?: number;
 }
