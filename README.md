@@ -132,7 +132,8 @@ that blocks eval both leave a working plain-Zod schema.
 | Bun                 | `import zodCompiler from "zod-compiler/bun"`      |
 | Farm                | `import zodCompiler from "zod-compiler/farm"`     |
 
-Turbopack takes a loader rather than a plugin — see [Next.js (Turbopack)](#nextjs-turbopack).
+Turbopack takes a loader rather than a plugin — see [Next.js (Turbopack)](#nextjs-turbopack). Metro
+has neither — see [React Native / Expo](#react-native--expo).
 
 ### Options
 
@@ -294,6 +295,22 @@ const result = await transform(sourceCode, {
 Defaults `codegenMode` to `"inline"` (SWC has no virtual-module hook); pass
 `zodCompiler: { codegenMode: "lean" }` if a later bundler resolves the runtime specifier. Honours
 `include`/`exclude` and keeps no disk cache.
+
+### React Native / Expo
+
+There is no Metro plugin — unplugin has no Metro adapter. Use the [CLI](#3-cli-no-bundler); Metro
+bundles what it emits as ordinary source:
+
+```bash
+npx zod-compiler generate src/schemas/ -o src/schemas/compiled/ --watch
+```
+
+Worth the step: **Hermes ships no JIT and no `new Function`**, so Zod's own object fast path is
+unavailable on device and [`jit()`](#4-runtime-compilation-no-build-step) cannot run there at all.
+
+Keep schema modules free of `react-native` and `expo-*` imports, transitively — discovery executes
+each file and its import graph in Node (in both modes), and one that throws falls back to runtime
+Zod silently.
 
 ### Compact Output (`output: "compact"`)
 
