@@ -79,7 +79,23 @@ describe("generateIIFE()", () => {
     const iife = generateIIFE("UserSchema", info);
 
     expect(iife).toContain("var __rf=");
-    expect(iife).toContain('UserSchema.shape["slug"]');
+    expect(iife).toContain("var __zs=UserSchema");
+    expect(iife).toContain('__zs.shape["slug"]');
+  });
+
+  it("evaluates a schema expression once when multiple refs use it", () => {
+    const prefix = "prefix_";
+    const schema = z.object({
+      first: z.string().transform((v) => prefix + v),
+      second: z.string().transform((v) => prefix + v),
+    });
+    const info = makeInfoWithFallback("validateUser", schema);
+    const iife = generateIIFE("makeSchema()", info);
+
+    expect(iife.split("makeSchema()")).toHaveLength(2);
+    expect(iife).toContain('__zs.shape["first"]');
+    expect(iife).toContain('__zs.shape["second"]');
+    expect(iife).toContain("__zcMkv(safeParse_validateUser,__zs,");
   });
 
   it("has no __rf when schema has zero-capture transform (compiled as effect)", () => {
@@ -314,7 +330,7 @@ describe("generateIIFE() — runtime execution", () => {
       // pass `null` as the is-arg → `.is()` derives from safeParse().success.
       const schema = z.object({ page: z.number().default(1), name: z.string() });
       const iife = generateIIFE("Schema", makeInfoWithFallback("withDefault", schema));
-      expect(iife).toMatch(/__zcMkv\(safeParse_withDefault,Schema,(?:__fc_\d+|null),null\)/);
+      expect(iife).toMatch(/__zcMkv\(safeParse_withDefault,__zs,(?:__fc_\d+|null),null\)/);
     });
 
     it("works for schemas with no fast path (mutating effect)", () => {

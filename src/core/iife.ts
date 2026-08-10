@@ -124,10 +124,11 @@ export const FIN_DEFERRED_DECL = "function __zcFinD(f,inp){return new __ZcFail(n
  * path is produced by the retained Zod schema itself (`zod` is the source of
  * truth, so the issues are byte-identical — no second validation engine).
  *
- * `_z` is the schema's PRISTINE bound safeParse (`__rf[N].safeParse.bind(...)`,
- * captured pre-`__zcMkv` by emitRfDelegate — see context.ts — so it is zod's
- * own implementation, never the compiled delegate, avoiding infinite
- * recursion). The zod parse is deferred until `.error` is read and cached, so
+ * `_z` is the schema's PRISTINE safeParse method and `_r` is its receiver. Both
+ * are captured pre-`__zcMkv` by emitRfMethod — see context.ts — so the method is
+ * zod's own implementation, never the compiled delegate, avoiding infinite
+ * recursion without allocating a bound function. The zod parse is deferred
+ * until `.error` is read and cached, so
  * the common `safeParse(x).success`/`.is(x)` checks on invalid input cost only
  * the fast check (zod never runs) — the same deferral boundary `__zcFinD`
  * establishes for the compiled slow walk. Sound because compact mode is gated
@@ -139,12 +140,12 @@ export const FIN_DEFERRED_DECL = "function __zcFinD(f,inp){return new __ZcFail(n
  * the unaltered schema would have produced.
  */
 export const FAILZ_CLASS_DECL =
-  "function __ZcFailZ(z,i){this.success=false;this._z=z;this._i=i;this._c=undefined;}" +
+  "function __ZcFailZ(z,r,i){this.success=false;this._z=z;this._r=r;this._i=i;this._c=undefined;}" +
   'Object.defineProperty(__ZcFailZ.prototype,"error",{configurable:true,get:function(){' +
-  "return this._c||(this._c=this._z(this._i).error);}});";
+  "return this._c||(this._c=this._z.call(this._r,this._i).error);}});";
 
-/** Compact-mode finalizer: wrap a pristine bound safeParse + input into a lazy delegated failure. */
-export const FINZ_DECL = "function __zcFinZ(z,i){return new __ZcFailZ(z,i);}";
+/** Compact-mode finalizer: retain a pristine safeParse, its receiver, and input lazily. */
+export const FINZ_DECL = "function __zcFinZ(z,r,i){return new __ZcFailZ(z,r,i);}";
 
 /**
  * Validator factory. Inline mode (CLI emitter) declares it once per compiled
@@ -248,7 +249,11 @@ export function generateIIFE(
   const { codegenResult, refEntries } = schema;
   const fnName = extractFunctionName(codegenResult.functionDef);
   const zodCompat = options?.zodCompat !== false;
-  const schemaArg = zodCompat ? schemaExpr : "null";
+  // Every fallback access starts from the same source schema. Capture it once
+  // whenever refs exist so an inline initializer is not reconstructed for each
+  // path and again for the identity-preserving __zcMkv target.
+  const retainedSchema = refEntries.length > 0 ? "__zs" : schemaExpr;
+  const schemaArg = zodCompat ? retainedSchema : "null";
   const fcArg = codegenResult.fastFnName ?? "null";
   // `.is()` gets the fast-check directly only when it is a total predicate;
   // partial/none falls back to safeParse().success inside __zcMkv. A rebuilding
@@ -258,7 +263,10 @@ export function generateIIFE(
   return [
     "/* @__PURE__ */ (() => {",
     ...(refEntries.length > 0
-      ? [`var __rf=[${refEntries.map((fb) => `${schemaExpr}${fb.accessPath}`).join(",")}];`]
+      ? [
+          `var __zs=${schemaExpr};`,
+          `var __rf=[${refEntries.map((fb) => `${retainedSchema}${fb.accessPath}`).join(",")}];`,
+        ]
       : []),
     ...codegenResult.code
       .split("\n")

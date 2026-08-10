@@ -406,6 +406,16 @@ export function emitRfDelegate(ctx: CodeGenContext, refIndex: number): string {
   return name;
 }
 
+/** Capture a pristine Zod method without allocating a bound function. */
+export function emitRfMethod(ctx: CodeGenContext, refIndex: number): string {
+  const name = `__rfm_${refIndex}`;
+  const decl = `var ${name}=__rf[${refIndex}].safeParse;`;
+  if (!ctx.preamble.includes(decl)) {
+    ctx.preamble.push(decl);
+  }
+  return name;
+}
+
 /**
  * Resolve a regex pattern to a runtime variable name.
  * Lean mode short-circuits well-known patterns to virtual-module names so the

@@ -178,7 +178,8 @@ describe("compact mode — codegen shape", () => {
     expect(source).toMatch(/=__vb_\d+\(input\);/);
     expect(result.usedHelpers.has("__zcFinZ")).toBe(true);
     expect(source).toContain("__zcFinZ(");
-    expect(source).toContain("__rfp_0");
+    expect(source).toContain("__rfm_0");
+    expect(source).not.toContain(".bind(");
     // No compiled slow walk, no eager/deferred finalizers, no inline issues.
     expect(source).not.toContain("__sw_");
     expect(source).not.toContain("__zcFinD(");
@@ -315,12 +316,12 @@ describe("compact mode — runtime behavior", () => {
 
   it("delegated .error is Zod's own error, produced lazily", () => {
     const schema = z.object({ name: z.string().min(2) });
-    // The validator captures the PRISTINE bound safeParse at IIFE evaluation
+    // The validator captures the PRISTINE safeParse method at IIFE evaluation
     // (before __zcMkv reinstalls a compiled safeParse on the schema), so this
     // spy on the original method is exactly what the cold delegate calls.
     const spy = vi.spyOn(schema, "safeParse");
     const compiled = buildCompact(schema, "lazy");
-    spy.mockClear(); // ignore the bind-time reference captured during wiring
+    spy.mockClear();
 
     const res = compiled.safeParse({ name: "x" });
     expect(res.success).toBe(false);
@@ -334,6 +335,51 @@ describe("compact mode — runtime behavior", () => {
     // The issues are zod's own (compare against a fresh, unmutated schema).
     const fresh = z.object({ name: z.string().min(2) });
     expect(res.error?.issues).toEqual(fresh.safeParse({ name: "x" }).error?.issues);
+  });
+
+  it("evaluates the retained schema once and preserves the pristine method receiver", () => {
+    const schema = z.object({ name: z.string().min(2) });
+    // oxlint-disable-next-line typescript/unbound-method -- the test verifies the explicit receiver
+    const originalSafeParse = schema.safeParse;
+    let schemaEvaluations = 0;
+    let zodCalls = 0;
+    schema.safeParse = function (input: unknown) {
+      expect(this).toBe(schema);
+      zodCalls++;
+      return originalSafeParse.call(this, input);
+    };
+
+    const { schemas: results } = compileSchemas([{ exportName: "counted", schema }], {
+      mode: "inline",
+      compact: true,
+    });
+    const info = results[0];
+    if (info === undefined) throw new Error("expected a compiled schema");
+    const iife = generateIIFE("makeSchema()", info, { zodCompat: true });
+    const factory = new Function(
+      "__zodCompilerConfig",
+      "__zcZodError",
+      "makeSchema",
+      `${ZOD_MSG_DECLARATION}\n` +
+        `${FAIL_CLASS_DECL}${MK_VALIDATOR_DECL}${FIN_DECL}${FIN_DEFERRED_DECL}${FAILZ_CLASS_DECL}${FINZ_DECL}\n` +
+        `return ${iife};`,
+    );
+    const compiled = factory(z.config, ZodRealError, () => {
+      schemaEvaluations++;
+      return schema;
+    }) as CompiledLike;
+
+    expect(schemaEvaluations).toBe(1);
+    expect(zodCalls).toBe(0);
+    expect(compiled.safeParse({ name: "valid" }).success).toBe(true);
+    expect(zodCalls).toBe(0);
+
+    const failed = compiled.safeParse({ name: "x" });
+    expect(failed.success).toBe(false);
+    expect(zodCalls).toBe(0);
+    expect(failed.error).toBeInstanceOf(ZodRealError);
+    expect(failed.error).toBe(failed.error);
+    expect(zodCalls).toBe(1);
   });
 });
 

@@ -32,6 +32,7 @@ const localizedFin = new Function(
 
 const finZ = new Function(`${FAILZ_CLASS_DECL}${FINZ_DECL}; return __zcFinZ;`)() as (
   rfp: (input: unknown) => SafeParseResult<unknown>,
+  receiver: unknown,
   input: unknown,
 ) => SafeParseResult<unknown>;
 

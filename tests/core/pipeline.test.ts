@@ -91,6 +91,20 @@ describe("compileSchemas", () => {
     expect(results[0]?.refEntries.length).toBe(2);
   });
 
+  it("appends the compact root delegate at its reserved index", () => {
+    const schema = z.object({ page: z.number().default(1) });
+    const { schemas: results } = compileSchemas([{ exportName: "compactRoot", schema }], {
+      mode: "inline",
+      compact: true,
+    });
+    const info = results[0];
+    const index = info?.codegenResult.rootDelegateRefIndex;
+
+    expect(index).toBe(1);
+    expect(info?.refEntries[index ?? -1]).toEqual({ schema, accessPath: "" });
+    expect(info?.codegenResult.refCount).toBe(info?.refEntries.length);
+  });
+
   it("continues on error when onError is provided", () => {
     const schemas = [
       { exportName: "badOne", schema: null },

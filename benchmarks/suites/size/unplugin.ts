@@ -36,6 +36,9 @@ interface BundleResult {
 
 async function bundle(plugins: ZodCompilerPlugin[]): Promise<BundleResult> {
   const result = await build({
+    // This report supplies its own plugin. Loading benchmarks/vite.config.ts
+    // would apply zod-compiler a second time and invalidate the dedup probes.
+    configFile: false,
     logLevel: "silent",
     // Vite/Rollup type drift between hoisted versions; runtime shape is correct.
     // oxlint-disable-next-line typescript/no-explicit-any -- cross-version Plugin type incompatibility
@@ -77,9 +80,9 @@ async function bundle(plugins: ZodCompilerPlugin[]): Promise<BundleResult> {
       // Each must still appear exactly once no matter how many files use uuid.
       uuidRegex: count(code, "]-[1-8]"),
       uuidSrcString: count(code, "[0-9a-fA-F]{8}"),
-      // property name inside __zcMkv — survives minification, unique to it
-      // (zod is external, and generated schema code never references it)
-      mkvFactory: count(code, "safeParseAsync"),
+      // Standard Schema vendor property inside __zcMkv. It survives
+      // minification and occurs once in the helper (zod is external).
+      mkvFactory: count(code, "vendor:"),
     },
   };
 }

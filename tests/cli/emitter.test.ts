@@ -49,8 +49,9 @@ describe("generateCompiledFileContent()", () => {
       "./test.ts",
     );
     expect(content).toContain(
-      "var __rf=[((__src_validateTest as any).schema ?? __src_validateTest)._zod.def.checks[0]._zod.def.fn];",
+      "var __zs=((__src_validateTest as any).schema ?? __src_validateTest);",
     );
+    expect(content).toContain("var __rf=[__zs._zod.def.checks[0]._zod.def.fn];");
   });
 
   it("generates multiple schemas in one file", () => {

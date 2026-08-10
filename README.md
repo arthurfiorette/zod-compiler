@@ -318,6 +318,25 @@ Compiles the fast path and delegates the cold error path to the retained Zod sch
 **~73% raw / ~71% gzipped** on 50 distinct schemas. The hot path is unchanged and errors are Zod's own;
 only reading `.error` invokes Zod. Mutually exclusive with `output: "bag"`.
 
+```typescript
+zodCompiler({ output: "compact" });
+```
+
+### Workers and Serverless Startup
+
+Workers often construct every imported schema during module initialization, even when an isolate only
+validates a few of them. Compiling all of those schemas can improve validation while increasing bundle
+size and startup work. Compact output reduces compiler-generated error-path code, but still retains the
+original Zod schema and does not make eager schema construction lazy.
+
+Automatic discovery remains the default. If an application has a clear schema boundary, narrow
+`include` or use `schemas: "explicit"` to avoid compiling intermediate exports.
+
+Use `output: "bag"` only when consumers do not need Zod APIs such as `.shape`, `.extend()`, `.meta()`,
+or `z.toJSONSchema()`; it can omit the retained schema entirely.
+
+Measure startup separately from validation throughput using the target deployment and bundle.
+
 ### Auto Mode: Side Effects Warning
 
 Auto mode executes files to inspect their exports, so a file with schema-shaped exports **and** side
