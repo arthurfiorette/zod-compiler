@@ -118,7 +118,7 @@
     "lint": "vp check && vp exec knip",
     "size:cli": "vp run --filter @zod-compiler/benchmarks size:cli",
     "size:unplugin": "vp run --filter @zod-compiler/benchmarks size:unplugin",
-    "startup:unplugin": "vp run --filter @zod-compiler/benchmarks startup:unplugin",
+    "startup:unplugin": "vp pack && vp run --filter @zod-compiler/benchmarks startup:unplugin",
     "test": "vp test run",
     "prepare": "vp config"
   },

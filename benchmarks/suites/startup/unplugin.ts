@@ -15,6 +15,7 @@ import { build, type PluginOption } from "vite";
 import zodCompiler from "zod-compiler/vite";
 
 const SCHEMA_COUNT = 120;
+const SET_GROUP_SIZE = 10;
 const ROUNDS = 7;
 const VARIANTS = ["plain", "schema", "compact", "bag"] as const;
 type Variant = (typeof VARIANTS)[number];
@@ -28,6 +29,8 @@ interface BundleReport {
     compactFinalizers: number;
     eagerSets: number;
     issueHelpers: number;
+    localCompilerSets: number;
+    sharedCompilerSets: number;
     slowWalks: number;
   };
   raw: number;
@@ -45,7 +48,8 @@ function count(source: string, pattern: RegExp): number {
 
 function fixtureSource(): string {
   const schemas = Array.from({ length: SCHEMA_COUNT }, (_unused, index) => {
-    const values = Array.from({ length: 6 }, (_v, value) => `"v${index}_${value}"`).join(",");
+    const setGroup = Math.floor(index / SET_GROUP_SIZE);
+    const values = Array.from({ length: 6 }, (_v, value) => `"v${setGroup}_${value}"`).join(",");
     return [
       `export const Schema${index}=(()=>{`,
       `globalThis.__zcStartupSchemaCount=(globalThis.__zcStartupSchemaCount??0)+1;`,
@@ -97,6 +101,8 @@ async function bundle(root: string, entry: string, variant: Variant): Promise<Bu
       compactFinalizers: count(source, /return __zcFinZ\(/g),
       eagerSets: count(source, /new Set\(/g),
       issueHelpers: count(source, /__zcIT\(/g),
+      localCompilerSets: count(source, /var __set_[^=]+\s*=/g),
+      sharedCompilerSets: count(source, /var __zcSet_\d+(?:\$\d+)?\s*=/g),
       slowWalks: count(source, /function __sw_\d+\(/g),
     },
   };
@@ -168,7 +174,8 @@ async function main(): Promise<void> {
           `heap=${formatBytes(percentile(heaps, 0.5))} schemas=${[...evaluations].join(",")} ` +
           `compactMethods=${report.probes.compactMethods} binds=${report.probes.boundDelegates} ` +
           `finZ=${report.probes.compactFinalizers} slowWalks=${report.probes.slowWalks} ` +
-          `issueHelpers=${report.probes.issueHelpers} sets=${report.probes.eagerSets}`,
+          `issueHelpers=${report.probes.issueHelpers} sets=${report.probes.eagerSets} ` +
+          `sharedSets=${report.probes.sharedCompilerSets} localSets=${report.probes.localCompilerSets}`,
       );
     }
 
@@ -182,6 +189,8 @@ async function main(): Promise<void> {
       compact.probes.compactFinalizers !== SCHEMA_COUNT ||
       compact.probes.boundDelegates !== 0 ||
       compact.probes.issueHelpers !== 0 ||
+      compact.probes.localCompilerSets !== 0 ||
+      compact.probes.sharedCompilerSets !== SCHEMA_COUNT / SET_GROUP_SIZE ||
       compact.probes.slowWalks !== 0 ||
       compactEvaluations.size !== 1 ||
       !compactEvaluations.has(SCHEMA_COUNT)

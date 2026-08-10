@@ -16,6 +16,12 @@ import {
 /** Codegen output mode. "inline" emits self-contained code (CLI .compiled.ts). "lean" emits references to imports from "virtual:zod-compiler/runtime" (unplugin). */
 export type CodegenMode = "inline" | "lean";
 
+/** A Set declaration emitted while generating one validator. */
+export interface GeneratedSetConstant {
+  readonly name: string;
+  readonly initializer: string;
+}
+
 export interface CodeGenResult {
   code: string;
   functionDef: string;
@@ -112,6 +118,10 @@ export interface CodeGenContext {
   effectFnCache?: Map<string, string>;
   /** Dedup cache for constant preamble declarations: initializer text → preamble var. */
   valueCache?: Map<string, string>;
+  /** Reports generated Sets so the file pipeline can share exact duplicates across validators. */
+  onSetConstant?: ((constant: GeneratedSetConstant) => void) | undefined;
+  /** Exact Set initializer → file-level name, populated by the pipeline's second codegen pass. */
+  sharedSetNames?: ReadonlyMap<string, string> | undefined;
   /** Name of the build path's FAIL sentinel, declared once per validator. */
   buildFailName?: string;
   /** Hosted build-function name per recursion target refId, so back-edges resolve. */
@@ -496,7 +506,12 @@ export function emitConstant(ctx: CodeGenContext, prefix: string, initializer: s
 
 /** Declare a `new Set([...])` in the preamble and return its variable name. */
 export function emitSet(ctx: CodeGenContext, prefix: string, values: readonly unknown[]): string {
-  return emitConstant(ctx, `set_${prefix}`, `new Set(${JSON.stringify([...values])})`);
+  const initializer = `new Set(${JSON.stringify([...values])})`;
+  const sharedName = ctx.sharedSetNames?.get(initializer);
+  if (sharedName !== undefined) return sharedName;
+  const name = emitConstant(ctx, `set_${prefix}`, initializer);
+  ctx.onSetConstant?.({ name, initializer });
+  return name;
 }
 
 /**

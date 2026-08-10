@@ -1,5 +1,11 @@
 import type { SchemaIR } from "../types.js";
-import type { CodeGenContext, CodeGenResult, CodegenMode, RecTargetGen } from "./context.js";
+import type {
+  CodeGenContext,
+  CodeGenResult,
+  CodegenMode,
+  GeneratedSetConstant,
+  RecTargetGen,
+} from "./context.js";
 import { fastResultIsInput, generateBuild, rebuildsOutput } from "./build-path.js";
 import { declareFastTemps, emitRfDelegate, emitRfMethod, hasMutation } from "./context.js";
 import type { SharedSchemaPlan } from "./dedupe.js";
@@ -26,6 +32,10 @@ export interface GenerateValidatorOptions {
    * {@link CodeGenResult.rootDelegateRefIndex}.
    */
   compact?: boolean | undefined;
+  /** Internal file-pipeline hook for sharing exact Set initializers across validators. */
+  onSetConstant?: ((constant: GeneratedSetConstant) => void) | undefined;
+  /** Internal exact-initializer plan used by the file pipeline's final generation pass. */
+  sharedSetNames?: ReadonlyMap<string, string> | undefined;
 }
 
 /**
@@ -51,6 +61,8 @@ export function generateValidator(
     regexCache: new Map(),
     mode,
     usedHelpers: new Set(),
+    onSetConstant: options?.onSetConstant,
+    sharedSetNames: options?.sharedSetNames,
   };
 
   // Slow-walk sharing. The plan already excludes any shape that would reach for

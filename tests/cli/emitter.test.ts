@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
+import { z } from "zod";
 import { generateCompiledFileContent, resolveOutputPath } from "#src/cli/emitter.js";
 import type { CodeGenResult } from "#src/core/codegen/index.js";
+import { compileSchemas } from "#src/core/pipeline.js";
 
 describe("generateCompiledFileContent()", () => {
   it("generates a valid compiled file with header and __zcMkv wrapper", () => {
@@ -80,6 +82,24 @@ describe("generateCompiledFileContent()", () => {
     expect(content).toContain("export const validateB");
     expect(content).toContain("__zcMkv(safeParse_a,");
     expect(content).toContain("__zcMkv(safeParse_b,");
+  });
+
+  it("emits a shared Set block once for repeated enum validators", () => {
+    const values = ["one", "two", "three", "four", "five", "six"] as const;
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.enum(values) },
+        { exportName: "B", schema: z.enum(values) },
+      ],
+      { mode: "inline" },
+    );
+    const content = generateCompiledFileContent(schemas, "./enums.ts", {
+      sharedCode: shared.code,
+    });
+
+    expect((content.match(/new Set\(/g) ?? []).length).toBe(1);
+    expect((content.match(/var __zcSet_0=/g) ?? []).length).toBe(1);
+    expect((content.match(/__zcSet_0\.has\(/g) ?? []).length).toBeGreaterThan(1);
   });
 
   it("includes zod config import and __zcMsg inside IIFE", () => {

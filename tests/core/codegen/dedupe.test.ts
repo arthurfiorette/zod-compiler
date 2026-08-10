@@ -474,6 +474,87 @@ describe("schema dedupe", () => {
   });
 });
 
+describe("file-level Set dedupe", () => {
+  const values = ["community", "course", "ebook", "event", "physical", "other"] as const;
+
+  it("shares an identical enum Set across exported validators", () => {
+    const A = z.enum(values);
+    const B = z.enum(values);
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: A },
+        { exportName: "B", schema: B },
+      ],
+      { mode: "inline" },
+    );
+
+    expect((shared.code.match(/new Set\(/g) ?? []).length).toBe(1);
+    expect(shared.code).toContain("var __zcSet_0=");
+    for (const schema of schemas) {
+      expect(source(schema)).toContain("__zcSet_0.has(");
+      expect(source(schema)).not.toContain("new Set(");
+    }
+
+    for (const [name, zod] of [
+      ["A", A],
+      ["B", B],
+    ] as const) {
+      const compiled = build(pick(schemas, name), shared.code);
+      expect(shape(compiled("community"))).toBe(shape(zod.safeParse("community")));
+      expect(shape(compiled("invalid"))).toBe(shape(zod.safeParse("invalid")));
+    }
+  });
+
+  it("keeps unique and differently ordered Sets local", () => {
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.enum(values) },
+        { exportName: "B", schema: z.enum([...values].reverse() as [string, ...string[]]) },
+        { exportName: "C", schema: z.enum(["one", "two", "three", "four", "five", "six"]) },
+      ],
+      { mode: "inline" },
+    );
+
+    expect(shared.code).not.toContain("__zcSet_");
+    for (const schema of schemas) expect(source(schema)).toContain("new Set(");
+  });
+
+  it("does not rewrite enum values that resemble generated identifiers", () => {
+    const tricky = ["__set_enum_0.has(", "two", "three", "four", "five", "six"] as const;
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.enum(tricky) },
+        { exportName: "B", schema: z.enum(tricky) },
+      ],
+      { mode: "inline" },
+    );
+    const generated = shared.code + schemas.map(source).join("\n");
+
+    // Once in the shared Set and once in each validator's invalid-value issue.
+    expect((generated.match(/"__set_enum_0\.has\("/g) ?? []).length).toBe(3);
+    expect(generated).not.toContain('"__zcSet_0.has("');
+  });
+
+  it("shares Sets in compact mode independently of slow-walk dedupe", () => {
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.enum(values) },
+        { exportName: "B", schema: z.enum(values) },
+      ],
+      { mode: "lean", compact: true },
+    );
+
+    expect((shared.code.match(/new Set\(/g) ?? []).length).toBe(1);
+    expect(shared.code).toContain("__zcSet_0");
+    expect(shared.code).not.toContain("__zcSw_");
+    for (const schema of schemas) {
+      expect(source(schema)).toContain("__zcSet_0.has(");
+      expect(source(schema)).not.toContain("new Set(");
+      expect(source(schema)).not.toContain("__sw_");
+    }
+  });
+});
+
 /**
  * Structural-key near-misses: two shapes identical EXCEPT one discriminating
  * detail must NOT merge. `keyOf` (dedupe.ts) serializes every IR field — each
