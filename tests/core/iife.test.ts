@@ -98,6 +98,47 @@ describe("generateIIFE()", () => {
     expect(iife).toContain("__zcMkv(safeParse_validateUser,__zs,");
   });
 
+  it("binds the retained schema without an __rf array (compact delegation)", () => {
+    // The delegate needs the schema itself, nothing else. Routing that through
+    // `__rf` cost every compact validator a one-element array whose only reads
+    // were `__rf[0]` — an allocation per compiled schema at module init.
+    const refEntries: RefEntry[] = [];
+    const ir = extractSchema(z.object({ name: z.string().min(1) }), refEntries);
+    const codegenResult = generateValidator(ir, "validateUser", {
+      refCount: refEntries.length,
+      compact: true,
+    });
+    const iife = generateIIFE("UserSchema", {
+      exportName: "validateUser",
+      codegenResult,
+      refEntries,
+    });
+
+    expect(iife).toContain("var __zs=UserSchema;");
+    expect(iife).toContain("__zcFinZ(__rfm_z,__zs,input)");
+    expect(iife).not.toContain("__rf=");
+    expect(iife).not.toContain("__rf[");
+  });
+
+  it("still binds the retained schema for compact under zodCompat: false", () => {
+    // `__zcMkv` gets `null`, but the delegate still reads `__zs` — the binding
+    // is owed to the generated code, not to the identity-preserving install.
+    const refEntries: RefEntry[] = [];
+    const ir = extractSchema(z.object({ name: z.string().min(1) }), refEntries);
+    const codegenResult = generateValidator(ir, "validateUser", {
+      refCount: refEntries.length,
+      compact: true,
+    });
+    const iife = generateIIFE(
+      "UserSchema",
+      { exportName: "validateUser", codegenResult, refEntries },
+      { zodCompat: false },
+    );
+
+    expect(iife).toContain("var __zs=UserSchema;");
+    expect(iife).toMatch(/return __zcMkv\(safeParse_validateUser,null,/);
+  });
+
   it("has no __rf when schema has zero-capture transform (compiled as effect)", () => {
     const schema = z.object({
       name: z.string(),

@@ -205,7 +205,7 @@ describe("unplugin factory", () => {
     expect(out).toContain("__zcMkv");
     // Cold errors delegate to the retained zod schema via __zcFinZ, imported in lean mode.
     expect(out).toContain("__zcFinZ");
-    expect(out).toContain("__rfm_0");
+    expect(out).toContain("__rfm_z=__zs.safeParse");
     expect(out).not.toContain(".bind(");
     expect(out).toMatch(/import\s*\{[^}]*__zcFinZ[^}]*\}\s*from\s*"virtual:zod-compiler\/runtime"/);
     // The compiled slow walk and its inline issue construction are gone.

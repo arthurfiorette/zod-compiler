@@ -7,7 +7,13 @@ import type {
   RecTargetGen,
 } from "./context.js";
 import { fastResultIsInput, generateBuild, rebuildsOutput } from "./build-path.js";
-import { declareFastTemps, emitRfDelegate, emitRfMethod, hasMutation } from "./context.js";
+import {
+  declareFastTemps,
+  emitRetainedMethod,
+  emitRfDelegate,
+  hasMutation,
+  RETAINED_SCHEMA_VAR,
+} from "./context.js";
 import type { SharedSchemaPlan } from "./dedupe.js";
 import { createFastGen, generateFast } from "./fast-path.js";
 import { createSlowGen, generateSlow } from "./slow-path.js";
@@ -29,7 +35,7 @@ export interface GenerateValidatorOptions {
    * path to the retained Zod schema (`__zcFinZ`). The fast (hot) path is
    * unchanged; only the bulky error-collecting walk — 64–77% of generated
    * bytes — is replaced by a few bytes of zod delegation. See
-   * {@link CodeGenResult.rootDelegateRefIndex}.
+   * {@link CodeGenResult.usesRetainedSchema}.
    */
   compact?: boolean | undefined;
   /** Internal file-pipeline hook for sharing exact Set initializers across validators. */
@@ -229,23 +235,23 @@ export function generateValidator(
     !hasMutation(ir) &&
     !hasNonRootTargets
   ) {
-    const delegate = emitRfMethod(ctx, baseRefCount);
+    const delegate = emitRetainedMethod(ctx);
     ctx.usedHelpers.add("__zcFinZ");
     return {
       code: ["/* zod-compiler */", ...ctx.preamble].join("\n"),
       functionDef: [
         `function ${fnName}(input){`,
         `if(${fastExpr}){return{success:true,data:input};}`,
-        `return __zcFinZ(${delegate},__rf[${baseRefCount}],input);`,
+        `return __zcFinZ(${delegate},${RETAINED_SCHEMA_VAR},input);`,
         `}`,
       ].join("\n"),
-      refCount: baseRefCount + 1,
+      refCount: baseRefCount,
       usedHelpers: ctx.usedHelpers,
       fastFnName,
       // Mutation-free total fast path: fc(input) ⟺ accepts(input), so `.is()`
       // installs fc directly (compact never weakens the guard).
       fastTotal: true,
-      rootDelegateRefIndex: baseRefCount,
+      usesRetainedSchema: true,
     };
   }
 
@@ -260,7 +266,7 @@ export function generateValidator(
     ctx.buildFailName !== undefined &&
     !hasNonRootTargets
   ) {
-    const delegate = emitRfMethod(ctx, baseRefCount);
+    const delegate = emitRetainedMethod(ctx);
     ctx.usedHelpers.add("__zcFinZ");
     const built = `__bd_${ctx.counter++}`;
     return {
@@ -269,15 +275,15 @@ export function generateValidator(
         `function ${fnName}(input){`,
         `var ${built}=${buildFnName}(input);`,
         `if(${built}!==${ctx.buildFailName}){return{success:true,data:${built}};}`,
-        `return __zcFinZ(${delegate},__rf[${baseRefCount}],input);`,
+        `return __zcFinZ(${delegate},${RETAINED_SCHEMA_VAR},input);`,
         `}`,
       ].join("\n"),
-      refCount: baseRefCount + 1,
+      refCount: baseRefCount,
       usedHelpers: ctx.usedHelpers,
       fastFnName: null,
       fastTotal: false,
       isFnName: buildIsFnName,
-      rootDelegateRefIndex: baseRefCount,
+      usesRetainedSchema: true,
     };
   }
 

@@ -7,8 +7,8 @@
  *     same first message as Zod (reuses the differential harness with the
  *     compact flag, so errors are validated to be byte-identical to Zod's).
  *  2. SHAPE — eligible schemas actually drop the slow walk and delegate
- *     (`__zcFinZ` + `__rfp_`), while mutation schemas keep the compiled path.
- *  3. END-TO-END — the full IIFE (root self-ref + `__zcMkv` wiring) parses,
+ *     (`__zcFinZ` + `__rfm_z`), while mutation schemas keep the compiled path.
+ *  3. END-TO-END — the full IIFE (`__zs` binding + `__zcMkv` wiring) parses,
  *     guards (`.is`), and reports `.error` lazily, mutating nothing on the hot
  *     path.
  */
@@ -170,7 +170,7 @@ describe("compact mode — codegen shape", () => {
     const { result, source } = compactCodegen(
       z.object({ name: z.string().min(1), age: z.number().int() }),
     );
-    expect(result.rootDelegateRefIndex).toBe(0);
+    expect(result.usesRetainedSchema).toBe(true);
     // A z.object() strips, so its payload comes from the build pass rather than
     // a by-reference `fc` — but the predicate is still exact and drives `.is()`.
     expect(result.fastFnName).toBeNull();
@@ -178,7 +178,7 @@ describe("compact mode — codegen shape", () => {
     expect(source).toMatch(/=__vb_\d+\(input\);/);
     expect(result.usedHelpers.has("__zcFinZ")).toBe(true);
     expect(source).toContain("__zcFinZ(");
-    expect(source).toContain("__rfm_0");
+    expect(source).toContain("__rfm_z=__zs.safeParse");
     expect(source).not.toContain(".bind(");
     // No compiled slow walk, no eager/deferred finalizers, no inline issues.
     expect(source).not.toContain("__sw_");
@@ -189,27 +189,29 @@ describe("compact mode — codegen shape", () => {
   it("a catch schema keeps the compiled path (no delegation)", () => {
     const schema = z.number().catch(0);
     const { result, source } = compactCodegen(schema);
-    expect(result.rootDelegateRefIndex).toBeUndefined();
+    expect(result.usesRetainedSchema).toBeUndefined();
     expect(source).not.toContain("__zcFinZ(");
   });
 
   it.each([
-    ["default", z.object({ n: z.number().default(1) }), 1],
-    ["coerce", z.coerce.number(), 0],
-    ["transform", z.string().transform((s) => s), 0],
-    ["overwrite", z.object({ q: z.string().trim() }), 0],
+    ["default", z.object({ n: z.number().default(1) }), true],
+    ["coerce", z.coerce.number(), false],
+    ["transform", z.string().transform((s) => s), false],
+    ["overwrite", z.object({ q: z.string().trim() }), false],
   ])(
     "a %s schema keeps its build pass and delegates the cold path",
-    (_label, schema, delegateIndex) => {
+    (_label, schema, keepsOwnRefs) => {
       // These mutations are modelled by the build pass, so they get the same
       // bargain a stripping object does: the pass still runs (it produces the
       // payload), and only the compiled issue walk is handed to the retained zod
-      // schema. `delegateIndex` is non-zero when the schema already holds refs of
-      // its own — a default's value reference occupies index 0.
+      // schema. Delegation reads `__zs` outright, so it claims no `__rf` slot;
+      // `keepsOwnRefs` marks the one schema that still needs the array for a
+      // reference of its own (the default's value).
       const { result, source } = compactCodegen(schema);
-      expect(result.rootDelegateRefIndex).toBe(delegateIndex);
+      expect(result.usesRetainedSchema).toBe(true);
+      expect(source).toContain("__zcFinZ(__rfm_z,__zs,input)");
+      expect(source.includes("__rf[")).toBe(keepsOwnRefs);
       expect(source).toMatch(/=__vb_\d+\(input\);/);
-      expect(source).toContain("__zcFinZ(");
       expect(source).not.toContain("__sw_");
     },
   );
@@ -397,15 +399,16 @@ describe("compact mode — interactions", () => {
     const [pure, withCoerce] = results;
     if (pure === undefined || withCoerce === undefined) throw new Error("expected two results");
 
-    // Pure validator → delegates: root self-ref appended, slow walk dropped.
-    expect(pure.codegenResult.rootDelegateRefIndex).toBe(0);
-    expect(pure.refEntries).toHaveLength(1);
+    // Pure validator → delegates through `__zs`, slow walk dropped, and neither
+    // schema has a reference of its own, so no `__rf` array is built at all.
+    expect(pure.codegenResult.usesRetainedSchema).toBe(true);
+    expect(pure.refEntries).toHaveLength(0);
     expect(pure.codegenResult.functionDef).toContain("__zcFinZ");
 
-    // Coercion is modelled by the build pass: keep that hot path, append a root
-    // ref, and delegate only the cold issue walk.
-    expect(withCoerce.codegenResult.rootDelegateRefIndex).toBe(0);
-    expect(withCoerce.refEntries).toHaveLength(1);
+    // Coercion is modelled by the build pass: keep that hot path and delegate
+    // only the cold issue walk.
+    expect(withCoerce.codegenResult.usesRetainedSchema).toBe(true);
+    expect(withCoerce.refEntries).toHaveLength(0);
     expect(withCoerce.codegenResult.functionDef).toContain("__zcFinZ");
     expect(withCoerce.codegenResult.functionDef).toMatch(/=__vb_\d+\(input\);/);
   });
@@ -420,7 +423,7 @@ describe("compact mode — interactions", () => {
     // The build pass has to stay — it produces the stripped payload, which zod
     // would only reproduce by parsing again. What compact drops is the compiled
     // issue walk, handing that to the retained zod schema.
-    expect(obj.codegenResult.rootDelegateRefIndex).toBe(0);
+    expect(obj.codegenResult.usesRetainedSchema).toBe(true);
     expect(obj.codegenResult.functionDef).toContain("__zcFinZ");
     expect(obj.codegenResult.functionDef).toMatch(/=__vb_\d+\(input\);/);
     expect(obj.codegenResult.functionDef).not.toContain("__sw_");

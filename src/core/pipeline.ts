@@ -33,8 +33,8 @@ export interface CompileSchemasOptions {
    * Compact output (`output: "compact"`). Drop the compiled slow walk for
    * mutation-free, total-fast-path schemas and delegate their cold error path
    * to the retained Zod schema. Disables slow-walk sharing (delegated schemas
-   * never emit a walk to share) and appends a root self-RefEntry per delegated
-   * schema so `__rf[N]` resolves to the original Zod schema.
+   * never emit a walk to share); delegated validators read the retained schema
+   * through the `__zs` binding rather than through `__rf[]`.
    */
   compact?: boolean | undefined;
   /** When provided, per-schema failures call this and continue. Otherwise the first error throws. */
@@ -179,18 +179,11 @@ export function compileSchemas(
     }
   }
 
-  const results: CompiledSchemaInfo[] = generated.map((entry) => {
-    // Compact delegation appends the schema itself as a fresh root RefEntry
-    // after the optional regeneration pass, keeping the reserved index stable.
-    if (entry.codegenResult.rootDelegateRefIndex !== undefined) {
-      entry.refEntries.push({ schema: entry.schema, accessPath: "" });
-    }
-    return {
-      exportName: entry.exportName,
-      codegenResult: entry.codegenResult,
-      refEntries: entry.refEntries,
-    };
-  });
+  const results: CompiledSchemaInfo[] = generated.map((entry) => ({
+    exportName: entry.exportName,
+    codegenResult: entry.codegenResult,
+    refEntries: entry.refEntries,
+  }));
 
   const sharedSetCode = emitSharedSetConstants(sharedSetNames);
   const slowWalkCode = plan?.code ?? "";

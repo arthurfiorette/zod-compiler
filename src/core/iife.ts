@@ -3,6 +3,7 @@
  * Used by both CLI emitter and unplugin transform.
  */
 
+import { RETAINED_SCHEMA_VAR } from "./codegen/context.js";
 import type { CompiledSchemaInfo } from "./pipeline.js";
 
 /**
@@ -124,11 +125,13 @@ export const FIN_DEFERRED_DECL = "function __zcFinD(f,inp){return new __ZcFail(n
  * path is produced by the retained Zod schema itself (`zod` is the source of
  * truth, so the issues are byte-identical — no second validation engine).
  *
- * `_z` is the schema's PRISTINE safeParse method and `_r` is its receiver. Both
- * are captured pre-`__zcMkv` by emitRfMethod — see context.ts — so the method is
- * zod's own implementation, never the compiled delegate, avoiding infinite
- * recursion without allocating a bound function. The zod parse is deferred
- * until `.error` is read and cached, so
+ * `_z` is the schema's PRISTINE safeParse method, captured by
+ * emitRetainedMethod (see context.ts), and `_r` is its receiver — the `__zs`
+ * binding generateIIFE places above that capture. Both are read before the
+ * trailing `__zcMkv` call installs anything, so the method is zod's own
+ * implementation, never the compiled delegate, avoiding infinite recursion
+ * without allocating a bound function. The zod parse is deferred until `.error`
+ * is read and cached, so
  * the common `safeParse(x).success`/`.is(x)` checks on invalid input cost only
  * the fast check (zod never runs) — the same deferral boundary `__zcFinD`
  * establishes for the compiled slow walk. Sound because compact mode is gated
@@ -267,10 +270,12 @@ export function generateIIFE(
   const { codegenResult, refEntries } = schema;
   const fnName = extractFunctionName(codegenResult.functionDef);
   const zodCompat = options?.zodCompat !== false;
-  // Every fallback access starts from the same source schema. Capture it once
-  // whenever refs exist so an inline initializer is not reconstructed for each
-  // path and again for the identity-preserving __zcMkv target.
-  const retainedSchema = refEntries.length > 0 ? "__zs" : schemaExpr;
+  // Every fallback access starts from the same source schema, and compact
+  // delegation names it outright. Capture it once whenever either needs it, so
+  // an inline initializer is not reconstructed for each path and again for the
+  // identity-preserving __zcMkv target.
+  const bindsSchema = refEntries.length > 0 || codegenResult.usesRetainedSchema === true;
+  const retainedSchema = bindsSchema ? RETAINED_SCHEMA_VAR : schemaExpr;
   const schemaArg = zodCompat ? retainedSchema : "null";
   const fcArg = codegenResult.fastFnName ?? "null";
   // `.is()` gets the fast-check directly only when it is a total predicate;
@@ -280,11 +285,11 @@ export function generateIIFE(
 
   return [
     "/* @__PURE__ */ (() => {",
+    ...(bindsSchema ? [`var ${RETAINED_SCHEMA_VAR}=${schemaExpr};`] : []),
+    // Only fallback refs need the array; a compact validator with none of its
+    // own reads `__zs` directly rather than allocating `[__zs]` to index into.
     ...(refEntries.length > 0
-      ? [
-          `var __zs=${schemaExpr};`,
-          `var __rf=[${refEntries.map((fb) => `${retainedSchema}${fb.accessPath}`).join(",")}];`,
-        ]
+      ? [`var __rf=[${refEntries.map((fb) => `${retainedSchema}${fb.accessPath}`).join(",")}];`]
       : []),
     ...codegenResult.code
       .split("\n")

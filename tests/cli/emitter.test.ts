@@ -56,6 +56,24 @@ describe("generateCompiledFileContent()", () => {
     expect(content).toContain("var __rf=[__zs._zod.def.checks[0]._zod.def.fn];");
   });
 
+  it("imports the source schema for a compact export with no refs of its own", () => {
+    // Compact delegation reads the `__zs` binding rather than an `__rf` slot,
+    // so refEntries is empty — but generateIIFE still binds `__zs`, and handing
+    // it an empty expression would emit `var __zs=;`. Pinned under
+    // zodCompat:false, the one combination where the import is not implied.
+    const { schemas } = compileSchemas(
+      [{ exportName: "Compact", schema: z.object({ name: z.string().min(1) }) }],
+      { mode: "inline", compact: true },
+    );
+    expect(schemas[0]?.refEntries).toHaveLength(0);
+
+    const content = generateCompiledFileContent(schemas, "./compact.ts", { zodCompat: false });
+
+    expect(content).toContain('import { Compact as __src_Compact } from "./compact"');
+    expect(content).toContain("var __zs=((__src_Compact as any).schema ?? __src_Compact);");
+    expect(content).not.toContain("var __zs=;");
+  });
+
   it("generates multiple schemas in one file", () => {
     const result1: CodeGenResult = {
       code: "/* zod-compiler */",

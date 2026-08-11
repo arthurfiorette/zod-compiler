@@ -58,13 +58,12 @@ export interface CodeGenResult {
    */
   isFnName?: string | null;
   /**
-   * Compact mode only: the `__rf[N]` index this validator delegates its cold
-   * error path to (the schema itself, captured as a fresh root RefEntry). When
-   * set, the pipeline appends a `{ schema, accessPath: "" }` entry at this index
-   * so `generateIIFE` materializes `__rf[N]` as the original Zod schema. Absent
-   * for every non-compact (fully compiled) validator.
+   * Compact mode only: this validator reads {@link RETAINED_SCHEMA_VAR}
+   * directly, so `generateIIFE` must bind it even when the schema has no
+   * fallback refs of its own. Absent for every non-compact (fully compiled)
+   * validator.
    */
-  rootDelegateRefIndex?: number;
+  usesRetainedSchema?: boolean;
 }
 
 /** Hosted-validator names for one recursion target (see CodeGenContext.recTargets). */
@@ -416,10 +415,30 @@ export function emitRfDelegate(ctx: CodeGenContext, refIndex: number): string {
   return name;
 }
 
-/** Capture a pristine Zod method without allocating a bound function. */
-export function emitRfMethod(ctx: CodeGenContext, refIndex: number): string {
-  const name = `__rfm_${refIndex}`;
-  const decl = `var ${name}=__rf[${refIndex}].safeParse;`;
+/**
+ * Identifier `generateIIFE` binds the retained Zod schema to, once per export.
+ *
+ * Compact delegation reaches the schema through this binding rather than
+ * through `__rf[]`. Routing it through the array meant every compact validator
+ * — the common case being one with no fallback refs at all — declared a
+ * one-element `var __rf=[__zs];` whose only reads were `__rf[0]`, i.e. an array
+ * allocation per compiled schema at module init to alias a binding that was
+ * already in scope. Naming the schema directly also keeps the reference a
+ * foldable constant instead of an element load (the same reason
+ * {@link emitEffectCallable} aliases its `__rf[N]` into a preamble binding).
+ */
+export const RETAINED_SCHEMA_VAR = "__zs";
+
+/**
+ * Capture the retained schema's pristine `safeParse` without allocating a bound
+ * function. Declared in the preamble, which `generateIIFE` places after the
+ * `__zs` binding and before the trailing `__zcMkv` call — so the capture is
+ * zod's own implementation, never the compiled delegate that call installs
+ * (see {@link emitRfDelegate} for the recursion this avoids).
+ */
+export function emitRetainedMethod(ctx: CodeGenContext): string {
+  const name = "__rfm_z";
+  const decl = `var ${name}=${RETAINED_SCHEMA_VAR}.safeParse;`;
   if (!ctx.preamble.includes(decl)) {
     ctx.preamble.push(decl);
   }

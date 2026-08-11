@@ -6,6 +6,7 @@
 import { expect } from "vite-plus/test";
 import { ZodRealError, z, core } from "zod";
 import { generateValidator } from "#src/core/codegen/index.js";
+import { RETAINED_SCHEMA_VAR } from "#src/core/codegen/context.js";
 import type { ExtractOptions, RefEntry } from "#src/core/extract/index.js";
 import { extractSchema } from "#src/core/extract/index.js";
 import {
@@ -56,13 +57,7 @@ export function compileLikeProduction(
     refCount: refEntries.length,
     compact: options?.compact,
   });
-  // Compact delegation appends the schema itself as the root RefEntry (the
-  // pipeline does this in production); mirror it so `__rf[N]` resolves to the
-  // schema whose pristine safeParse the validator delegates to.
   const rf = refEntries.map((e) => e.schema);
-  if (generated.rootDelegateRefIndex !== undefined) {
-    rf.push(schema);
-  }
   const factory = new Function(
     "__zodCompilerConfig",
     "__zcZodError",
@@ -70,11 +65,15 @@ export function compileLikeProduction(
     "__zcFin",
     "__zcFinZ",
     "__rf",
+    // Compact delegation reads the retained schema through this binding, which
+    // generateIIFE emits per export (the pipeline does not route it through
+    // `__rf`); bind it here so the generated code sees what production sees.
+    RETAINED_SCHEMA_VAR,
     // Strict, like the ES module the generated code ships inside: an
     // assignment to an undeclared identifier must fail here, not in the bundle.
     `"use strict";${ZOD_MSG_DECLARATION}${FAIL_CLASS_DECL}${FIN_DEFERRED_DECL}\n${generated.code}\nreturn ${generated.functionDef};`,
   );
-  return factory(z.config, ZodRealError, core, localizedFin, finZ, rf) as (
+  return factory(z.config, ZodRealError, core, localizedFin, finZ, rf, schema) as (
     input: unknown,
   ) => SafeParseResult<unknown>;
 }

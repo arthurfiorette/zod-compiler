@@ -91,17 +91,20 @@ describe("compileSchemas", () => {
     expect(results[0]?.refEntries.length).toBe(2);
   });
 
-  it("appends the compact root delegate at its reserved index", () => {
+  it("keeps the compact root delegate out of the ref array", () => {
     const schema = z.object({ page: z.number().default(1) });
     const { schemas: results } = compileSchemas([{ exportName: "compactRoot", schema }], {
       mode: "inline",
       compact: true,
     });
     const info = results[0];
-    const index = info?.codegenResult.rootDelegateRefIndex;
 
-    expect(index).toBe(1);
-    expect(info?.refEntries[index ?? -1]).toEqual({ schema, accessPath: "" });
+    // The delegate reads the `__zs` binding, so it reserves no slot — the array
+    // holds only the default's own value reference, and a schema with no refs
+    // of its own gets no array at all.
+    expect(info?.codegenResult.usesRetainedSchema).toBe(true);
+    expect(info?.refEntries).toHaveLength(1);
+    expect(info?.refEntries.map((e) => e.accessPath)).not.toContain("");
     expect(info?.codegenResult.refCount).toBe(info?.refEntries.length);
   });
 
