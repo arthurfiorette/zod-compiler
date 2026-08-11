@@ -3,7 +3,7 @@ import type {
   CodeGenContext,
   CodeGenResult,
   CodegenMode,
-  GeneratedSetConstant,
+  GeneratedConstant,
   RecTargetGen,
 } from "./context.js";
 import { fastResultIsInput, generateBuild, rebuildsOutput } from "./build-path.js";
@@ -38,10 +38,10 @@ export interface GenerateValidatorOptions {
    * {@link CodeGenResult.usesRetainedSchema}.
    */
   compact?: boolean | undefined;
-  /** Internal file-pipeline hook for sharing exact Set initializers across validators. */
-  onSetConstant?: ((constant: GeneratedSetConstant) => void) | undefined;
+  /** Internal file-pipeline hook for pooling exact constant initializers across validators. */
+  onConstant?: ((constant: GeneratedConstant) => void) | undefined;
   /** Internal exact-initializer plan used by the file pipeline's final generation pass. */
-  sharedSetNames?: ReadonlyMap<string, string> | undefined;
+  sharedConstantNames?: ReadonlyMap<string, string> | undefined;
 }
 
 /**
@@ -67,8 +67,8 @@ export function generateValidator(
     regexCache: new Map(),
     mode,
     usedHelpers: new Set(),
-    onSetConstant: options?.onSetConstant,
-    sharedSetNames: options?.sharedSetNames,
+    onConstant: options?.onConstant,
+    sharedConstantNames: options?.sharedConstantNames,
   };
 
   // Slow-walk sharing. The plan already excludes any shape that would reach for

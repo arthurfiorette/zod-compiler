@@ -1,4 +1,9 @@
-import type { CodeGenResult, CodegenMode, GeneratedSetConstant } from "./codegen/context.js";
+import type {
+  CodeGenResult,
+  CodegenMode,
+  ConstantKind,
+  GeneratedConstant,
+} from "./codegen/context.js";
 import { createSharedSchemaPlan, SHARED_BLOCK_MARKER } from "./codegen/dedupe.js";
 import { generateValidator } from "./codegen/index.js";
 import type { RefEntry } from "./extract/index.js";
@@ -41,32 +46,51 @@ export interface CompileSchemasOptions {
   onError?: (exportName: string, error: Error) => void;
 }
 
-/** Plan exact Set initializers used by at least two validators in this file. */
-function planSharedSetConstants(
+/**
+ * Plan exact constant initializers used by at least two validators in this file.
+ *
+ * Names are assigned per kind (`__zcSet_0`, …) and ordered by initializer text,
+ * so a given file always produces the same names for the same content.
+ */
+function planSharedConstants(
   results: readonly CompiledSchemaInfo[],
-  constantsByResult: ReadonlyMap<CodeGenResult, readonly GeneratedSetConstant[]>,
+  constantsByResult: ReadonlyMap<CodeGenResult, readonly GeneratedConstant[]>,
 ): ReadonlyMap<string, string> {
-  const byInitializer = new Map<string, Set<CodeGenResult>>();
+  const byInitializer = new Map<string, { kind: ConstantKind; users: Set<CodeGenResult> }>();
   for (const { codegenResult } of results) {
     for (const constant of constantsByResult.get(codegenResult) ?? []) {
       const declaration = `var ${constant.name}=${constant.initializer};`;
-      // Fast-path generation can emit a Set before a later node aborts. Its
-      // preamble is rolled back, so only collect declarations that survived.
+      // Fast-path generation can emit a constant before a later node aborts.
+      // Its preamble is rolled back, so only collect declarations that survived.
       if (!codegenResult.code.includes(declaration)) continue;
-      const users = byInitializer.get(constant.initializer);
-      if (users === undefined) byInitializer.set(constant.initializer, new Set([codegenResult]));
-      else users.add(codegenResult);
+      const entry = byInitializer.get(constant.initializer);
+      if (entry === undefined) {
+        byInitializer.set(constant.initializer, {
+          kind: constant.kind,
+          users: new Set([codegenResult]),
+        });
+      } else {
+        entry.users.add(codegenResult);
+      }
     }
   }
 
   const repeated = [...byInitializer.entries()]
-    .filter(([, users]) => users.size >= 2)
+    .filter(([, entry]) => entry.users.size >= 2)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return new Map(repeated.map(([initializer], index) => [initializer, `__zcSet_${index}`]));
+
+  const nextIndex = new Map<ConstantKind, number>();
+  return new Map(
+    repeated.map(([initializer, entry]) => {
+      const index = nextIndex.get(entry.kind) ?? 0;
+      nextIndex.set(entry.kind, index + 1);
+      return [initializer, `__zc${entry.kind}_${index}`];
+    }),
+  );
 }
 
-function emitSharedSetConstants(sharedSetNames: ReadonlyMap<string, string>): string {
-  return [...sharedSetNames]
+function emitSharedConstants(sharedConstantNames: ReadonlyMap<string, string>): string {
+  return [...sharedConstantNames]
     .map(([initializer, name]) => `var ${name}=/* @__PURE__ */${initializer};`)
     .join("\n");
 }
@@ -77,9 +101,9 @@ function emitSharedSetConstants(sharedSetNames: ReadonlyMap<string, string>): st
  *
  * Pass 1 extracts every schema's IR and plans repeated slow walks. Pass 2
  * generates each validator, calling shared `__zcSw_N` functions instead of
- * re-inlining them. Exact Set initializers reported during generation are then
- * pooled when at least two validators use them. Files with no repetition keep
- * their original local declarations.
+ * re-inlining them. Exact constant initializers reported during generation are
+ * then pooled when at least two validators use them. Files with no repetition
+ * keep their original local declarations.
  */
 export function compileSchemas(
   schemas: DiscoveredSchema[],
@@ -121,7 +145,7 @@ export function compileSchemas(
       );
 
   // Pass 2: generate each validator, sharing repeated slow walks via the plan
-  // and observing which Set declarations survive codegen rollback.
+  // and observing which constant declarations survive codegen rollback.
   const generated: Array<{
     exportName: string;
     schema: unknown;
@@ -129,20 +153,20 @@ export function compileSchemas(
     refEntries: RefEntry[];
     codegenResult: CodeGenResult;
   }> = [];
-  const constantsByResult = new Map<CodeGenResult, GeneratedSetConstant[]>();
+  const constantsByResult = new Map<CodeGenResult, GeneratedConstant[]>();
   for (const e of extracted) {
     try {
-      const setConstants = new Map<string, GeneratedSetConstant>();
+      const constants = new Map<string, GeneratedConstant>();
       const codegenResult = generateValidator(e.ir, e.exportName, {
         refCount: e.refEntries.length,
         mode: options.mode,
         sharedSchemas: plan,
         compact: options.compact,
-        onSetConstant(constant) {
-          setConstants.set(constant.name, constant);
+        onConstant(constant) {
+          constants.set(constant.name, constant);
         },
       });
-      constantsByResult.set(codegenResult, [...setConstants.values()]);
+      constantsByResult.set(codegenResult, [...constants.values()]);
       generated.push({
         exportName: e.exportName,
         schema: e.schema,
@@ -162,19 +186,19 @@ export function compileSchemas(
       refEntries,
     }),
   );
-  const sharedSetNames = planSharedSetConstants(initialResults, constantsByResult);
+  const sharedConstantNames = planSharedConstants(initialResults, constantsByResult);
 
   // Regenerate only when sharing is profitable. Selecting shared names before
   // emission avoids textual rewriting of generated JavaScript, where a user
   // enum string can legally contain text resembling a generated identifier.
-  if (sharedSetNames.size > 0) {
+  if (sharedConstantNames.size > 0) {
     for (const entry of generated) {
       entry.codegenResult = generateValidator(entry.ir, entry.exportName, {
         refCount: entry.refEntries.length,
         mode: options.mode,
         sharedSchemas: plan,
         compact: options.compact,
-        sharedSetNames,
+        sharedConstantNames,
       });
     }
   }
@@ -185,14 +209,14 @@ export function compileSchemas(
     refEntries: entry.refEntries,
   }));
 
-  const sharedSetCode = emitSharedSetConstants(sharedSetNames);
+  const sharedConstantCode = emitSharedConstants(sharedConstantNames);
   const slowWalkCode = plan?.code ?? "";
   const sharedCode =
-    sharedSetCode === ""
+    sharedConstantCode === ""
       ? slowWalkCode
       : slowWalkCode === ""
-        ? `${SHARED_BLOCK_MARKER}\n${sharedSetCode}`
-        : `${slowWalkCode}\n${sharedSetCode}`;
+        ? `${SHARED_BLOCK_MARKER}\n${sharedConstantCode}`
+        : `${slowWalkCode}\n${sharedConstantCode}`;
 
   return {
     schemas: results,

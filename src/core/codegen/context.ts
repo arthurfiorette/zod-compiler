@@ -16,8 +16,29 @@ import {
 /** Codegen output mode. "inline" emits self-contained code (CLI .compiled.ts). "lean" emits references to imports from "virtual:zod-compiler/runtime" (unplugin). */
 export type CodegenMode = "inline" | "lean";
 
-/** A Set declaration emitted while generating one validator. */
-export interface GeneratedSetConstant {
+/**
+ * Kind of a poolable constant. Decides the shared identifier's prefix, so a
+ * module-scope pool stays readable (`__zcSet_0`, …) rather than opaque.
+ */
+export type ConstantKind = "Set";
+
+/**
+ * A poolable constant declaration emitted while generating one validator.
+ *
+ * Reported to the file pipeline, which pools initializers used by two or more
+ * validators into a single module-scope declaration. Only value constants
+ * qualify: they are allocated once at module init and read identically from
+ * anywhere, so hoisting one out of a validator changes neither its identity nor
+ * the hot path.
+ *
+ * Generated FAST-PATH functions are deliberately not poolable, even when two
+ * validators emit byte-identical ones: sharing a function merges its call sites
+ * onto a single feedback vector, which is exactly the polymorphism the fast
+ * path is inlined to avoid. Cold slow walks are a different bargain and are
+ * shared — by their own mechanism, `__zcSw_N` (see dedupe.ts).
+ */
+export interface GeneratedConstant {
+  readonly kind: ConstantKind;
   readonly name: string;
   readonly initializer: string;
 }
@@ -117,10 +138,10 @@ export interface CodeGenContext {
   effectFnCache?: Map<string, string>;
   /** Dedup cache for constant preamble declarations: initializer text → preamble var. */
   valueCache?: Map<string, string>;
-  /** Reports generated Sets so the file pipeline can share exact duplicates across validators. */
-  onSetConstant?: ((constant: GeneratedSetConstant) => void) | undefined;
-  /** Exact Set initializer → file-level name, populated by the pipeline's second codegen pass. */
-  sharedSetNames?: ReadonlyMap<string, string> | undefined;
+  /** Reports poolable constants so the file pipeline can share exact duplicates across validators. */
+  onConstant?: ((constant: GeneratedConstant) => void) | undefined;
+  /** Exact initializer → file-level name, populated by the pipeline's second codegen pass. */
+  sharedConstantNames?: ReadonlyMap<string, string> | undefined;
   /** Name of the build path's FAIL sentinel, declared once per validator. */
   buildFailName?: string;
   /** Hosted build-function name per recursion target refId, so back-edges resolve. */
@@ -523,14 +544,33 @@ export function emitConstant(ctx: CodeGenContext, prefix: string, initializer: s
   return name;
 }
 
+/**
+ * Declare a poolable constant in the preamble and return its variable name —
+ * unless the file pipeline has already decided to hoist this exact initializer
+ * to module scope, in which case the shared name is returned and nothing is
+ * declared locally.
+ *
+ * The pipeline learns which initializers repeat by running codegen once and
+ * collecting what was reported here, so every poolable constant must route
+ * through this function rather than calling {@link emitConstant} directly.
+ */
+function emitPooledConstant(
+  ctx: CodeGenContext,
+  kind: ConstantKind,
+  localPrefix: string,
+  initializer: string,
+): string {
+  const sharedName = ctx.sharedConstantNames?.get(initializer);
+  if (sharedName !== undefined) return sharedName;
+  const name = emitConstant(ctx, localPrefix, initializer);
+  ctx.onConstant?.({ kind, name, initializer });
+  return name;
+}
+
 /** Declare a `new Set([...])` in the preamble and return its variable name. */
 export function emitSet(ctx: CodeGenContext, prefix: string, values: readonly unknown[]): string {
   const initializer = `new Set(${JSON.stringify([...values])})`;
-  const sharedName = ctx.sharedSetNames?.get(initializer);
-  if (sharedName !== undefined) return sharedName;
-  const name = emitConstant(ctx, `set_${prefix}`, initializer);
-  ctx.onSetConstant?.({ name, initializer });
-  return name;
+  return emitPooledConstant(ctx, "Set", `set_${prefix}`, initializer);
 }
 
 /**
