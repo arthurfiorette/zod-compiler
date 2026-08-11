@@ -573,9 +573,9 @@ export async function transformCodeWithMap(
   }
 
   // Head = runtime helpers/import, then the file-level shared dedup block, then
-  // the rewritten source. The shared `__zcSw_N` functions live at module scope
-  // so every IIFE closes over them; they must follow the runtime import (lean)
-  // and the helper decls (inline) that they reference. Guard against
+  // the rewritten source. Shared constants and `__zcSw_N` functions live at
+  // module scope so every IIFE closes over them; they must follow the runtime
+  // import (lean) and the helper decls (inline) that they reference. Guard against
   // double-injection on watch/HMR re-runs the same way computeRuntimePrefix
   // does — a second copy would redeclare every `__zcSw_N`.
   //

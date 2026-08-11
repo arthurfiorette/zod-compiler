@@ -1197,15 +1197,12 @@ describe("rewriteSource() — zodCompat option", () => {
   });
 });
 
-describe("transform output — downstream CSE/dedup safety (field incident)", () => {
-  // A root-fallback autoDiscover rewrite splices the schema expression TWICE
-  // (the pristine __rf[0] fallback and the __zcMkv mutation target). A
-  // downstream content-hashing dedup (babel-plugin-zod-hoist running after
-  // zodCompiler in a real build) merged them into ONE instance, so the
-  // installed safeParse delegated to itself — RangeError on every call, 164
-  // schemas across 47 built files. The compiled delegate must be captured
-  // before __zcMkv mutates anything, making the merged shape safe.
-  it("dedup-merged root-fallback IIFE still parses (no self-recursion)", async () => {
+describe("transform output — root schema evaluation (field incident)", () => {
+  // A root-fallback autoDiscover rewrite used to splice the schema expression
+  // once for __rf[0] and again for __zcMkv. Besides constructing two schemas,
+  // downstream content-hashing dedup could merge them and expose recursion if
+  // the pristine delegate was not captured before mutation.
+  it("evaluates a root-fallback expression once and still parses", async () => {
     const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
     // The original incident schema was z.strictObject; strict objects compile
     // now, and so does a value-validating .catchall(). A ctx-taking transform
@@ -1229,21 +1226,10 @@ describe("transform output — downstream CSE/dedup safety (field incident)", ()
       expect(transformed).not.toBeNull();
       const out = transformed as string;
 
-      // Root fallback: the expression must appear twice (fallback entry +
-      // __zcMkv target) — the surface a content-hash dedup collapses.
-      expect(out.split(expr).length - 1).toBe(2);
+      expect(out.split(expr).length - 1).toBe(1);
 
-      // Simulate the content-hash dedup: one hoisted construction, both
-      // sites referencing it.
-      const deduped = out
-        .replaceAll(expr, "_schema_dedup")
-        .replace(
-          'import { z } from "zod";',
-          `import { z } from "zod";\nconst _schema_dedup = ${expr};`,
-        );
-
-      const outPath = path.join(dir, "types.deduped.ts");
-      writeFileSync(outPath, deduped);
+      const outPath = path.join(dir, "types.compiled.ts");
+      writeFileSync(outPath, out);
       const mod = (await import("#src/loader.js")).loadSourceFile;
       const exported = (await mod(outPath))["ProfessionalRoleShape"] as {
         safeParse: (input: unknown) => { success: boolean; error?: { issues: unknown[] } };

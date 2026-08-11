@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "size:cli": "tsx suites/size/cli.ts",
-    "size:unplugin": "tsx suites/size/unplugin.ts"
+    "size:unplugin": "tsx suites/size/unplugin.ts",
+    "startup:unplugin": "tsx suites/startup/unplugin.ts"
   },
   "dependencies": {
     "ajv": "^8.20.0",

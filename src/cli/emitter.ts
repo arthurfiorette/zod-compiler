@@ -24,8 +24,8 @@ export interface EmitterOptions {
    */
   zodCompat?: boolean | undefined;
   /**
-   * File-level shared validator declarations (schema dedup). Emitted once at
-   * module scope so each compiled export can call into them.
+   * File-level shared validator and constant declarations. Emitted once at
+   * module scope so each compiled export can reference them.
    */
   sharedCode?: string | undefined;
 }
