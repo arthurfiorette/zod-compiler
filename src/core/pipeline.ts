@@ -47,6 +47,20 @@ export interface CompileSchemasOptions {
 }
 
 /**
+ * Occurrences of a generated identifier in `source`, ignoring the longer names
+ * it is a prefix of — every generated name ends in `_<digits>`, so `__set_ks_1`
+ * would otherwise count itself inside `__set_ks_10`.
+ */
+function referenceCount(source: string, name: string): number {
+  let count = 0;
+  for (let at = source.indexOf(name); at !== -1; at = source.indexOf(name, at + name.length)) {
+    const next = source.charCodeAt(at + name.length);
+    if (!(next >= 48 && next <= 57)) count += 1;
+  }
+  return count;
+}
+
+/**
  * Plan exact constant initializers used by at least two validators in this file.
  *
  * Names are assigned per kind (`__zcSet_0`, …) and ordered by initializer text,
@@ -58,11 +72,20 @@ function planSharedConstants(
 ): ReadonlyMap<string, string> {
   const byInitializer = new Map<string, { kind: ConstantKind; users: Set<CodeGenResult> }>();
   for (const { codegenResult } of results) {
+    const source = `${codegenResult.code}\n${codegenResult.functionDef}`;
     for (const constant of constantsByResult.get(codegenResult) ?? []) {
       const declaration = `var ${constant.name}=${constant.initializer};`;
       // Fast-path generation can emit a constant before a later node aborts.
       // Its preamble is rolled back, so only collect declarations that survived.
-      if (!codegenResult.code.includes(declaration)) continue;
+      if (!source.includes(declaration)) continue;
+      // A surviving declaration is not the same as a use. Two generators emit a
+      // constant before they can decline — the build path names its FAIL
+      // sentinel up front, and an abandoned fast-path walk leaves whatever it
+      // declared behind — so a validator can hold a declaration it never reads.
+      // Counting those as pool users hoisted constants nothing referenced, and
+      // (worse) tripped the regeneration pass for a file that gained nothing by
+      // it. Require the name to appear at least once beyond its own declaration.
+      if (referenceCount(source, constant.name) < 2) continue;
       const entry = byInitializer.get(constant.initializer);
       if (entry === undefined) {
         byInitializer.set(constant.initializer, {
@@ -91,7 +114,14 @@ function planSharedConstants(
 
 function emitSharedConstants(sharedConstantNames: ReadonlyMap<string, string>): string {
   return [...sharedConstantNames]
-    .map(([initializer, name]) => `var ${name}=/* @__PURE__ */${initializer};`)
+    .map(([initializer, name]) => {
+      // `/* @__PURE__ */` earns its bytes only on a constructor call, where it
+      // tells a bundler the declaration is droppable when nothing reads it. On a
+      // plain object literal it is inert, and the annotation is longer than the
+      // initializer it annotates.
+      const pure = initializer.startsWith("new ") ? "/* @__PURE__ */" : "";
+      return `var ${name}=${pure}${initializer};`;
+    })
     .join("\n");
 }
 

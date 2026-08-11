@@ -20,7 +20,7 @@ export type CodegenMode = "inline" | "lean";
  * Kind of a poolable constant. Decides the shared identifier's prefix, so a
  * module-scope pool stays readable (`__zcSet_0`, …) rather than opaque.
  */
-export type ConstantKind = "Rx" | "Set";
+export type ConstantKind = "Bf" | "Rx" | "Set";
 
 /**
  * A poolable constant declaration emitted while generating one validator.
@@ -584,7 +584,7 @@ export function emitConstant(ctx: CodeGenContext, prefix: string, initializer: s
  * collecting what was reported here, so every poolable constant must route
  * through this function rather than calling {@link emitConstant} directly.
  */
-function emitPooledConstant(
+export function emitPooledConstant(
   ctx: CodeGenContext,
   kind: ConstantKind,
   localPrefix: string,

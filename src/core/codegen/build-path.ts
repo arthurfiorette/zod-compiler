@@ -42,6 +42,7 @@ import {
   declareFastTemps,
   emitEffectCallable,
   emitEffectFn,
+  emitPooledConstant,
   emitRuntimeHelper,
   emitTemp,
   escapeString,
@@ -306,12 +307,21 @@ export function generateBuild(ir: SchemaIR, ctx: CodeGenContext): string | null 
   return name;
 }
 
-/** One `{}` per validator, compared by identity — no parse output can equal it. */
+/**
+ * The build path's FAIL marker: an object compared by identity, which the build
+ * function returns in place of a value and `safeParse` tests for.
+ *
+ * Pooled at file level rather than declared per validator. Its whole contract is
+ * "nothing a parse can produce equals this", and that is a property of the
+ * object's freshness, not of how many there are — so one `{}` serves every
+ * rebuilding validator in the file, where before each allocated its own at
+ * module init. Pooling by initializer text is safe for the same reason: the only
+ * way a merge could hurt is if some other `{}` constant were ever RETURNED by a
+ * build function, and the pool's other members are lookup tables and value
+ * lists, which are only ever read from.
+ */
 function emitFailSentinel(ctx: CodeGenContext): string {
-  if (ctx.buildFailName === undefined) {
-    ctx.buildFailName = `__bf_${ctx.counter++}`;
-    ctx.preamble.push(`var ${ctx.buildFailName}={};`);
-  }
+  ctx.buildFailName ??= emitPooledConstant(ctx, "Bf", "bf", "{}");
   return ctx.buildFailName;
 }
 

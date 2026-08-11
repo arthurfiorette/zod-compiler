@@ -592,6 +592,73 @@ describe("file-level Set dedupe", () => {
     for (const schema of schemas) expect(source(schema)).not.toContain("new RegExp(");
   });
 
+  it("shares one build-FAIL sentinel across rebuilding validators", () => {
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.object({ a: z.string() }) },
+        { exportName: "B", schema: z.object({ b: z.number() }) },
+      ],
+      { mode: "inline" },
+    );
+
+    expect(shared.code).toContain("var __zcBf_0=");
+    for (const schema of schemas) {
+      expect(source(schema)).toContain("!==__zcBf_0");
+      expect(source(schema)).not.toMatch(/var __bf_\d+=\{\};/);
+    }
+
+    for (const [name, zod] of [
+      ["A", z.object({ a: z.string() })],
+      ["B", z.object({ b: z.number() })],
+    ] as const) {
+      const compiled = build(pick(schemas, name), shared.code);
+      const key = name === "A" ? "a" : "b";
+      const ok = { [key]: name === "A" ? "x" : 1 };
+      // `data` matters more than the verdict here: a sentinel that leaked into
+      // a built value would surface as the shared object, not as a bad verdict.
+      const got = compiled(ok) as { data?: unknown };
+      expect(got.data).toStrictEqual(zod.parse(ok));
+      expect(shape(compiled(ok))).toBe(shape(zod.safeParse(ok)));
+      expect(shape(compiled({ [key]: null }))).toBe(shape(zod.safeParse({ [key]: null })));
+      expect(shape(compiled(null))).toBe(shape(zod.safeParse(null)));
+    }
+  });
+
+  it("does not pool a constant that survived generation unreferenced", () => {
+    // The build path names its FAIL sentinel before it can decline, so these
+    // two leave a declaration nothing reads. Pooling on the strength of a
+    // surviving DECLARATION hoisted an unreferenced constant to module scope
+    // and tripped the regeneration pass for a file that gained nothing.
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.map(z.string(), z.object({ a: z.string() })) },
+        { exportName: "B", schema: z.set(z.object({ b: z.string() })) },
+      ],
+      { mode: "inline" },
+    );
+
+    for (const schema of schemas) {
+      const text = source(schema);
+      const sentinel = /var (__bf_\d+)=\{\};/.exec(text)?.[1];
+      if (sentinel === undefined) continue;
+      expect(text.split(sentinel)).toHaveLength(2); // declared, never read
+    }
+    expect(shared.code).not.toContain("__zcBf_");
+  });
+
+  it("keeps the sentinel local when only one validator rebuilds", () => {
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.object({ a: z.string() }) },
+        { exportName: "B", schema: z.string().min(1) },
+      ],
+      { mode: "inline" },
+    );
+
+    expect(shared.code).not.toContain("__zcBf_");
+    expect(source(schemas[0] as CompiledSchemaInfo)).toMatch(/var __bf_\d+=\{\};/);
+  });
+
   it("shares Sets in compact mode independently of slow-walk dedupe", () => {
     const { schemas, shared } = compileSchemas(
       [
