@@ -535,6 +535,63 @@ describe("file-level Set dedupe", () => {
     expect(generated).not.toContain('"__zcSet_0.has("');
   });
 
+  it("shares an identical RegExp across validators", () => {
+    const slug = /^[a-z0-9-]+$/;
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.object({ slug: z.string().regex(slug) }) },
+        { exportName: "B", schema: z.object({ path: z.string().regex(slug) }) },
+      ],
+      { mode: "inline" },
+    );
+
+    expect((shared.code.match(/new RegExp\(/g) ?? []).length).toBe(1);
+    expect(shared.code).toContain("var __zcRx_0=");
+    for (const schema of schemas) {
+      expect(source(schema)).toContain("__zcRx_0.test(");
+      expect(source(schema)).not.toContain("new RegExp(");
+    }
+
+    for (const [name, zod] of [
+      ["A", z.object({ slug: z.string().regex(slug) })],
+      ["B", z.object({ path: z.string().regex(slug) })],
+    ] as const) {
+      const compiled = build(pick(schemas, name), shared.code);
+      const key = name === "A" ? "slug" : "path";
+      expect(shape(compiled({ [key]: "ok-1" }))).toBe(shape(zod.safeParse({ [key]: "ok-1" })));
+      expect(shape(compiled({ [key]: "NOPE" }))).toBe(shape(zod.safeParse({ [key]: "NOPE" })));
+    }
+  });
+
+  it("keeps a stateful (g/y) RegExp local to its validator", () => {
+    // `.test()` advances lastIndex, so a module-scope instance would let one
+    // export's match decide where another export's next call starts.
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.object({ a: z.string().regex(/ab/g) }) },
+        { exportName: "B", schema: z.object({ b: z.string().regex(/ab/g) }) },
+      ],
+      { mode: "inline" },
+    );
+
+    expect(shared.code).not.toContain("__zcRx_");
+    for (const schema of schemas) expect(source(schema)).toContain('new RegExp("ab","g")');
+  });
+
+  it("shares an identical iso.datetime pattern in inline mode", () => {
+    // The pattern is ~330 characters and recurs across a whole API surface.
+    const { schemas, shared } = compileSchemas(
+      [
+        { exportName: "A", schema: z.object({ at: z.iso.datetime() }) },
+        { exportName: "B", schema: z.object({ seenAt: z.iso.datetime() }) },
+      ],
+      { mode: "inline" },
+    );
+
+    expect((shared.code.match(/new RegExp\(/g) ?? []).length).toBe(1);
+    for (const schema of schemas) expect(source(schema)).not.toContain("new RegExp(");
+  });
+
   it("shares Sets in compact mode independently of slow-walk dedupe", () => {
     const { schemas, shared } = compileSchemas(
       [

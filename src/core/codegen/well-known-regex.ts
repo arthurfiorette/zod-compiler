@@ -74,6 +74,29 @@ export const WELL_KNOWN_REGEXES: readonly WellKnownRegex[] = [
     name: "__zcReGuid",
     source: "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$",
   },
+  // The ISO family. Zod BUILDS these from the call's options, so only the
+  // default spelling is a fixed string — `z.iso.datetime({ offset: true })` or
+  // `{ precision: 3 }` produces a different source that simply misses this
+  // exact-match table and keeps its per-IIFE declaration. Defaults are worth
+  // listing anyway: `z.iso.datetime()` is everywhere in API schemas and its
+  // pattern is ~330 characters, so a bundle that repeats it per validator pays
+  // for it in bytes and in a RegExp construction per schema at module init.
+  {
+    name: "__zcReIsoDate",
+    source:
+      "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+  },
+  { name: "__zcReIsoTime", source: "^(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?$" },
+  {
+    name: "__zcReIsoDateTime",
+    source:
+      "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+  },
+  {
+    name: "__zcReIsoDuration",
+    source:
+      "^P(?:(\\d+W)|(?!.*W)(?=\\d|T\\d)(\\d+Y)?(\\d+M)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+([.,]\\d+)?S)?)?)$",
+  },
 ];
 
 const SOURCE_TO_NAME: ReadonlyMap<string, string> = new Map(

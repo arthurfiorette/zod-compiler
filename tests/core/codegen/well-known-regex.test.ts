@@ -44,6 +44,10 @@ describe("well-known-regex", () => {
       ["ipv4", z.ipv4(), "__zcReIpv4"],
       ["e164", z.e164(), "__zcReE164"],
       ["guid", z.guid(), "__zcReGuid"],
+      ["iso.date", z.iso.date(), "__zcReIsoDate"],
+      ["iso.time", z.iso.time(), "__zcReIsoTime"],
+      ["iso.datetime", z.iso.datetime(), "__zcReIsoDateTime"],
+      ["iso.duration", z.iso.duration(), "__zcReIsoDuration"],
     ] as const;
 
     for (const [name, schema, expected] of cases) {

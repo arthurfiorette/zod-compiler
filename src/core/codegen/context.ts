@@ -20,7 +20,7 @@ export type CodegenMode = "inline" | "lean";
  * Kind of a poolable constant. Decides the shared identifier's prefix, so a
  * module-scope pool stays readable (`__zcSet_0`, …) rather than opaque.
  */
-export type ConstantKind = "Set";
+export type ConstantKind = "Rx" | "Set";
 
 /**
  * A poolable constant declaration emitted while generating one validator.
@@ -467,9 +467,36 @@ export function emitRetainedMethod(ctx: CodeGenContext): string {
 }
 
 /**
+ * Is a RegExp built with these flags safe to share between validators?
+ *
+ * `g` and `y` make the object STATEFUL: `.test()` advances `lastIndex` and the
+ * next call resumes from there. Generated code is already correct about this —
+ * every flagged site emits a `lastIndex=0` reset first (see `lastIndexReset` in
+ * schemas/string.ts, the only generator that passes flags through) — so pooling
+ * them would in fact work today.
+ *
+ * They are held back anyway, because the pool changes what a future lapse
+ * costs. A missing reset on a validator-local regex misbehaves inside one
+ * export, deterministically. On a pooled one it misbehaves across exports, and
+ * only in the order the module happens to evaluate them. Flagged patterns are
+ * rare enough that the sharing is not worth buying that failure mode. Every
+ * other flag (`i`, `m`, `s`, `u`, `v`, `d`) is pure configuration and pools like
+ * any other constant.
+ */
+function isPoolableRegex(flags: string | undefined): boolean {
+  return flags === undefined || !/[gy]/.test(flags);
+}
+
+/**
  * Resolve a regex pattern to a runtime variable name.
- * Lean mode short-circuits well-known patterns to virtual-module names so the
- * bundler can dedup across files; everything else is cached + declared in the
+ *
+ * Three layers, widest first. Lean mode short-circuits well-known patterns to
+ * virtual-module names, deduping them across the whole bundle. What is left is
+ * pooled at FILE level when two or more validators build the identical RegExp —
+ * the same bargain Sets get, and a larger one in practice: a repeated enum is
+ * one `new Set([...])`, while a repeated `z.iso.datetime()` or shared
+ * `.regex()` is a several-hundred-byte pattern plus a RegExp construction per
+ * validator at module init. Anything still unique is cached and declared in the
  * per-IIFE preamble exactly once per pattern.
  */
 export function emitRegex(
@@ -488,13 +515,16 @@ export function emitRegex(
   const cacheKey = flags ? `${flags}\u0000${pattern}` : pattern;
   const cached = ctx.regexCache.get(cacheKey);
   if (cached) return cached;
-  const name = `__re_${prefix}_${ctx.counter++}`;
   const flagsArg = flags ? `,${escapeString(flags)}` : "";
   // Flag-less patterns may carry a faster behavior-equivalent rewrite (a
   // well-known table entry, repeat unrolling, or both); the regex OBJECT uses
   // it while issue sites keep reporting the original pattern (see slowString).
   const testSource = flags ? null : fastTestSource(pattern);
-  ctx.preamble.push(`var ${name}=new RegExp(${escapeString(testSource ?? pattern)}${flagsArg});`);
+  const initializer = `new RegExp(${escapeString(testSource ?? pattern)}${flagsArg})`;
+  const localPrefix = `re_${prefix}`;
+  const name = isPoolableRegex(flags)
+    ? emitPooledConstant(ctx, "Rx", localPrefix, initializer)
+    : emitConstant(ctx, localPrefix, initializer);
   ctx.regexCache.set(cacheKey, name);
   return name;
 }

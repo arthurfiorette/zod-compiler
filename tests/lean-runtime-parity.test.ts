@@ -90,6 +90,13 @@ const CASES: [label: string, schema: z.ZodType, inputs: unknown[]][] = [
   ["invalid_format email", z.email(), ["nope"]],
   ["invalid_format uuid", z.uuid(), ["nope"]],
   ["invalid_format regex", z.string().regex(/^a+$/), ["b"]],
+  // The ISO family resolves to bundle-wide `__zcReIso*` imports, and the two
+  // that unroll also report through a `__zcReIso*Src` import — so these cover
+  // the runtime module's regex exports AND its original-pattern strings.
+  ["invalid_format iso.date", z.iso.date(), ["2020-13-01", "nope"]],
+  ["invalid_format iso.time", z.iso.time(), ["24:00", "nope"]],
+  ["invalid_format iso.datetime", z.iso.datetime(), ["2020-01-02T03:04:05", "nope"]],
+  ["invalid_format iso.duration", z.iso.duration(), ["P", "nope"]],
   ["invalid_format starts_with", z.string().startsWith("ab"), ["xy"]],
   ["invalid_format includes", z.string().includes("ab"), ["xy"]],
   ["invalid_format lowercase", z.string().lowercase(), ["AB"]],
