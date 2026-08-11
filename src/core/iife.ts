@@ -208,12 +208,31 @@ export const FINZ_DECL = "function __zcFinZ(z,r,i){return new __ZcFailZ(z,r,i);}
  * 271.7 ns against the compiled 26.6 ns on the same schema, i.e. Standard Schema
  * consumers (tRPC, Hono, TanStack) were getting plain Zod.
  *
- * Zod's own validate is captured first and kept as the throw path: it catches a
- * synchronous throw and retries through `safeParseAsync`, which is how an async
+ * Zod's own `~standard` is never READ, only overwritten. Zod installs the slot
+ * with `util.defineLazy` — commented there as "avoid creating objects for every
+ * schema" — so it is an accessor that builds `{version, vendor, validate}` plus
+ * its closure on first touch. Reading it to capture a fallback fired that getter
+ * for every compiled schema while the module was still initializing.
+ *
+ * How much that costs depends on the entry point, and only one of them is free:
+ * classic `zod` forces the slot itself during `ZodType.init` (it does
+ * `Object.assign(inst["~standard"], { jsonSchema })`), so there the read hit an
+ * already-built object and cost only an accessor call. `zod/mini` and raw
+ * `zod/v4/core` never touch it, so for those the read built — and retained — an
+ * object and a closure per schema, purely to capture a fallback the schema will
+ * most likely never expose to a Standard Schema consumer.
+ *
+ * The throw path is rebuilt instead of captured. Zod's validate catches a
+ * synchronous throw and retries through `safeParseAsync` — that is how an async
  * refinement resolves and how a throwing check surfaces as a rejected promise
- * rather than a synchronous throw. The compiled validator cannot reproduce that
- * (async schemas delegate to Zod anyway), so deferring to the original is both
- * simpler and exact.
+ * rather than a synchronous throw — so calling the already-captured `zspa` and
+ * mapping its result is the same route to the same result. `vendor` is likewise
+ * a constant: schema discovery only ever admits zod schemas, and classic, mini
+ * and core all hardcode `vendor: "zod"` themselves.
+ *
+ * Not carried over (unchanged by this, and pre-dating it): classic's
+ * `~standard.jsonSchema` extension, which the replacement object has never
+ * reproduced.
  *
  * Installed with defineProperty rather than assignment: Zod's lazy setter
  * redefines the slot as non-writable, so a second `__zcMkv` on the same schema
@@ -221,8 +240,7 @@ export const FINZ_DECL = "function __zcFinZ(z,r,i){return new __ZcFailZ(z,r,i);}
  */
 export const MK_VALIDATOR_DECL =
   "function __zcMkv(fn,schema,fc,is){var w=schema||{};var zpa=w.parseAsync,zspa=w.safeParseAsync;w.parse=fc?function(input){if(fc(input))return input;var r=fn(input);if(r.success)return r.data;throw r.error;}:function(input){var r=fn(input);if(r.success)return r.data;throw r.error;};w.safeParse=fn;w.safeParseAsync=function(input){try{return Promise.resolve(fn(input));}catch(e){if(zspa)return zspa(input);throw e;}};w.parseAsync=fc?function(input){try{if(fc(input))return Promise.resolve(input);var r=fn(input);if(r.success)return Promise.resolve(r.data);return Promise.reject(r.error);}catch(e){if(zpa)return zpa(input);throw e;}}:function(input){try{var r=fn(input);if(r.success)return Promise.resolve(r.data);return Promise.reject(r.error);}catch(e){if(zpa)return zpa(input);throw e;}};w.is=is||function(input){return fn(input).success;};" +
-  'var s=w["~standard"],zv=s&&s.validate;' +
-  'Object.defineProperty(w,"~standard",{configurable:true,value:{version:1,vendor:(s&&s.vendor)||"zod",validate:function(input){var r;try{if(fc&&fc(input))return{value:input};r=fn(input);}catch(e){if(zv)return zv(input);throw e;}return r.success?{value:r.data}:{issues:r.error.issues};}}});' +
+  'Object.defineProperty(w,"~standard",{configurable:true,value:{version:1,vendor:"zod",validate:function(input){var r;try{if(fc&&fc(input))return{value:input};r=fn(input);}catch(e){if(zspa)return zspa(input).then(function(q){return q.success?{value:q.data}:{issues:q.error.issues};});throw e;}return r.success?{value:r.data}:{issues:r.error.issues};}}});' +
   "return w;}";
 
 function extractFunctionName(functionDef: string): string {

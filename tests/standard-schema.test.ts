@@ -10,8 +10,10 @@
  * (measured 271.7 ns against the compiled 26.6 ns on one object schema) while
  * the README promised it was covered, and no test looked.
  *
- * `__zcMkv` now replaces `~standard` outright, keeping Zod's own validate as the
- * throw path so async refinements and throwing checks behave exactly as before.
+ * `__zcMkv` now replaces `~standard` outright, without reading the slot it
+ * replaces. Its throw path is rebuilt from the schema's original
+ * `safeParseAsync` — the same retry zod's own validate performs — so async
+ * refinements and throwing checks behave exactly as before.
  */
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
@@ -68,6 +70,31 @@ describe("Standard Schema — routes through the compiled validator", () => {
     expect(compiled.validate({ a: "x" })).toStrictEqual({ value: { a: "x" } });
   });
 
+  it("never materializes zod's lazy ~standard", () => {
+    // Zod installs the slot with `util.defineLazy` specifically to avoid
+    // building an object per schema. Capturing a fallback from it fired that
+    // getter for every compiled schema while the module was still
+    // initializing; the throw path comes from `safeParseAsync` instead.
+    const schema = z.object({ a: z.string() });
+    const lazy = Object.getOwnPropertyDescriptor(schema, "~standard");
+    let reads = 0;
+    Object.defineProperty(schema, "~standard", {
+      configurable: true,
+      get(this: unknown) {
+        reads += 1;
+        return lazy?.get?.call(this);
+      },
+    });
+
+    mkv(compileLikeProduction(schema, "lazystd"), schema, null, null);
+
+    expect(reads).toBe(0);
+    // The slot still answers with the compiled validator, not the probe.
+    const std = (schema as unknown as Record<string, StandardV1>)["~standard"];
+    expect(std.validate({ a: "x" })).toStrictEqual({ value: { a: "x" } });
+    expect(reads).toBe(0);
+  });
+
   it("keeps the v1 contract fields", () => {
     const compiled = compileOnto(z.object({ a: z.string() }));
     expect(compiled.version).toBe(1);
@@ -96,8 +123,8 @@ describe("Standard Schema — routes through the compiled validator", () => {
   });
 
   it('works without a schema to wrap (output: "bag")', () => {
-    // schema === null: there is no zod `~standard` to capture, so the throw path
-    // must rethrow rather than reach for a fallback that does not exist.
+    // schema === null: there is no zod `safeParseAsync` to retry through, so the
+    // throw path must rethrow rather than reach for a fallback that is not there.
     const bag = mkv((input: unknown) => ({ data: input, success: true }), null, null, null);
     const std = bag["~standard"] as StandardV1;
     expect(std.version).toBe(1);

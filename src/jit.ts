@@ -120,8 +120,8 @@ export function jit<T extends ZodType>(
 
   // Snapshot Zod's own descriptors first: materialize() restores them before
   // handing the object to `__zcMkv`, so the generated code sees a pristine
-  // schema — it captures `~standard`'s original `validate` as its throw path,
-  // and capturing a stub there would loop back into itself.
+  // schema — it captures the original `parseAsync` / `safeParseAsync` as its
+  // throw paths, and capturing a stub there would loop back into itself.
   const original = new Map<string, PropertyDescriptor | undefined>();
   for (const slot of SLOTS) {
     original.set(slot, Object.getOwnPropertyDescriptor(target, slot));
@@ -148,9 +148,16 @@ export function jit<T extends ZodType>(
         pending = false;
         // Restore EVERY slot, not just the one being written. A left-behind
         // accessor whose trigger has been cancelled would read `target[slot]`
-        // and re-enter itself — unbounded recursion. This is the path the build
-        // plugin takes when a file uses `jit()` too: `__zcMkv` assigns the parse
-        // methods (cancelling here) and then reads `~standard`.
+        // and re-enter itself — unbounded recursion, which is what a later read
+        // of an untouched slot (`~standard`, from a Standard Schema consumer)
+        // would otherwise hit.
+        //
+        // Reached only when something WRITES a slot before anything reads one: a
+        // test double, another wrapper, or an AOT `safeParse` assigned directly.
+        // The build plugin's own `__zcMkv` does not land here — its first
+        // statement READS `parseAsync`/`safeParseAsync` to capture their
+        // originals, so it triggers materialization and then overwrites the
+        // compiled-by-jit methods with the compiled-by-plugin ones.
         restore(target, original);
       },
     );
