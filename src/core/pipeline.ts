@@ -69,7 +69,10 @@ function referenceCount(source: string, name: string): number {
 function planSharedConstants(
   results: readonly CompiledSchemaInfo[],
   constantsByResult: ReadonlyMap<CodeGenResult, readonly GeneratedConstant[]>,
-): ReadonlyMap<string, string> {
+): {
+  names: ReadonlyMap<string, string>;
+  users: ReadonlySet<CodeGenResult>;
+} {
   const byInitializer = new Map<string, { kind: ConstantKind; users: Set<CodeGenResult> }>();
   for (const { codegenResult } of results) {
     const source = `${codegenResult.code}\n${codegenResult.functionDef}`;
@@ -103,13 +106,18 @@ function planSharedConstants(
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
   const nextIndex = new Map<ConstantKind, number>();
-  return new Map(
+  // Keep the exact first-pass users so unrelated validators retain their
+  // already-generated code instead of paying the complete second pass.
+  const users = new Set<CodeGenResult>();
+  const names = new Map(
     repeated.map(([initializer, entry]) => {
+      for (const user of entry.users) users.add(user);
       const index = nextIndex.get(entry.kind) ?? 0;
       nextIndex.set(entry.kind, index + 1);
       return [initializer, `__zc${entry.kind}_${index}`];
     }),
   );
+  return { names, users };
 }
 
 function emitSharedConstants(sharedConstantNames: ReadonlyMap<string, string>): string {
@@ -216,13 +224,16 @@ export function compileSchemas(
       refEntries,
     }),
   );
-  const sharedConstantNames = planSharedConstants(initialResults, constantsByResult);
+  const sharedConstants = planSharedConstants(initialResults, constantsByResult);
+  const sharedConstantNames = sharedConstants.names;
 
   // Regenerate only when sharing is profitable. Selecting shared names before
   // emission avoids textual rewriting of generated JavaScript, where a user
   // enum string can legally contain text resembling a generated identifier.
   if (sharedConstantNames.size > 0) {
     for (const entry of generated) {
+      // Non-users contain no declaration selected for module-scope sharing.
+      if (!sharedConstants.users.has(entry.codegenResult)) continue;
       entry.codegenResult = generateValidator(entry.ir, entry.exportName, {
         refCount: entry.refEntries.length,
         mode: options.mode,

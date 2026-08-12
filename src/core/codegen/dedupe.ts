@@ -89,6 +89,10 @@ export function createSharedSchemaPlan(
 ): SharedSchemaPlan {
   const keyMemo = new Map<SchemaIR, string>();
   const weightMemo = new Map<SchemaIR, number>();
+  // Candidate subtrees overlap heavily; memoization prevents every parent
+  // candidate from recursively qualifying the same descendants again.
+  const recursiveRefMemo = new Map<SchemaIR, boolean>();
+  const exportRefMemo = new Map<SchemaIR, boolean>();
   const stats = new Map<string, { ir: SchemaIR; count: number; weight: number }>();
 
   for (const root of roots) {
@@ -100,8 +104,8 @@ export function createSharedSchemaPlan(
       (c) =>
         c.count >= 2 &&
         c.weight >= MIN_SHARED_WEIGHT &&
-        !containsRecursiveRef(c.ir) &&
-        !referencesExportRefs(c.ir),
+        !containsRecursiveRef(c.ir, recursiveRefMemo) &&
+        !referencesExportRefs(c.ir, exportRefMemo),
     )
     // Largest shapes first so the biggest wins get the lowest indices; tie-break
     // on the structural key for deterministic, reproducible output.
@@ -169,7 +173,15 @@ export function createSharedSchemaPlan(
  * `source` instead of `refIndex` and is hosted into the shared block's preamble,
  * so it does not disqualify a shape.
  */
-function referencesExportRefs(ir: SchemaIR): boolean {
+function referencesExportRefs(ir: SchemaIR, memo: Map<SchemaIR, boolean>): boolean {
+  const cached = memo.get(ir);
+  if (cached !== undefined) return cached;
+  const result = referencesExportRefsUncached(ir, memo);
+  memo.set(ir, result);
+  return result;
+}
+
+function referencesExportRefsUncached(ir: SchemaIR, memo: Map<SchemaIR, boolean>): boolean {
   switch (ir.type) {
     case "default":
     case "catch":
@@ -215,7 +227,7 @@ function referencesExportRefs(ir: SchemaIR): boolean {
     default:
       break;
   }
-  return childSchemas(ir).some(referencesExportRefs);
+  return childSchemas(ir).some((child) => referencesExportRefs(child, memo));
 }
 
 // ─── Candidate collection ────────────────────────────────────────────────────
@@ -283,9 +295,14 @@ function weightOf(ir: SchemaIR, memo: Map<SchemaIR, number>): number {
   return weight;
 }
 
-function containsRecursiveRef(ir: SchemaIR): boolean {
-  if (ir.type === "recursiveRef") return true;
-  return childSchemas(ir).some(containsRecursiveRef);
+function containsRecursiveRef(ir: SchemaIR, memo: Map<SchemaIR, boolean>): boolean {
+  const cached = memo.get(ir);
+  if (cached !== undefined) return cached;
+  const result =
+    ir.type === "recursiveRef" ||
+    childSchemas(ir).some((child) => containsRecursiveRef(child, memo));
+  memo.set(ir, result);
+  return result;
 }
 
 // ─── Structural keys ─────────────────────────────────────────────────────────

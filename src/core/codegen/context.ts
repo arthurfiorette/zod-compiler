@@ -826,7 +826,19 @@ export function tuplePadsShortInput(ir: SchemaIR & { type: "tuple" }): boolean {
   return ir.items.some((item, index) => index < ir.optStart && !rejectsUndefined(item));
 }
 
+// SchemaIR is immutable after extraction and shared nodes are common, making
+// mutation an identity-stable property worth computing only once.
+const mutationCache = new WeakMap<SchemaIR, boolean>();
+
 export function hasMutation(ir: SchemaIR): boolean {
+  const cached = mutationCache.get(ir);
+  if (cached !== undefined) return cached;
+  const result = computeHasMutation(ir);
+  mutationCache.set(ir, result);
+  return result;
+}
+
+function computeHasMutation(ir: SchemaIR): boolean {
   switch (ir.type) {
     case "string":
       // url checks trim (and optionally normalize) the value; overwrite
