@@ -7,6 +7,35 @@
 import type { Node } from "acorn";
 import { parseExpressionAt } from "acorn";
 
+interface ParsedCallback {
+  ast: Node | null;
+  source: string;
+}
+
+const parsedCallbacks = new WeakMap<Function, ParsedCallback>();
+
+function parseCallback(fn: Function): ParsedCallback {
+  // A callback can occur in several schemas and preprocess classification asks
+  // two questions about it consecutively. Parse its stable source only once.
+  const cached = parsedCallbacks.get(fn);
+  if (cached !== undefined) return cached;
+  const source = fn.toString();
+  let ast: Node | null = null;
+  if (!source.includes("[native code]")) {
+    try {
+      ast = parseExpressionAt(source, 0, {
+        ecmaVersion: "latest",
+        sourceType: "module",
+      });
+    } catch {
+      // Unsupported callback syntax remains non-inlineable.
+    }
+  }
+  const parsed = { ast, source };
+  parsedCallbacks.set(fn, parsed);
+  return parsed;
+}
+
 // Well-known globals that are safe to reference in inlined functions
 const SAFE_GLOBALS = new Set([
   "undefined",
@@ -70,15 +99,8 @@ export function isReferenceablePredicate(fn: unknown): boolean {
  */
 export function isContextFreeUnaryCallback(fn: unknown): boolean {
   if (!isReferenceablePredicate(fn)) return false;
-  let ast: Node;
-  try {
-    ast = parseExpressionAt((fn as Function).toString(), 0, {
-      ecmaVersion: "latest",
-      sourceType: "module",
-    });
-  } catch {
-    return false;
-  }
+  const { ast } = parseCallback(fn as Function);
+  if (ast === null) return false;
   const fnNode = ast as { params?: Node[]; body?: Node };
   if ((fnNode.params?.length ?? 0) > 1) return false;
   if (fnNode.params?.some((param) => param.type === "RestElement")) return false;
@@ -118,22 +140,8 @@ export function isPayloadCheck(check: {
  */
 export function tryCompileEffect(fn: unknown): string | undefined {
   if (typeof fn !== "function") return undefined;
-
-  const source = fn.toString();
-
-  // Quick reject: native functions
-  if (source.includes("[native code]")) return undefined;
-
-  let ast: Node;
-  try {
-    ast = parseExpressionAt(source, 0, {
-      ecmaVersion: "latest",
-      sourceType: "module",
-    });
-  } catch {
-    // Parse failed — likely TypeScript annotations or unsupported syntax
-    return undefined;
-  }
+  const { ast, source } = parseCallback(fn);
+  if (ast === null) return undefined;
 
   // Reject async and generator functions
   if ("async" in ast && (ast as { async?: boolean }).async) return undefined;
