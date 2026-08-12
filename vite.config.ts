@@ -160,6 +160,7 @@ export default defineConfig({
       "dist",
       "**/dist",
       "coverage",
+      "schema.json",
       "*.compiled.ts",
       "*.compiled.js",
       ".agents",
