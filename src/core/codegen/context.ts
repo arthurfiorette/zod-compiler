@@ -801,15 +801,6 @@ function hasSuperRefine(checks: readonly { kind: string }[] | undefined): boolea
 }
 
 /**
- * Check if a SchemaIR tree produces output that is not the input itself —
- * either value-mutating operations (coerce, default, catch, overwrite) that
- * write back to the input expression, or a strip object that rebuilds a fresh
- * object from its known keys. Used by container generators to decide whether to
- * clone (so the rebuilt/mutated value never writes through to the caller's
- * input), by generateValidator to keep such schemas off the by-reference fast
- * path, and by the shared-walk dedup + intersection extractor to exclude them.
- */
-/**
  * Can this tuple's output be LONGER than its input?
  *
  * `handleTupleResult` assigns `final.value[i] = result.value` for every item it
@@ -830,6 +821,15 @@ export function tuplePadsShortInput(ir: SchemaIR & { type: "tuple" }): boolean {
 // mutation an identity-stable property worth computing only once.
 const mutationCache = new WeakMap<SchemaIR, boolean>();
 
+/**
+ * Check if a SchemaIR tree produces output that is not the input itself —
+ * either value-mutating operations (coerce, default, catch, overwrite) that
+ * write back to the input expression, or a strip object that rebuilds a fresh
+ * object from its known keys. Used by container generators to decide whether to
+ * clone (so the rebuilt/mutated value never writes through to the caller's
+ * input), by generateValidator to keep such schemas off the by-reference fast
+ * path, and by the shared-walk dedup + intersection extractor to exclude them.
+ */
 export function hasMutation(ir: SchemaIR): boolean {
   const cached = mutationCache.get(ir);
   if (cached !== undefined) return cached;
