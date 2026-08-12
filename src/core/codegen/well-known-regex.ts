@@ -146,17 +146,9 @@ export function lookupFastRegexSource(source: string): string | null {
  * reporting the ORIGINAL source in issues — see `emitRegexSourceString`.
  */
 export function fastTestSource(source: string): string | null {
-  // Repeat unrolling is deterministic by source and the same formats recur
-  // across validators and constant-pooling regeneration passes.
-  const cached = FAST_TEST_SOURCE_CACHE.get(source);
-  if (cached !== undefined) return cached === false ? null : cached;
   const tableRewrite = SOURCE_TO_TEST_SOURCE.get(source) ?? null;
-  const result = unrollRepeats(tableRewrite ?? source) ?? tableRewrite;
-  FAST_TEST_SOURCE_CACHE.set(source, result ?? false);
-  return result;
+  return unrollRepeats(tableRewrite ?? source) ?? tableRewrite;
 }
-
-const FAST_TEST_SOURCE_CACHE = new Map<string, string | false>();
 
 /**
  * Virtual-module export name for the ORIGINAL `/source/` pattern string of a

@@ -801,6 +801,15 @@ function hasSuperRefine(checks: readonly { kind: string }[] | undefined): boolea
 }
 
 /**
+ * Check if a SchemaIR tree produces output that is not the input itself —
+ * either value-mutating operations (coerce, default, catch, overwrite) that
+ * write back to the input expression, or a strip object that rebuilds a fresh
+ * object from its known keys. Used by container generators to decide whether to
+ * clone (so the rebuilt/mutated value never writes through to the caller's
+ * input), by generateValidator to keep such schemas off the by-reference fast
+ * path, and by the shared-walk dedup + intersection extractor to exclude them.
+ */
+/**
  * Can this tuple's output be LONGER than its input?
  *
  * `handleTupleResult` assigns `final.value[i] = result.value` for every item it
@@ -817,28 +826,7 @@ export function tuplePadsShortInput(ir: SchemaIR & { type: "tuple" }): boolean {
   return ir.items.some((item, index) => index < ir.optStart && !rejectsUndefined(item));
 }
 
-// SchemaIR is immutable after extraction and shared nodes are common, making
-// mutation an identity-stable property worth computing only once.
-const mutationCache = new WeakMap<SchemaIR, boolean>();
-
-/**
- * Check if a SchemaIR tree produces output that is not the input itself —
- * either value-mutating operations (coerce, default, catch, overwrite) that
- * write back to the input expression, or a strip object that rebuilds a fresh
- * object from its known keys. Used by container generators to decide whether to
- * clone (so the rebuilt/mutated value never writes through to the caller's
- * input), by generateValidator to keep such schemas off the by-reference fast
- * path, and by the shared-walk dedup + intersection extractor to exclude them.
- */
 export function hasMutation(ir: SchemaIR): boolean {
-  const cached = mutationCache.get(ir);
-  if (cached !== undefined) return cached;
-  const result = computeHasMutation(ir);
-  mutationCache.set(ir, result);
-  return result;
-}
-
-function computeHasMutation(ir: SchemaIR): boolean {
   switch (ir.type) {
     case "string":
       // url checks trim (and optionally normalize) the value; overwrite

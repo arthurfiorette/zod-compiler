@@ -83,10 +83,6 @@ interface BuildGen {
   rebuilds: ReadonlySet<SchemaIR>;
 }
 
-// Extraction freezes the effective IR shape for codegen, so every later query
-// for the same root can reuse this otherwise whole-tree analysis.
-const rebuildSetCache = new WeakMap<SchemaIR, ReadonlySet<SchemaIR>>();
-
 /**
  * Which nodes of `root` produce a value that is not their input — a stripping
  * object, coercion, codec, default, overwrite or transform, including
@@ -101,9 +97,6 @@ const rebuildSetCache = new WeakMap<SchemaIR, ReadonlySet<SchemaIR>>();
  * fixpoint settles the mutual dependency between the two.
  */
 function rebuildSet(root: SchemaIR): ReadonlySet<SchemaIR> {
-  const cached = rebuildSetCache.get(root);
-  if (cached !== undefined) return cached;
-
   const targets = new Map<number, SchemaIR>([[0, root]]);
   const nodes: SchemaIR[] = [];
   const seen = new Set<SchemaIR>();
@@ -116,10 +109,6 @@ function rebuildSet(root: SchemaIR): ReadonlySet<SchemaIR> {
   };
   collect(root);
 
-  // Children are collected after their parents. Walking in reverse resolves
-  // every acyclic dependency in one pass; only recursive back-edges can require
-  // another iteration.
-  nodes.reverse();
   const rebuilds = new Set<SchemaIR>();
   for (let changed = true; changed;) {
     changed = false;
@@ -160,7 +149,6 @@ function rebuildSet(root: SchemaIR): ReadonlySet<SchemaIR> {
       }
     }
   }
-  rebuildSetCache.set(root, rebuilds);
   return rebuilds;
 }
 
