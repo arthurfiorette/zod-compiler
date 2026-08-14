@@ -74,9 +74,82 @@ function hoistOptions(config: ZodCompilerRegisterConfig): HoistOptions | undefin
   return typeof config.hoist === "object" ? config.hoist : undefined;
 }
 
+/**
+ * Reserved words es-module-lexer can hand back as a "local name". It reports
+ * byte offsets into TypeScript it only half-understands, so `export const enum
+ * Level` yields `enum` and `export default class extends Error {}` yields
+ * `extends`. Emitting either as an expression is a SyntaxError, which no
+ * try/catch can contain — the module never compiles.
+ */
+const RESERVED_WORDS = new Set([
+  "await",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "debugger",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "enum",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "function",
+  "if",
+  "import",
+  "in",
+  "instanceof",
+  "new",
+  "null",
+  "return",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "typeof",
+  "var",
+  "void",
+  "while",
+  "with",
+  "yield",
+]);
+
+/** Can this text be emitted as a bare identifier reference? */
+function isEmittableIdentifier(name: string): boolean {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) && !RESERVED_WORDS.has(name);
+}
+
+/**
+ * Registration is an optimization, so a registration that cannot run must cost
+ * nothing but the optimization. Two things make one fail at runtime, and both
+ * are unavoidable when the name comes from a JS lexer reading TS source:
+ *
+ *  - the binding does not exist — `export declare class`/`function` are erased
+ *    by type stripping, and `export abstract class Base {}` is misreported as
+ *    the local name `s` (the tail of the `class` keyword);
+ *  - the binding exists but is not initialized yet — a re-exported import in a
+ *    circular barrel is in its TDZ when the appended read runs.
+ *
+ * Both throw at the READ, so a per-call catch turns each from an app-down boot
+ * failure into a schema that merely stays uncompiled. Per call rather than one
+ * block around all of them, so one bad export does not cost its file-mates
+ * their registration. The `globalThis[Symbol.for(...)]` lookup sits inside the
+ * try too: a module that shadows `Symbol` would otherwise throw there instead.
+ */
 function appendRegistrations(code: string, names: readonly string[], commonjs: boolean): string {
-  const calls = names.map((name) => `${REGISTER_CALL}(${name});`);
-  if (commonjs) calls.push(`${REGISTER_CALL}(module.exports, true);`);
+  const calls = names
+    .filter(isEmittableIdentifier)
+    .map((name) => `try{${REGISTER_CALL}(${name})}catch{}`);
+  if (commonjs) calls.push(`try{${REGISTER_CALL}(module.exports, true)}catch{}`);
+  if (calls.length === 0) return code;
   return `${code}\n;${calls.join("\n")}\n`;
 }
 

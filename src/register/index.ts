@@ -38,9 +38,25 @@ registerHooks({
       return loaded;
     }
 
-    const filename = fileURLToPath(url);
+    // Posix separators, because the include/exclude globs are matched with
+    // picomatch and the plugin paths it was written against are bundler ids,
+    // which are already normalized. `fileURLToPath` is the only caller that
+    // yields native separators, so on Windows `include: ["src/**"]` matched
+    // nothing and the whole feature went silently inert.
+    const filename = fileURLToPath(url).replaceAll("\\", "/");
     const source = decodeModuleSource(loaded.source);
-    const transformed = instrumentModule(source, filename, loaded.format, config);
+    // This hook runs for EVERY module the process loads, and what it adds is
+    // only an optimization. So nothing it does may fail a load: a config value
+    // of the wrong shape, a lexer that chokes on a dialect it half-supports, a
+    // bad `hoist.schemaNamePattern` — each would otherwise surface as a crash
+    // at startup, in someone else's file, naming zod-compiler internals. Ship
+    // the module unchanged instead and leave its schemas uncompiled.
+    let transformed: string | null;
+    try {
+      transformed = instrumentModule(source, filename, loaded.format, config);
+    } catch {
+      return loaded;
+    }
     return transformed === null ? loaded : { ...loaded, source: transformed };
   },
 });

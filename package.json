@@ -128,8 +128,7 @@
     "size:unplugin": "vp run --filter @zod-compiler/benchmarks size:unplugin",
     "startup:unplugin": "vp pack && vp run --filter @zod-compiler/benchmarks startup:unplugin",
     "test": "vp test run",
-    "prepare": "vp config",
-    "schema": "ts-json-schema-generator --path src/register/config.ts --type ZodCompilerRegisterConfig --tsconfig tsconfig.json --no-top-ref --out schema.json"
+    "prepare": "vp config"
   },
   "dependencies": {
     "@jridgewell/remapping": "^2.3.5",
